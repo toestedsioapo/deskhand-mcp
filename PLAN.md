@@ -99,7 +99,7 @@ deskhand-mcp/
 
 - Exposes the **fixture provider** so Deskbench can run it as the system under test with no Google account.
 - **Ledger schema + tool schemas** are versioned and consumed by Deskbench (scoring) and Deskflow (UI).
-- Imports `@<scope>/tempo-core` pinned to a major.
+- Imports `@marvinliem/tempo-core` pinned to a major.
 
 ## 8. Risks & assumptions (flagged)
 

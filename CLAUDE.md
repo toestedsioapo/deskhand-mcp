@@ -6,7 +6,9 @@ Deskhand is an MCP server that gives AI clients executive-assistant tools (calen
 
 **PLANNING. No implementation code until I approve the docs.** (Tempo v0.1.0 should be released first.)
 
-## How we work (Superpowers)
+## Project Guidelines
+
+### How we work (Superpowers)
 
 - Use Superpowers skills: `brainstorming` → `writing-plans` → `test-driven-development` → `subagent-driven-development` → `requesting-code-review` → `verification-before-completion`.
 - Test first. Flag assumptions in `docs/ASSUMPTIONS.md` or ask. Max 5 questions at a time.
@@ -15,7 +17,7 @@ Deskhand is an MCP server that gives AI clients executive-assistant tools (calen
 
 ## Stack
 
-TypeScript strict, official MCP TypeScript SDK (`@modelcontextprotocol/sdk`), stdio transport, Zod tool schemas, SQLite ledger, Google Calendar + Gmail APIs, Vitest, MCP Inspector, `@<scope>/tempo-core`.
+TypeScript strict, official MCP TypeScript SDK (`@modelcontextprotocol/sdk`), stdio transport, Zod tool schemas, SQLite ledger, Google Calendar + Gmail APIs, Vitest, MCP Inspector, `@marvinliem/tempo-core`.
 
 ## Layout
 
@@ -29,15 +31,20 @@ src/providers/fixture fake world for tests, Deskbench and Deskflow demo mode
 docs/tools.md        GENERATED from schemas — never hand-edit
 ```
 
-## Commands (planned)
+## Build command (planned)
 
 ```
 pnpm install
 pnpm build
-pnpm test
-pnpm dev                       # run server over stdio with fixture provider
-pnpm inspect                   # launch MCP Inspector against the dev server
 pnpm gen:docs                  # schemas -> docs/tools.md
+pnpm dev                       # run server over stdio with fixture provider
+```
+
+## Test command
+
+```
+pnpm test
+pnpm inspect                   # manual check: MCP Inspector against the dev server
 ```
 
 ## Non-negotiable safety rules
