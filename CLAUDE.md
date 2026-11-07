@@ -17,7 +17,7 @@ Deskhand is an MCP server that gives AI clients executive-assistant tools (calen
 
 ## Stack
 
-TypeScript strict, official MCP TypeScript SDK (`@modelcontextprotocol/sdk`), stdio transport, Zod tool schemas, SQLite ledger, Google Calendar + Gmail APIs, Vitest, MCP Inspector, `@marvinliem/tempo-core`.
+Node >=24.15 (`node:sqlite`), ESM-only, MIT. TypeScript strict, official MCP TypeScript SDK (`@modelcontextprotocol/sdk`), stdio transport, Zod tool schemas, SQLite ledger, Google Calendar + Gmail APIs, Vitest, MCP Inspector, `@marvinliem/tempo-core`.
 
 ## Layout
 
@@ -28,6 +28,8 @@ src/approval/        plan store, approval, apply engine
 src/ledger/          SQLite schema, migrations, queries
 src/providers/google  real adapters
 src/providers/fixture fake world for tests, Deskbench and Deskflow demo mode
+src/tempo/           the ONLY place that imports @marvinliem/tempo-core (pinned "0.1.0")
+src/cli/             `deskhand` bin: pending | approve | reject | export (approval is CLI-only, never an MCP tool)
 docs/tools.md        GENERATED from schemas — never hand-edit
 ```
 

@@ -23,8 +23,8 @@ Generic Calendar/Gmail MCP servers let an agent act directly. Deskhand's differe
 | `inbox_search` / `inbox_read_thread` | read | |
 | `inbox_triage` | plan | proposes labels/priority/next action per thread |
 | `inbox_draft_reply` | plan | proposes a draft, and creates a Gmail **draft** only after approval |
-| `itinerary_build` | read | assembles a trip timeline from calendar events (+ pasted flight info) |
-| `expense_log` | plan | records an expense row in the local ledger |
+| `itinerary_build` | read | assembles a trip timeline from calendar events (+ optional structured flight fields from the caller; no parsing of pasted confirmations) |
+| `expense_log` | plan | records an expense row in the local ledger; CSV via `deskhand export expenses` |
 | `action_apply` | write | executes a previously planned `action_id` **only if approved** |
 | `ledger_query` / `action_explain` | read | audit trail, "why did you propose this?" |
 
@@ -47,7 +47,7 @@ deskhand-mcp/
 ├─ src/
 │  ├─ server.ts            # MCP wiring, tool registration
 │  ├─ tools/               # one file per tool: zod input/output schema + handler
-│  ├─ approval/            # plan store, approval tokens, apply engine
+│  ├─ approval/            # plan store, approval, apply engine
 │  ├─ ledger/              # SQLite schema + migrations + queries
 │  ├─ providers/
 │  │  ├─ google/           # Calendar + Gmail adapters (real)
@@ -60,10 +60,10 @@ deskhand-mcp/
 ### Key design decisions (ADRs)
 
 1. **Provider interface + fixture provider.** All Google calls go through `CalendarProvider` / `MailProvider` interfaces. A `fixture` provider loads a fake inbox/calendar from JSON/YAML. This is **required by Deskbench (P3)** and **Deskflow's demo mode (P4)**. ⚠️ Cross-project contract.
-2. **Approval mechanism.** Options: (a) MCP elicitation/confirmation in the client, (b) explicit `action_apply` call with `action_id` that the human triggers, (c) approval via the Deskflow inbox (P4). v1: (b), designed so (c) plugs in later.
-3. **Ledger format.** Table `actions(id, created_at, tool, input_json, plan_json, status[planned|approved|applied|rejected|failed], approved_by, applied_at, result_json, error)`. This **is the contract** Deskbench scores against and Deskflow displays. Version it.
+2. **Approval mechanism.** Options: (a) MCP elicitation/confirmation in the client, (b) explicit `action_apply` call with `action_id` that the human triggers, (c) approval via the Deskflow inbox (P4). **Superseded:** v1 is out-of-band approval via the `deskhand` CLI (TTY + typed last-4 of the action id); `action_apply` only reads approvals from the ledger. Seam kept for (a) and (c). See `docs/adr/0002`.
+3. **Ledger format.** Table `actions(id, created_at, tool, input_json, plan_json, status[planned|approved|applied|rejected|failed], approved_by, applied_at, result_json, error)`. This **is the contract** Deskbench scores against and Deskflow displays. **Superseded:** two tables (`actions` + append-only `events`), versioned via `PRAGMA user_version` + migrations. See `docs/adr/0003`.
 4. **Token storage.** OAuth refresh token stored in the user config dir with restrictive permissions (flag: consider OS keychain). Never logged.
-5. **SQLite driver:** `better-sqlite3` vs Node's built-in `node:sqlite`. Decide in ADR (Windows native-build friction favours built-in if stable on target Node).
+5. **SQLite driver:** `better-sqlite3` vs Node's built-in `node:sqlite`. **Decided:** `node:sqlite`, Node `>=24.15`, behind `src/ledger/db.ts` (`docs/adr/0004`).
 
 ### OAuth scopes (incremental)
 
@@ -99,22 +99,18 @@ deskhand-mcp/
 
 - Exposes the **fixture provider** so Deskbench can run it as the system under test with no Google account.
 - **Ledger schema + tool schemas** are versioned and consumed by Deskbench (scoring) and Deskflow (UI).
-- Imports `@marvinliem/tempo-core` pinned to a major.
+- Imports `@marvinliem/tempo-core` pinned exactly to `0.1.0`, only via `src/tempo/` (supersedes "pinned to a major"; see `docs/adr/0006`).
 
 ## 8. Risks & assumptions (flagged)
 
 - ⚠️ **Gmail scopes are restricted.** A *public* app needs Google verification and a security assessment. Mitigation: users bring their own OAuth client (local, "Testing" mode). Document setup step by step.
 - ⚠️ **Testing-mode refresh tokens expire after ~7 days.** Users will need to re-auth weekly unless the app is published. Document this clearly.
 - ⚠️ Prompt injection via email content. Tool output must clearly mark email bodies as untrusted data, and no write can happen without approval regardless.
-- ⚠️ Package name `deskhand-mcp` availability on npm is unchecked.
+- Package is scoped (`@marvinliem/deskhand-mcp`), bins `deskhand-mcp` + `deskhand`; supersedes the unscoped-name risk. Detail in `docs/SPEC.md` (D1). Design docs now live in `docs/` (SPEC, ARCHITECTURE, ADRs, ASSUMPTIONS); where they differ from this file, `docs/` wins.
 
 ## 9. Open questions for the kickoff session
 
-1. Approval UX in v1: explicit `action_apply` only, or also MCP elicitation where the client supports it?
-2. Include `gmail.send` behind a second flag, or drafts only?
-3. Expense logging: ledger-only, or export to CSV/Google Sheets?
-4. Itinerary input: calendar only, or also parse pasted flight confirmations?
-5. Plan expiry window (e.g. 24 h)?
+**All closed 2026-11-07** (approval: CLI out-of-band; drafts only, no `gmail.send`; expenses: ledger + CSV export; itinerary: calendar + structured flight fields; plan expiry 24 h, 1 h–7 d). Details in `docs/SPEC.md` and `docs/ASSUMPTIONS.md`.
 
 ## 10. Kickoff
 
