@@ -2,7 +2,7 @@
 
 > An MCP server that gives any AI client executive-assistant tools for calendar, inbox triage, itineraries and expense logging. **Read-only by default**, with approval gates and an audit ledger for every action.
 
-**Timebox:** ~5–6 weeks · **Process:** Superpowers · **Depends on:** Tempo (P1) · **Status:** Planning, starts after Tempo v0.1.0
+**Timebox:** ~5–6 weeks · **Process:** Superpowers · **Depends on:** Tempo (P1) · **Status:** Planning docs done (branch `docs/planning`); Tempo v0.1.0 released 2026-11-06; M1 plan written, awaiting owner "go"
 
 ---
 
@@ -21,12 +21,13 @@ Generic Calendar/Gmail MCP servers let an agent act directly. Deskhand's differe
 | `calendar_find_slots` | read | **calls Tempo** with both parties' rules |
 | `calendar_propose_event` | plan | returns `action_id` + human-readable diff, no side effect |
 | `inbox_search` / `inbox_read_thread` | read | |
-| `inbox_triage` | plan | proposes labels/priority/next action per thread |
+| `inbox_triage` | plan | proposes labels/priority/next action per thread; never applies them in v1 (no `gmail.modify`) |
 | `inbox_draft_reply` | plan | proposes a draft, and creates a Gmail **draft** only after approval |
 | `itinerary_build` | read | assembles a trip timeline from calendar events (+ optional structured flight fields from the caller; no parsing of pasted confirmations) |
-| `expense_log` | plan | records an expense row in the local ledger; CSV via `deskhand export expenses` |
+| `expense_log` | plan | plans an expense; the row is written to the `expenses` table in the local ledger DB only on `action_apply`; CSV via `deskhand export expenses` |
 | `action_apply` | write | executes a previously planned `action_id` **only if approved** |
 | `ledger_query` / `action_explain` | read | audit trail, "why did you propose this?" |
+| `ping` | read | permanent health check (skeleton tool from M1); logs a ledger row from M2 |
 
 3. **Two-phase writes:** `plan → (human approval) → apply`. Writes are disabled entirely unless `DESKHAND_ALLOW_WRITES=1`.
 4. **Audit ledger (SQLite):** append-only record of every plan, approval, apply and failure.
@@ -52,6 +53,8 @@ deskhand-mcp/
 │  ├─ providers/
 │  │  ├─ google/           # Calendar + Gmail adapters (real)
 │  │  └─ fixture/          # in-memory fake world, used by tests AND Deskbench
+│  ├─ tempo/               # the ONLY importer of @marvinliem/tempo-core (exact pin)
+│  ├─ cli/                 # `deskhand` bin: pending | approve | reject | export | auth
 │  └─ config/              # env, scopes, paths
 ├─ scripts/gen-tool-docs.ts
 └─ docs/ (ARCHITECTURE.md, adr/, SECURITY.md, tools.md [generated])
@@ -61,7 +64,7 @@ deskhand-mcp/
 
 1. **Provider interface + fixture provider.** All Google calls go through `CalendarProvider` / `MailProvider` interfaces. A `fixture` provider loads a fake inbox/calendar from JSON/YAML. This is **required by Deskbench (P3)** and **Deskflow's demo mode (P4)**. ⚠️ Cross-project contract.
 2. **Approval mechanism.** Options: (a) MCP elicitation/confirmation in the client, (b) explicit `action_apply` call with `action_id` that the human triggers, (c) approval via the Deskflow inbox (P4). **Superseded:** v1 is out-of-band approval via the `deskhand` CLI (TTY + typed last-4 of the action id); `action_apply` only reads approvals from the ledger. Seam kept for (a) and (c). See `docs/adr/0002`.
-3. **Ledger format.** Table `actions(id, created_at, tool, input_json, plan_json, status[planned|approved|applied|rejected|failed], approved_by, applied_at, result_json, error)`. This **is the contract** Deskbench scores against and Deskflow displays. **Superseded:** two tables (`actions` + append-only `events`), versioned via `PRAGMA user_version` + migrations. See `docs/adr/0003`.
+3. **Ledger format.** Table `actions(id, created_at, tool, input_json, plan_json, status[planned|approved|applied|rejected|failed], approved_by, applied_at, result_json, error)`. This **is the contract** Deskbench scores against and Deskflow displays. **Superseded:** three tables (`actions`, append-only `events`, and `expenses`), versioned via `PRAGMA user_version` + forward-only migrations in `src/ledger/migrations/` (no `schema_version` table). See `docs/adr/0003`.
 4. **Token storage.** OAuth refresh token stored in the user config dir with restrictive permissions (flag: consider OS keychain). Never logged.
 5. **SQLite driver:** `better-sqlite3` vs Node's built-in `node:sqlite`. **Decided:** `node:sqlite`, Node `>=24.15`, behind `src/ledger/db.ts` (`docs/adr/0004`).
 
@@ -72,7 +75,9 @@ deskhand-mcp/
 | Read calendar | `calendar.readonly` |
 | Create events (writes on) | `calendar.events` |
 | Read mail | `gmail.readonly` (restricted) |
-| Create drafts (writes on) | `gmail.compose` (restricted) |
+| Create drafts (writes on) | `gmail.compose` (restricted; also permits sending, so "drafts only" is enforced in code: `MailProvider` has no send method) |
+
+Never requested in v1: `gmail.send`, `gmail.modify`.
 
 ## 5. Test strategy
 
@@ -93,7 +98,7 @@ deskhand-mcp/
 | 3 | Calendar | list/find_slots (Tempo)/propose_event + apply; Google adapter behind interface |
 | 4 | Inbox | search/read/triage/draft_reply (draft only) |
 | 5 | Itinerary + expense + docs | `itinerary_build`, `expense_log`, generated `docs/tools.md` |
-| 6 | Release | README with Claude Desktop config, SECURITY.md, npx install verified on Windows + Linux, npm provenance release |
+| 6 | Release | README with Claude Desktop config and Claude Code deny rules for `deskhand approve` (and its `npx`/`pnpm exec`/`node` variants), MIT LICENSE, SECURITY.md, npx smoke test passing on Windows + Linux, npm provenance release |
 
 ## 7. Ecosystem contract
 
@@ -114,4 +119,4 @@ deskhand-mcp/
 
 ## 10. Kickoff
 
-Adapt the Tempo kickoff prompt (Master Plan p.2): swap the context/goals for sections 2–4 above, keep the same rules (planning only, ≤5 questions, flag assumptions, stop for approval).
+Done. The kickoff session produced the planning docs on `docs/planning`. Next: the M1 skeleton plan (`docs/superpowers/plans/2026-11-07-m1-skeleton.md`) starts on the owner's "go".

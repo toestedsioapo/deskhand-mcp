@@ -1,6 +1,6 @@
 # 0005 — Shared SQLite file: location, WAL, concurrency
 
-Status: Proposed · 2026-11-07
+Status: Accepted (owner review, 2026-11-09)
 
 **Context.** The MCP server and the `deskhand` CLI are separate processes using the same ledger.
 

@@ -4,7 +4,7 @@ Deskhand is an MCP server that gives AI clients executive-assistant tools (calen
 
 ## Current phase
 
-**PLANNING. No implementation code until I approve the docs.** (Tempo v0.1.0 should be released first.)
+**PLANNING. No implementation code until I say "go".** Planning docs are done on branch `docs/planning` (SPEC, ARCHITECTURE, ADRs 0001-0007, SECURITY, TEST_PLAN, ROADMAP, ASSUMPTIONS). Tempo v0.1.0 is released (`@marvinliem/tempo-core@0.1.0` and `@marvinliem/tempo@0.1.0` on npm, 2026-11-06). The M1 skeleton plan is written (`docs/superpowers/plans/2026-11-07-m1-skeleton.md`) and awaiting my "go".
 
 ## Project Guidelines
 
@@ -29,7 +29,8 @@ src/ledger/          SQLite schema, migrations, queries
 src/providers/google  real adapters
 src/providers/fixture fake world for tests, Deskbench and Deskflow demo mode
 src/tempo/           the ONLY place that imports @marvinliem/tempo-core (pinned "0.1.0")
-src/cli/             `deskhand` bin: pending | approve | reject | export (approval is CLI-only, never an MCP tool)
+src/cli/             `deskhand` bin: pending | approve | reject | export | auth (approval is CLI-only, never an MCP tool)
+src/config/          env, scopes, paths (DESKHAND_HOME resolution)
 docs/tools.md        GENERATED from schemas — never hand-edit
 ```
 
@@ -38,8 +39,18 @@ docs/tools.md        GENERATED from schemas — never hand-edit
 ```
 pnpm install
 pnpm build
-pnpm gen:docs                  # schemas -> docs/tools.md
-pnpm dev                       # run server over stdio with fixture provider
+pnpm gen:docs                  # schemas -> docs/tools.md (from M5)
+pnpm dev                       # run the built server over stdio (fixture provider from M2)
+```
+
+## CLI commands (`deskhand`)
+
+```
+deskhand pending                       # list planned actions with diff, hash prefix, expiry
+deskhand approve <id>                  # TTY on stdin+stdout, typed last 4 of action_id; no --yes
+deskhand reject <id> [reason]          # no TTY needed; method logged
+deskhand export expenses [--from] [--to]
+deskhand auth login | status | upgrade # Google OAuth (M3); upgrade adds write scopes
 ```
 
 ## Test command
@@ -52,7 +63,9 @@ pnpm inspect                   # manual check: MCP Inspector against the dev ser
 ## Non-negotiable safety rules
 
 - **No side effects outside `action_apply`.** Every other tool is read or plan only.
-- `action_apply` refuses unless: writes are enabled (`DESKHAND_ALLOW_WRITES=1`), the plan exists, isn't expired, is approved, and hasn't already been applied (idempotent).
+- `action_apply` refuses unless: writes are enabled (`DESKHAND_ALLOW_WRITES=1`), the plan exists, isn't expired, is approved, the plan hash still matches the approved hash, and it hasn't already been applied (idempotent). Then it re-checks the real world (stale plan → `failed`, no write).
+- Approval is out-of-band (`deskhand approve`, TTY + typed last 4 of the action id) and never reachable through MCP.
+- Drafts only: the `MailProvider` interface has no send method.
 - **Every tool call writes to the ledger**, including failures and rejections.
 - Request the **minimum OAuth scope** for the feature; write scopes only when writes are enabled.
 - Never log tokens, full email bodies or credentials. Redact in ledger previews.
@@ -63,7 +76,7 @@ pnpm inspect                   # manual check: MCP Inspector against the dev ser
 ## Contracts (versioned, changes are breaking)
 
 - Tool input/output Zod schemas (snapshot-tested).
-- Ledger table schema + `status` values. Deskbench scores against it and Deskflow renders it.
+- Ledger tables (`actions`, `events`, `expenses`), their columns, and the `status` / `outcome` / method value sets. Deskbench scores against it and Deskflow renders it.
 - Fixture world format. Deskbench scenarios and Deskflow demo seed data use it.
 
 ## Don'ts
