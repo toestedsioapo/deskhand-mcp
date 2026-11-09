@@ -1,4 +1,4 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
@@ -30,4 +30,20 @@ export async function spawnBin(): Promise<{
 /** Raw child process for tests that need direct control of stdin/stdout. */
 export function spawnRaw(): ChildProcessWithoutNullStreams {
   return spawn(process.execPath, [BIN_PATH], { stdio: "pipe" });
+}
+
+export const CLI_PATH = fileURLToPath(
+  new URL("../../dist/cli.js", import.meta.url),
+);
+
+/** Runs the built `deskhand` CLI to completion and captures its output. */
+export function runCliBin(args: string[] = []): {
+  status: number | null;
+  stdout: string;
+  stderr: string;
+} {
+  const r = spawnSync(process.execPath, [CLI_PATH, ...args], {
+    encoding: "utf8",
+  });
+  return { status: r.status, stdout: r.stdout, stderr: r.stderr };
 }
