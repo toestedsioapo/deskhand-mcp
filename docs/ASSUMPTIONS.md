@@ -16,19 +16,39 @@ Calls I made after the builder check (reversible; please skim): ledger `kind`/`e
 - Triage only proposes in v1; no `gmail.modify`; applying labels is post-v1 with its own ADR.
 - `sendUpdates` defaults to `none`; notifying attendees must be stated in the diff and is covered by the plan hash.
 
+**Closed 2026-11-10 (M2a contract documents):**
+- **Action id format:** `act_` + 26-char Crockford-base32 ULID; the confirmation is the last 4 characters (random part), compared case-insensitively after trimming. `events.id` is `INTEGER AUTOINCREMENT`.
+- **Fixture world shape:** `fixture_version: 1`, JSON only, `DESKHAND_FIXTURE`, `now` fake clock, `calendars`, optional `settings.latency_ms` and `settings.write_log` (`docs/fixture-format.md`).
+- Documents: `docs/ledger-contract.md` (DDL, value sets, gate order, row sequences, redaction), `docs/fixture-format.md`, `docs/tools-contract.md`.
+
+**Calls I made in M2a (reversible; please skim):**
+- `error_code` adds `UNKNOWN_TOOL` and `NOT_PENDING` to the ARCHITECTURE list (`NOT_PENDING`: approve/reject on `rejected`/`failed`/`applied`; `ALREADY_APPROVED`: on `approved`).
+- Apply gate order: `WRITES_DISABLED`, `UNKNOWN_ACTION`, replay if applied, `NOT_APPROVED`, hash check (`PLAN_MODIFIED`), recovery (provider already holds our idempotency key: finalise `applied`, `replayed: true`, no second write), `PLAN_EXPIRED`, re-check (`STALE_PLAN`), provider write (`PROVIDER_ERROR`). Idempotency key is the lowercase hex SHA-256 of the action id.
+- Lifecycle rows are written before the `tool_call`/`cli_command` row; `tool_call` outcome is `rejected` for gate refusals and `error` otherwise.
+- Redaction: keys `body`/`html`/`content` store no text (`[omitted N chars sha256:<8 hex>]`); other strings over 200 chars truncated with a hash; secret-like keys `[redacted]`; preview capped at 4 KB.
+- An `approved` plan cannot be rejected (`ALREADY_APPROVED`); a refused reject writes only a `cli_command` row. `expenses.id` uses the action-id format and `expenses.action_id` is unique. Ledger open failure at startup exits the process (fail closed).
+- Approve check order: TTY, exists, status, expiry, `PLAN_MODIFIED`, `ID_COLLISION`, typed confirmation (matches the M2b plan).
+- `[omitted N chars ...]`: N is the UTF-16 length.
+- Redaction depth cap of 32 levels (`[omitted: too deep]`); the preview size cap omits output, then input, and always keeps `note`/`action_id`.
+- `events.tool` is stored capped at 200 characters.
+- `tool_call` error rows store the redacted error message in `preview.note`.
+
 **Open assumptions (recorded, to settle later):**
-- **Fixture world shape:** settled in M2 with `docs/fixture-format.md`; until then everything about the format is provisional (JSON only, `DESKHAND_FIXTURE`, deterministic clock/id seed are the working proposal).
+- **BODY_KEY widening:** `body|html|content` may need `text`, `snippet`, `body_text`, `html_body`; settle with the real M3/M4 field names.
+- **Draft-reply plans (M4):** a plan must hold the drafted body in `plan_json`, which conflicts with "never log full email bodies"; needs an ADR before M4.
+- **`action_explain` window:** it reads the last 1000 events, which repeated explains of the same action can dilute.
 - **Deskbench/Deskflow access to the ledger:** the contract is the documented ledger schema plus `ledger_query` output. Whether they may read `ledger.db` directly is decided during Deskbench planning.
+
+**For M3 (recorded 2026-11-10):** the Google Calendar adapter must treat a `409` on `events.insert` with our idempotency-derived event id as "already created": fetch that event and return it, never retry with a new id. This keeps the apply recovery path (M2b) honest against the real API.
 
 Still open or unverified:
 
-1. **Action id format** is not decided: it must make "last 4 chars" a usable confirmation (ADR 0002 regenerates on a last-4 collision at plan time). The plan should pick the format (e.g. ULID, which has a time-ordered prefix and random tail, or random base32; the last 4 must come from the random part).
-2. **Calendar idempotency:** I rely on Google Calendar accepting a client-supplied event id for apply idempotency. To be verified against the API when the adapter is built (M3).
-3. **npx bin rule for scoped packages** is inferred from npm-exec docs wording; the M6 smoke test is the real proof.
-4. **Export columns / date semantics** are left to the plan (owner's instruction).
-5. **macOS data dir** (`~/Library/Application Support/deskhand`) is my choice, not specified.
-6. **Windows file protection** relies on the user-profile ACL; POSIX modes (0700/0600) are not applied there.
-7. The Claude Code deny-rule syntax was checked against the permissions docs on 2026-11-09 (`Bash(cmd *)`, space before `*`; `:*` is an equivalent suffix form; deny rules match command text, so they are best-effort). Re-check when the README is written.
+1. **Calendar idempotency:** I rely on Google Calendar accepting a client-supplied event id for apply idempotency. To be verified against the API when the adapter is built (M3).
+2. **npx bin rule for scoped packages** is inferred from npm-exec docs wording; the M6 smoke test is the real proof.
+3. **Export columns / date semantics** are left to the plan (owner's instruction).
+4. **macOS data dir** (`~/Library/Application Support/deskhand`) is my choice, not specified.
+5. **Windows file protection** relies on the user-profile ACL; POSIX modes (0700/0600) are not applied there.
+6. The Claude Code deny-rule syntax was checked against the permissions docs on 2026-11-09 (`Bash(cmd *)`, space before `*`; `:*` is an equivalent suffix form; deny rules match command text, so they are best-effort). Re-check when the README is written.
 
 **M1 findings (2026-11-09), recorded so none is lost:**
 - **TypeScript is pinned exactly to `7.0.2`** (the lockfile version). TS 7 is the native compiler and ships platform binaries as optional dependencies (`@typescript/typescript-<platform>`); it is build-time only and not a Node addon, so the "no native modules" rule is not triggered. Pinned so CI and local builds cannot drift. Bump deliberately.

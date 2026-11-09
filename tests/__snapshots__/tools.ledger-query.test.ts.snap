@@ -1,0 +1,171 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`ledger_query schemas > input schema is stable 1`] = `
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "action_id": {
+      "type": "string",
+    },
+    "before_id": {
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer",
+    },
+    "kind": {
+      "enum": [
+        "tool_call",
+        "cli_command",
+        "plan_created",
+        "approved",
+        "approve_refused",
+        "rejected",
+        "applied",
+        "apply_refused",
+        "apply_failed",
+      ],
+      "type": "string",
+    },
+    "limit": {
+      "default": 50,
+      "maximum": 200,
+      "minimum": 1,
+      "type": "integer",
+    },
+    "outcome": {
+      "enum": [
+        "ok",
+        "error",
+        "rejected",
+      ],
+      "type": "string",
+    },
+    "since": {
+      "format": "date-time",
+      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$",
+      "type": "string",
+    },
+    "tool": {
+      "type": "string",
+    },
+  },
+  "required": [
+    "limit",
+  ],
+  "type": "object",
+}
+`;
+
+exports[`ledger_query schemas > output schema is stable 1`] = `
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "events": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "action_id": {
+            "type": [
+              "string",
+              "null",
+            ],
+          },
+          "error_code": {
+            "anyOf": [
+              {
+                "enum": [
+                  "INVALID_INPUT",
+                  "WRITES_DISABLED",
+                  "UNKNOWN_ACTION",
+                  "UNKNOWN_TOOL",
+                  "PLAN_EXPIRED",
+                  "NOT_APPROVED",
+                  "ALREADY_APPROVED",
+                  "NOT_PENDING",
+                  "NOT_A_TTY",
+                  "CONFIRMATION_MISMATCH",
+                  "ID_COLLISION",
+                  "PLAN_MODIFIED",
+                  "STALE_PLAN",
+                  "PROVIDER_ERROR",
+                  "AUTH_REQUIRED",
+                  "INTERNAL",
+                ],
+                "type": "string",
+              },
+              {
+                "type": "null",
+              },
+            ],
+          },
+          "id": {
+            "maximum": 9007199254740991,
+            "minimum": -9007199254740991,
+            "type": "integer",
+          },
+          "kind": {
+            "enum": [
+              "tool_call",
+              "cli_command",
+              "plan_created",
+              "approved",
+              "approve_refused",
+              "rejected",
+              "applied",
+              "apply_refused",
+              "apply_failed",
+            ],
+            "type": "string",
+          },
+          "outcome": {
+            "enum": [
+              "ok",
+              "error",
+              "rejected",
+            ],
+            "type": "string",
+          },
+          "preview": {},
+          "tool": {
+            "type": "string",
+          },
+          "ts": {
+            "type": "string",
+          },
+        },
+        "required": [
+          "id",
+          "ts",
+          "action_id",
+          "tool",
+          "kind",
+          "outcome",
+          "error_code",
+          "preview",
+        ],
+        "type": "object",
+      },
+      "type": "array",
+    },
+    "next_before_id": {
+      "anyOf": [
+        {
+          "maximum": 9007199254740991,
+          "minimum": -9007199254740991,
+          "type": "integer",
+        },
+        {
+          "type": "null",
+        },
+      ],
+    },
+  },
+  "required": [
+    "events",
+    "next_before_id",
+  ],
+  "type": "object",
+}
+`;

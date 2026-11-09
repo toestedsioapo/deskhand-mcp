@@ -31,7 +31,7 @@ human --deskhand approve <id>--> CLI (TTY + diff + typed last 4)
    -> refuse if expired / not planned / hash mismatch (events row, status unchanged)
    -> recompute hash, ledger: status=approved, approved_plan_hash
 agent --action_apply(id)--> apply engine
-   -> gates (writes flag, exists, not expired, approved, hashes equal, not applied)
+   -> gates (writes flag, exists, replay if applied, approved, hashes equal, recovery, not expired)
    -> provider re-check (free/busy, etag/updated)  --stale--> failed STALE_PLAN
    -> provider write (idempotency key from id) -> status=applied, result_json
 ```
@@ -54,10 +54,10 @@ Transitions are compare-and-set inside `BEGIN IMMEDIATE`: `UPDATE actions SET st
 
 - `events.tool`: MCP tool name, or `cli:pending|approve|reject|export|auth` for CLI-originated rows.
 - `events.kind ∈ tool_call | cli_command | plan_created | approved | approve_refused | rejected | applied | apply_refused | apply_failed`.
-- `events.outcome ∈ ok | error | rejected`; `error_code ∈ INVALID_INPUT | WRITES_DISABLED | UNKNOWN_ACTION | PLAN_EXPIRED | NOT_APPROVED | ALREADY_APPROVED | NOT_A_TTY | CONFIRMATION_MISMATCH | ID_COLLISION | PLAN_MODIFIED | STALE_PLAN | PROVIDER_ERROR | AUTH_REQUIRED | INTERNAL`. The approve-side codes (`ALREADY_APPROVED`, `NOT_A_TTY`, `CONFIRMATION_MISMATCH`, `ID_COLLISION`) are proposed; the final set is fixed in `docs/ledger-contract.md`.
-- Types: ids `TEXT` (format decided in the plan, see ASSUMPTIONS), timestamps `TEXT` ISO-8601 UTC with milliseconds and `Z`, JSON columns `TEXT`. Nullability per column is specified in `docs/ledger-contract.md` (M2 deliverable, written before migration 1).
+- `events.outcome ∈ ok | error | rejected`; `error_code ∈ INVALID_INPUT | WRITES_DISABLED | UNKNOWN_ACTION | PLAN_EXPIRED | NOT_APPROVED | ALREADY_APPROVED | NOT_A_TTY | CONFIRMATION_MISMATCH | ID_COLLISION | UNKNOWN_TOOL | NOT_PENDING | PLAN_MODIFIED | STALE_PLAN | PROVIDER_ERROR | AUTH_REQUIRED | INTERNAL`. `UNKNOWN_TOOL` is for a `tools/call` naming an unregistered tool; `NOT_PENDING` is the approve/reject refusal for a plan whose status is `rejected`, `failed` or `applied` (`ALREADY_APPROVED` is for `approved`). The final set is fixed in `docs/ledger-contract.md`, which wins on any difference.
+- Types: ids `TEXT` (`act_` + 26-char ULID; format fixed in `docs/ledger-contract.md`), timestamps `TEXT` ISO-8601 UTC with milliseconds and `Z`, JSON columns `TEXT`. Nullability per column is specified in `docs/ledger-contract.md` (M2 deliverable, written before migration 1).
 
-Rows per flow: read tool (`ping` included, from M2) → 1 `tool_call`. Plan tool → `tool_call` + `plan_created`. Approve → `cli_command` + `approved`. Approve refused (wrong last 4, expired, already approved, hash mismatch, no TTY, id collision) → `cli_command` (rejected) + `approve_refused`, **action status unchanged**. Reject → `cli_command` + `rejected`. Apply ok → `tool_call` + `applied`. Apply repeated on an applied action → 1 `tool_call` (ok, stored result returned). Apply refused by a gate (`WRITES_DISABLED`, `UNKNOWN_ACTION`, `PLAN_EXPIRED`, `NOT_APPROVED`) → `tool_call` (rejected) + `apply_refused`, **action status unchanged**. `PLAN_MODIFIED`, `STALE_PLAN` and provider failures → `tool_call` (error) + `apply_failed`, **status becomes `failed`** (terminal).
+Rows per flow (lifecycle rows are written first and the `tool_call`/`cli_command` row last; exact order in `docs/ledger-contract.md`): read tool (`ping` included, from M2) → 1 `tool_call`. Plan tool → `tool_call` + `plan_created`. Approve → `cli_command` + `approved`. Approve refused (wrong last 4, expired, already approved, hash mismatch, no TTY, id collision) → `cli_command` (rejected) + `approve_refused`, **action status unchanged**. Reject → `cli_command` + `rejected`. Apply ok → `tool_call` + `applied`. Apply repeated on an applied action → 1 `tool_call` (ok, stored result returned). Apply refused by a gate (`WRITES_DISABLED`, `UNKNOWN_ACTION`, `PLAN_EXPIRED`, `NOT_APPROVED`) → `tool_call` (rejected) + `apply_refused`, **action status unchanged**. `PLAN_MODIFIED`, `STALE_PLAN` and provider failures → `tool_call` (error) + `apply_failed`, **status becomes `failed`** (terminal).
 
 ## Expenses
 
