@@ -30,6 +30,14 @@ Still open or unverified:
 6. **Windows file protection** relies on the user-profile ACL; POSIX modes (0700/0600) are not applied there.
 7. The Claude Code deny-rule syntax was checked against the permissions docs on 2026-11-09 (`Bash(cmd *)`, space before `*`; `:*` is an equivalent suffix form; deny rules match command text, so they are best-effort). Re-check when the README is written.
 
+**M1 findings (2026-11-09), recorded so none is lost:**
+- **TypeScript is pinned exactly to `7.0.2`** (the lockfile version). TS 7 is the native compiler and ships platform binaries as optional dependencies (`@typescript/typescript-<platform>`); it is build-time only and not a Node addon, so the "no native modules" rule is not triggered. Pinned so CI and local builds cannot drift. Bump deliberately.
+- **`@types/node` is `~24.19.2`:** no 24.15.x exists on npm. Types may allow a few APIs that Node 24.15 lacks; CI on Node 24.15 is the guard.
+- **pnpm `engineStrict` only checks dependencies' `engines`, not the root package's** (`pnpm-workspace.yaml` sets it; `.npmrc` `engine-strict` is ignored by pnpm 12). The runtime `assertSupportedNode` check is what enforces the Node floor.
+- **`.gitattributes` is `* text=auto eol=lf`** repo-wide so shebang files cannot get CRLF.
+- **Inspector is pinned to 1.0.4** (2.x needs Node `^24.22.1`, above our floor); it prints a deprecation banner. Re-evaluate when the floor moves. The M1 check used `mcp-inspector --cli`; the UI route (`pnpm inspect`) is a manual owner check.
+- **Parked from M1 review, scheduled in ROADMAP:** M2: stdin-close `process.exit` vs in-flight async work (with test). M6: local-publish guard, `repository` field, CI action versions and push/PR trigger. Minor, no milestone: `server.ts` entry guard is silent for an extensionless path (`node dist/server`; bins are unaffected); the CLI stub test does not assert milestone labels.
+
 ## Builder-check findings (2026-11-07), to resolve in M2
 
 Contract gaps, all now scheduled as M2 deliverables (write `docs/ledger-contract.md`, `docs/fixture-format.md`, `docs/tools-contract.md` first): fixture world format (JSON only, `DESKHAND_FIXTURE`, deterministic clock/id seed); full ledger DDL, id formats, `preview_json` shape; diff rendered from `plan_json` by one deterministic function, never agent text; status transition table + CLI error codes + apply gate order vs idempotent replay; per-column redaction and fixed truncation for `input/plan/result_json`; `amount_minor` currency exponent.
