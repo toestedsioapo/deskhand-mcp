@@ -6,6 +6,7 @@ import { loadConfig } from "../src/config/env.js";
 import { LedgerDb } from "../src/ledger/db.js";
 import { createServer } from "../src/server.js";
 import { makeTempHome } from "./helpers/home.js";
+import { makeProviderDeps } from "./helpers/seed.js";
 
 let home: ReturnType<typeof makeTempHome>;
 let db: LedgerDb;
@@ -20,7 +21,7 @@ afterEach(() => {
 
 describe("createServer with a ledger", () => {
   it("lists exactly ping, with the M1 tools/list JSON unchanged", async () => {
-    const server = createServer({ config: loadConfig(home.env), db, clock: () => new Date() });
+    const server = createServer({ config: loadConfig(home.env), db, clock: () => new Date(), ...makeProviderDeps() });
     const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
     await server.connect(serverSide);
     const client = new Client({ name: "deskhand-test", version: "0.0.0" });

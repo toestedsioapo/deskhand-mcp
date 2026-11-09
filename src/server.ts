@@ -3,12 +3,14 @@ import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { loadConfig, type Config } from "./config/env.js";
+import { userInfo } from "node:os";
+import type { AppContext } from "./app-context.js";
+import { loadConfig } from "./config/env.js";
 import { assertSupportedNode } from "./config/node-check.js";
 import { ensureDirs } from "./config/paths.js";
 import { PACKAGE_VERSION } from "./config/version.js";
 import { LedgerDb } from "./ledger/db.js";
-import type { Clock } from "./ledger/ids.js";
+import { createIdGenerator, type Clock } from "./ledger/ids.js";
 import { LoggingTransport } from "./ledger/logging-transport.js";
 import {
   ACTION_EXPLAIN_DESCRIPTION,
@@ -28,13 +30,11 @@ import {
   pingInputSchema,
   pingOutputSchema,
 } from "./tools/ping.js";
+import { createFixtureProvider, loadFixtureWorld } from "./providers/fixture/index.js";
 import { toolOk } from "./tools/result.js";
 
-export interface ServerDeps {
-  config: Config;
-  db: LedgerDb;
-  clock: Clock;
-}
+/** Kept as an alias so existing call sites and tests keep compiling. */
+export type ServerDeps = AppContext;
 
 /**
  * Registers the tools. Ledger logging of every `tools/call` is done by the
@@ -88,9 +88,14 @@ export async function main(): Promise<void> {
   // below prints one line and exits 1); no tool ever runs without a ledger.
   const config = loadConfig(process.env);
   ensureDirs(config.paths);
+  // A bad fixture file is a startup config error too (loadFixtureWorld throws ConfigError).
+  const world = loadFixtureWorld(config.fixturePath);
   const db = LedgerDb.open(config.paths.ledgerPath, { busyTimeoutMs: config.busyTimeoutMs });
-  const clock: Clock = () => new Date();
-  const server = createServer({ config, db, clock });
+  // With a fixture loaded, time is the fixture's fixed `now`; otherwise real time.
+  const clock: Clock = config.fixturePath ? () => new Date(world.now) : () => new Date();
+  const provider = createFixtureProvider(world);
+  const ids = createIdGenerator();
+  const server = createServer({ config, db, clock, ids, provider, actor: userInfo().username });
   const transport = new LoggingTransport(new StdioServerTransport(), { db, clock });
   // stdin closing means the client went away: exit cleanly (M2b adds a drain).
   const exit = (): void => {

@@ -15,6 +15,7 @@ import { classifyResponse, LoggingTransport } from "../src/ledger/logging-transp
 import { createServer } from "../src/server.js";
 import { toolError, toolOk } from "../src/tools/result.js";
 import { makeTempHome } from "./helpers/home.js";
+import { makeProviderDeps } from "./helpers/seed.js";
 
 const NOW = "2026-11-10T09:30:00.123Z";
 const clock = () => new Date(NOW);
@@ -35,7 +36,7 @@ const open: (() => Promise<void>)[] = [];
 async function setup(register?: (server: McpServer) => void) {
   const home = makeTempHome();
   const db = LedgerDb.open(join(home.home, "ledger.db"));
-  const server = createServer({ config: loadConfig(home.env), db, clock });
+  const server = createServer({ config: loadConfig(home.env), db, clock, ...makeProviderDeps() });
   register?.(server);
   const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
   const stderr: string[] = [];

@@ -6,6 +6,7 @@ import { LedgerDb } from "../../src/ledger/db.js";
 import { LoggingTransport } from "../../src/ledger/logging-transport.js";
 import { createServer } from "../../src/server.js";
 import { makeTempHome } from "./home.js";
+import { makeProviderDeps } from "./seed.js";
 
 export const NOW = "2026-11-10T09:30:00.123Z";
 
@@ -29,7 +30,7 @@ export async function setupHarness() {
   const home = makeTempHome();
   const db = LedgerDb.open(join(home.home, "ledger.db"));
   const clock = () => new Date(NOW);
-  const server = createServer({ config: loadConfig(home.env), db, clock });
+  const server = createServer({ config: loadConfig(home.env), db, clock, ...makeProviderDeps() });
   const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
   const logging = new LoggingTransport(serverSide, { db, clock, stderr: () => undefined });
   await server.connect(logging);
