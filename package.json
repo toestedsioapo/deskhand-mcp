@@ -16,6 +16,7 @@
   ],
   "scripts": {
     "build": "tsc -p .",
+    "typecheck": "tsc -p tsconfig.test.json",
     "test": "vitest run",
     "dev": "node dist/server.js",
     "inspect": "mcp-inspector node dist/server.js"
@@ -31,7 +32,7 @@
   "devDependencies": {
     "@modelcontextprotocol/inspector": "1.0.4",
     "@types/node": "~24.19.2",
-    "typescript": "^7.0.2",
+    "typescript": "7.0.2",
     "vitest": "^5.1.0"
   }
 }

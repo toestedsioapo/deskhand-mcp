@@ -6,6 +6,7 @@ Requires Node >=24.15 (uses `node:sqlite`) and pnpm.
 
 ```
 pnpm install
+pnpm typecheck # tsc --noEmit over src + tests + vitest.config.ts
 pnpm build     # tsc -> dist/
 pnpm test      # vitest (builds dist first via global setup)
 pnpm dev       # run the built server over stdio

@@ -180,7 +180,7 @@ importers:
         specifier: ~24.19.2
         version: 24.19.2
       typescript:
-        specifier: ^7.0.2
+        specifier: 7.0.2
         version: 7.0.2
       vitest:
         specifier: ^5.1.0
