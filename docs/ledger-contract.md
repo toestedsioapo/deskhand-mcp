@@ -177,7 +177,11 @@ Note: a hash mismatch at approve leaves the plan `planned` (ADR 0002 item 2); on
 
 ## Row sequences
 
-Lifecycle rows are written first and the `tool_call` (or `cli_command`) row last, because the last row is written when the response is produced. A `tool_call` row carries `action_id` when the result names an existing action. All rows of one call are written in one transaction together with the `actions` change they describe.
+Lifecycle rows are written first and the `tool_call` (or `cli_command`) row last, because the last row is written when the response is produced. A `tool_call` row carries `action_id` when the result names an existing action in `_meta.deskhand.action_id` (tools contract, "Result convention").
+
+Transactions: the handler writes the lifecycle rows in the same transaction as the `actions` change they describe. The `tool_call` row is a separate statement, written by the logging transport after the handler returns and before the response is sent. If that write fails after a handler committed (for example an apply), the client receives `INTERNAL` instead of the real result; the committed change stands. Retrying `action_apply` is replay-safe: it hits gate 3 (`status = applied`), returns the stored result and writes a new `tool_call` row (ok). A `cli_command` row is written by the CLI the same way, after the command's own transaction.
+
+Cancellation: a client may cancel a `tools/call` with a valid `notifications/cancelled` (one the SDK acts on: it parses and its `requestId` is non-empty and non-zero). The SDK then sends no response, so the transport writes the call's `tool_call` row at cancel time (`error`, `INTERNAL`, `preview.note = "cancelled"`, `output = null`). An already-running handler is not stopped, so its lifecycle rows (and `actions` change) may follow that `tool_call` row; a response it produces anyway is not logged a second time. A cancel the SDK ignores (invalid params, `requestId` 0 or `""`) logs nothing, and the real response is logged normally.
 
 | Flow | Rows, in write order | `actions.status` |
 |---|---|---|

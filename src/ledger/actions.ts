@@ -29,6 +29,10 @@ type RawAction = Omit<ActionRow, "input_json" | "plan_json" | "result_json"> & {
   result_json: string | null;
 };
 
+export function actionExists(db: LedgerDb, id: string): boolean {
+  return db.get<{ one: number }>("SELECT 1 AS one FROM actions WHERE id = ?", [id]) !== undefined;
+}
+
 export function getAction(db: LedgerDb, id: string): ActionRow | undefined {
   const r = db.get<RawAction>("SELECT * FROM actions WHERE id = ?", [id]);
   if (!r) return undefined;

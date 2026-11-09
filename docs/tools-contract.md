@@ -4,10 +4,11 @@ Status: written in M2a. Zod input and output schemas for every tool are snapshot
 
 ## Result convention
 
-- Success: `structuredContent` is the tool's output object (validated against the output schema); `content` carries the same object as a single JSON text block.
-- Failure: `isError: true`, `structuredContent` is `{ "error_code": <error_code>, "message": <string>, "action_id"?: <string> }` and `content` carries the message as text. `error_code` is one of the values in `docs/ledger-contract.md`. `action_id` is present when the failure concerns an existing action.
-- Failures raised by the SDK before a handler runs (invalid arguments `-32602`, unknown tool) are protocol errors, not `isError` results. They are still logged (`INVALID_INPUT`, `UNKNOWN_TOOL`).
-- Every `tools/call` writes exactly one `tool_call` event; see the ledger contract for the `outcome` mapping.
+- Success: `structuredContent` is the tool's output object (validated against the output schema); `content` carries the same object as a single JSON text block. A result that concerns an action also sets `_meta.deskhand.action_id` (`toolOk(output, { action_id })`); that is the only place the `tool_call` row's `action_id` is read from.
+- Failure: `isError: true`, **no `structuredContent`**, `content` is one text block `"<ERROR_CODE>: <message>"`, and `_meta.deskhand` is `{ "error_code": <error_code>, "action_id"?: <string> }` (`toolError(code, message, { action_id })`). `error_code` is one of the values in `docs/ledger-contract.md`. `action_id` is present when the failure concerns an action. Reason: the SDK 1.32.2 client validates `structuredContent` against the tool's output schema even on `isError` results, so an error object there makes `callTool` throw for any tool with an output schema.
+- The ledger transport reads `error_code` and `action_id` only from `_meta.deskhand`, strictly validated (a known code; `action_id` a string naming an existing action, else NULL). It never derives them from `structuredContent` or from text, so untrusted content cannot spoof a code. An `isError` result with an invalid `_meta.deskhand` is logged `INTERNAL`.
+- Failures raised by the SDK itself (SDK 1.32.2) are `isError` results, not JSON-RPC errors, with no `_meta.deskhand`: invalid arguments give text `MCP error -32602: Input validation error: Invalid arguments for tool <name>: ...` (logged `INVALID_INPUT`), an unknown tool gives `MCP error -32602: Tool <name> not found` (logged `UNKNOWN_TOOL`), and a thrown handler error or an output-schema mismatch gives the error text (logged `INTERNAL`). Malformed `tools/call` params (no `name`, non-object `arguments`) are a JSON-RPC error `-32603` (logged `INTERNAL`); a JSON-RPC `-32602` would be logged `INVALID_INPUT`.
+- Every `tools/call` writes exactly one `tool_call` event; see the ledger contract for the `outcome` mapping. Error rows store `preview.output = null`.
 - Text that originates in mailbox or calendar content is wrapped `{ "untrusted": true, "source": <string>, "content": <string> }`. Stored previews and plans are returned as data, never acted on.
 - Read tools are registered with `readOnlyHint: true`.
 

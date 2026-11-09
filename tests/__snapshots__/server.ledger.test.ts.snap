@@ -1,0 +1,49 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`createServer with a ledger > lists exactly ping, with the M1 tools/list JSON unchanged 1`] = `
+{
+  "tools": [
+    {
+      "_meta": undefined,
+      "annotations": {
+        "readOnlyHint": true,
+      },
+      "description": "Health check. Returns the server name and version. Read-only: has no side effects.",
+      "execution": {
+        "taskSupport": "forbidden",
+      },
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object",
+      },
+      "name": "ping",
+      "outputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "ok": {
+            "const": true,
+            "type": "boolean",
+          },
+          "server": {
+            "const": "deskhand-mcp",
+            "type": "string",
+          },
+          "version": {
+            "type": "string",
+          },
+        },
+        "required": [
+          "ok",
+          "server",
+          "version",
+        ],
+        "type": "object",
+      },
+      "title": undefined,
+    },
+  ],
+}
+`;
