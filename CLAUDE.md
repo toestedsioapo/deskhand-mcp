@@ -4,7 +4,7 @@ Deskhand is an MCP server that gives AI clients executive-assistant tools (calen
 
 ## Current phase
 
-**M1 done (PR #2, merged to main): stdio server with `ping`, `deskhand` CLI skeleton, CI green on Node 24.15/26, Windows + Linux. M2 is in PLANNING: no implementation code until I say "go".** Planning docs are in `docs/` (SPEC, ARCHITECTURE, ADRs 0001-0007, SECURITY, TEST_PLAN, ROADMAP, ASSUMPTIONS). Tempo v0.1.0 is released (`@marvinliem/tempo-core@0.1.0` and `@marvinliem/tempo@0.1.0` on npm, 2026-11-06). The M2 plans (`docs/superpowers/plans/2026-11-09-m2a-ledger.md`, `docs/superpowers/plans/2026-11-09-m2b-approval.md`) are written and awaiting my review.
+**M1 done (PR #2) and M2a done (PR #3), both merged to main. M2a delivered the SQLite audit ledger, the `LoggingTransport` and the `ledger_query` / `action_explain` tools. M2b (approval and apply: provider interface and fixture provider, plan store, apply engine, `action_apply`, CLI `pending` / `reject` / `approve`, graceful shutdown, red-team review) is IN PROGRESS on `feat/m2b-approval`.** Planning docs are in `docs/` (SPEC, ARCHITECTURE, ADRs 0001-0007, SECURITY, TEST_PLAN, ROADMAP, ASSUMPTIONS). Tempo v0.1.0 is released (`@marvinliem/tempo-core@0.1.0` and `@marvinliem/tempo@0.1.0` on npm, 2026-11-06). The M2b plan is `docs/superpowers/plans/2026-11-09-m2b-approval.md`.
 
 ## Project Guidelines
 
