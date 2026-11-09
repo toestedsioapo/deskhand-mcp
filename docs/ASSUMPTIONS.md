@@ -27,8 +27,16 @@ Calls I made after the builder check (reversible; please skim): ledger `kind`/`e
 - Lifecycle rows are written before the `tool_call`/`cli_command` row; `tool_call` outcome is `rejected` for gate refusals and `error` otherwise.
 - Redaction: keys `body`/`html`/`content` store no text (`[omitted N chars sha256:<8 hex>]`); other strings over 200 chars truncated with a hash; secret-like keys `[redacted]`; preview capped at 4 KB.
 - An `approved` plan cannot be rejected (`ALREADY_APPROVED`); a refused reject writes only a `cli_command` row. `expenses.id` uses the action-id format and `expenses.action_id` is unique. Ledger open failure at startup exits the process (fail closed).
+- Approve check order: TTY, exists, status, expiry, `PLAN_MODIFIED`, `ID_COLLISION`, typed confirmation (matches the M2b plan).
+- `[omitted N chars ...]`: N is the UTF-16 length.
+- Redaction depth cap of 32 levels (`[omitted: too deep]`); the preview size cap omits output, then input, and always keeps `note`/`action_id`.
+- `events.tool` is stored capped at 200 characters.
+- `tool_call` error rows store the redacted error message in `preview.note`.
 
 **Open assumptions (recorded, to settle later):**
+- **BODY_KEY widening:** `body|html|content` may need `text`, `snippet`, `body_text`, `html_body`; settle with the real M3/M4 field names.
+- **Draft-reply plans (M4):** a plan must hold the drafted body in `plan_json`, which conflicts with "never log full email bodies"; needs an ADR before M4.
+- **`action_explain` window:** it reads the last 1000 events, which repeated explains of the same action can dilute.
 - **Deskbench/Deskflow access to the ledger:** the contract is the documented ledger schema plus `ledger_query` output. Whether they may read `ledger.db` directly is decided during Deskbench planning.
 
 **For M3 (recorded 2026-11-10):** the Google Calendar adapter must treat a `409` on `events.insert` with our idempotency-derived event id as "already created": fetch that event and return it, never retry with a new id. This keeps the apply recovery path (M2b) honest against the real API.

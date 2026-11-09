@@ -52,7 +52,7 @@ Meaning of the codes:
 
 ## DDL v1
 
-Task 3 copies this block verbatim into migration 1 (`src/ledger/migrations/001-initial.sql` or its TypeScript equivalent). The `CHECK` lists must equal the value sets above. The migration runner (not this block) sets `PRAGMA user_version = 1` after the block succeeds.
+Task 3 copies this block verbatim into migration 1 (`src/ledger/migrations/0001-init.ts`). The `CHECK` lists must equal the value sets above. The migration runner (not this block) sets `PRAGMA user_version = 1` after the block succeeds.
 
 ```sql
 CREATE TABLE actions (
@@ -131,7 +131,7 @@ Column notes:
 - `actions.input_json`: the validated tool input, redacted by the preview rules below (it can contain agent-supplied text). `plan_json`: what `action_apply` will do, never updated after planning. `result_json`: the stored result of the apply, set on `applied`. `error`: short message, set on `failed`.
 - `actions` approval columns are all NULL until approval; rejection columns are all NULL unless rejected; `applied_at` and `result_json` are NULL unless applied. A `failed` action keeps its approval columns.
 - `expenses.date` is a calendar date `YYYY-MM-DD` (the expense date, not the insert time). `expenses.action_id` is unique: one expense per applied `expense_log` plan. `amount_minor` may be negative (refund).
-- `events.tool` is the MCP tool name, or `cli:pending`, `cli:approve`, `cli:reject`, `cli:export`, `cli:auth` for CLI rows. Lifecycle rows (`plan_created`, `approved`, ...) carry the tool of the surface that caused them (`calendar_propose_event`, `cli:approve`, `action_apply`, ...).
+- `events.tool` is the MCP tool name (stored capped at 200 characters), or `cli:pending`, `cli:approve`, `cli:reject`, `cli:export`, `cli:auth` for CLI rows. Lifecycle rows (`plan_created`, `approved`, ...) carry the tool of the surface that caused them (`calendar_propose_event`, `cli:approve`, `action_apply`, ...).
 - `events.error_code` is NULL when `outcome = ok`; non-NULL otherwise.
 - Nothing outside `src/ledger/` touches SQLite. Nothing updates or deletes `events` rows; the triggers enforce it.
 
@@ -169,7 +169,7 @@ Gate refusals (1, 2, 4, 7) leave `status` unchanged. A provider error on a re-ch
 
 ## Approve and reject refusals (CLI)
 
-`deskhand approve` checks, in order: action exists (`UNKNOWN_ACTION`), TTY on stdin and stdout (`NOT_A_TTY`), status (`approved` gives `ALREADY_APPROVED`; `rejected`, `failed`, `applied` give `NOT_PENDING`), not expired (`PLAN_EXPIRED`), no other pending id with the same last 4 (`ID_COLLISION`), recomputed hash equals `plan_hash` (`PLAN_MODIFIED`), typed last 4 matches (`CONFIRMATION_MISMATCH`). Every refusal leaves `status` unchanged.
+`deskhand approve` checks, in order: TTY on stdin and stdout (`NOT_A_TTY`, before anything is printed or read), action exists (`UNKNOWN_ACTION`), status (`approved` gives `ALREADY_APPROVED`; `rejected`, `failed`, `applied` give `NOT_PENDING`), not expired (`PLAN_EXPIRED`), recomputed hash equals `plan_hash` (`PLAN_MODIFIED`), no other pending id with the same last 4 (`ID_COLLISION`), typed last 4 matches (`CONFIRMATION_MISMATCH`). Every refusal leaves `status` unchanged.
 
 Note: a hash mismatch at approve leaves the plan `planned` (ADR 0002 item 2); only the apply-time hash check moves a plan to `failed`.
 
@@ -201,18 +201,21 @@ Cancellation: a client may cancel a `tools/call` with a valid `notifications/can
 
 `tool_call.outcome` mapping: gate refusals (`WRITES_DISABLED`, `UNKNOWN_ACTION`, `PLAN_EXPIRED`, `NOT_APPROVED`) are `rejected`; every other error code is `error`. For CLI rows, refusals with an approve or reject code (`NOT_A_TTY`, `CONFIRMATION_MISMATCH`, `ID_COLLISION`, `ALREADY_APPROVED`, `NOT_PENDING`, `PLAN_EXPIRED`, `PLAN_MODIFIED`, `UNKNOWN_ACTION`) are `rejected`.
 
+`INVALID_INPUT` and `INTERNAL` `tool_call` rows are outcome `error` (only the four gate refusals above are `rejected`).
+
 Every `tools/call` writes exactly one `tool_call` row, including calls rejected by SDK input validation and calls to unknown tools. If the ledger cannot be written, the response is replaced by an `INTERNAL` error. If the ledger cannot be opened at startup, the process exits (fail closed); this is a startup error, not a tool error.
 
 ## `preview_json`
 
-Shape: `{"v":1,"input":<redacted>,"output":<redacted|null>,"note":<string|null>}`.
+Shape: `{"v":1,"input":<redacted>,"output":<redacted|null>,"note":<string|null>}`; lifecycle previews may also carry `"action_id"`.
 
-- `input`: the tool arguments (or CLI arguments) after redaction. `output`: the structured result after redaction, or `null` when there is none. `note`: short free text such as `recovered`, or `null`.
+- `input`: the tool arguments (or CLI arguments) after redaction. `output`: the structured result after redaction, or `null` when there is none. `note`: short free text such as `recovered`, `cancelled`, `preview failed`, or (on `tool_call` error rows) the redacted error message; `null` otherwise. Success rows carry `null` unless one of the documented notes applies.
 - Redaction is one function with a leak test, applied recursively to all strings and keys:
-  1. Object keys matching `/token|secret|password|authorization|credential/i` have their value replaced by the string `"[redacted]"`.
-  2. Values of keys named `body`, `html` or `content` (case-insensitive, any depth) store no text at all. The value is replaced by the string `[omitted N chars sha256:<first 8 hex>]`, where N is the character count and the hash is over the full string. A non-string value is hashed over its canonical JSON and N is that JSON's character count.
+  1. Object keys matching `/token|secret|password|authorization|credential|api[_-]?key|private[_-]?key|cookie|passphrase/i` (substring, case-insensitive; a bare `auth` is deliberately not matched, it would hit `author`) have their value replaced by the string `"[redacted]"`.
+  2. Values of keys named `body`, `html` or `content` (case-insensitive, any depth) store no text at all. The value is replaced by the string `[omitted N chars sha256:<first 8 hex>]`, where N is the UTF-16 length (JavaScript `string.length`) and the hash is over the full string. A non-string value is hashed over its canonical JSON and N is that JSON's character count.
   3. Every other string longer than 200 characters is cut to its first 200 characters followed by `…[truncated sha256:<first 8 hex of the full string>]`.
-  4. The serialised preview is capped at 4096 bytes (UTF-8). If it is larger, the largest top-level fields (`output` first, then `input`) have their value replaced by the string `"[omitted]"` until it fits.
+  4. The serialised preview is capped at 4096 bytes (UTF-8). If it is larger, `output` is replaced by the string `"[omitted]"`; if still larger, `input` is too; if still larger, `note` is truncated to 200 characters (and any other top-level field is dropped). `note` and `action_id` are always kept.
+  5. Nesting deeper than 32 levels is replaced by the string `"[omitted: too deep]"` (depth counted from the preview root). Canonical JSON used for omitted non-string values refuses input deeper than 256 levels, in which case the omission is described as `[unserialisable]`.
 - Rule 1 takes precedence over rule 2 for a matching key.
 
 `actions.input_json` follows the same redaction. `plan_json` and `result_json` are stored in full because the hash and the apply need them, but they never contain mailbox bodies (plans hold only what the write needs; the plan tools are responsible for not copying bodies into `plan_json`).
