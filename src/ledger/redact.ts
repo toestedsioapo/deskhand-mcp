@@ -74,3 +74,8 @@ export function redactPreview(value: unknown): unknown {
   if (typeof p["action_id"] === "string") keep["action_id"] = p["action_id"].slice(0, MAX_NOTE);
   return keep;
 }
+
+/** Plain recursive redaction (secret keys, body keys, long strings) with no size cascade. For `actions.input_json`. */
+export function redactInput(value: unknown): unknown {
+  return redact(value, 0);
+}
