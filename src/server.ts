@@ -11,6 +11,18 @@ import { LedgerDb } from "./ledger/db.js";
 import type { Clock } from "./ledger/ids.js";
 import { LoggingTransport } from "./ledger/logging-transport.js";
 import {
+  ACTION_EXPLAIN_DESCRIPTION,
+  actionExplainHandler,
+  actionExplainInputSchema,
+  actionExplainOutputSchema,
+} from "./tools/action-explain.js";
+import {
+  LEDGER_QUERY_DESCRIPTION,
+  ledgerQueryHandler,
+  ledgerQueryInputSchema,
+  ledgerQueryOutputSchema,
+} from "./tools/ledger-query.js";
+import {
   PING_DESCRIPTION,
   pingHandler,
   pingInputSchema,
@@ -28,7 +40,7 @@ export interface ServerDeps {
  * Registers the tools. Ledger logging of every `tools/call` is done by the
  * LoggingTransport the server is connected through (see main()).
  */
-export function createServer(_deps: ServerDeps): McpServer {
+export function createServer(deps: ServerDeps): McpServer {
   const server = new McpServer({
     name: "deskhand-mcp",
     version: PACKAGE_VERSION,
@@ -43,6 +55,28 @@ export function createServer(_deps: ServerDeps): McpServer {
       annotations: { readOnlyHint: true },
     },
     () => toolOk(pingHandler()),
+  );
+
+  server.registerTool(
+    "ledger_query",
+    {
+      description: LEDGER_QUERY_DESCRIPTION,
+      inputSchema: ledgerQueryInputSchema,
+      outputSchema: ledgerQueryOutputSchema,
+      annotations: { readOnlyHint: true },
+    },
+    (input) => toolOk(ledgerQueryHandler(deps.db, input)),
+  );
+
+  server.registerTool(
+    "action_explain",
+    {
+      description: ACTION_EXPLAIN_DESCRIPTION,
+      inputSchema: actionExplainInputSchema,
+      outputSchema: actionExplainOutputSchema,
+      annotations: { readOnlyHint: true },
+    },
+    (input) => actionExplainHandler(deps.db, input),
   );
 
   return server;

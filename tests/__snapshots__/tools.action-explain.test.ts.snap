@@ -1,0 +1,236 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`action_explain schemas > input schema is stable 1`] = `
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "action_id": {
+      "type": "string",
+    },
+  },
+  "required": [
+    "action_id",
+  ],
+  "type": "object",
+}
+`;
+
+exports[`action_explain schemas > output schema is stable 1`] = `
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "action": {
+      "additionalProperties": false,
+      "properties": {
+        "applied_at": {
+          "type": [
+            "string",
+            "null",
+          ],
+        },
+        "approval_method": {
+          "anyOf": [
+            {
+              "enum": [
+                "cli_tty",
+              ],
+              "type": "string",
+            },
+            {
+              "type": "null",
+            },
+          ],
+        },
+        "approved_at": {
+          "type": [
+            "string",
+            "null",
+          ],
+        },
+        "approved_by": {
+          "type": [
+            "string",
+            "null",
+          ],
+        },
+        "created_at": {
+          "type": "string",
+        },
+        "error": {
+          "type": [
+            "string",
+            "null",
+          ],
+        },
+        "expires_at": {
+          "type": "string",
+        },
+        "id": {
+          "type": "string",
+        },
+        "plan_hash": {
+          "type": "string",
+        },
+        "rejected_at": {
+          "type": [
+            "string",
+            "null",
+          ],
+        },
+        "rejected_reason": {
+          "type": [
+            "string",
+            "null",
+          ],
+        },
+        "status": {
+          "enum": [
+            "planned",
+            "approved",
+            "applied",
+            "rejected",
+            "failed",
+          ],
+          "type": "string",
+        },
+        "tool": {
+          "type": "string",
+        },
+      },
+      "required": [
+        "id",
+        "tool",
+        "status",
+        "created_at",
+        "expires_at",
+        "plan_hash",
+        "approved_by",
+        "approved_at",
+        "approval_method",
+        "rejected_at",
+        "rejected_reason",
+        "applied_at",
+        "error",
+      ],
+      "type": "object",
+    },
+    "diff": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "string",
+          },
+          "type": "array",
+        },
+        {
+          "type": "null",
+        },
+      ],
+    },
+    "events": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "action_id": {
+            "type": [
+              "string",
+              "null",
+            ],
+          },
+          "error_code": {
+            "anyOf": [
+              {
+                "enum": [
+                  "INVALID_INPUT",
+                  "WRITES_DISABLED",
+                  "UNKNOWN_ACTION",
+                  "UNKNOWN_TOOL",
+                  "PLAN_EXPIRED",
+                  "NOT_APPROVED",
+                  "ALREADY_APPROVED",
+                  "NOT_PENDING",
+                  "NOT_A_TTY",
+                  "CONFIRMATION_MISMATCH",
+                  "ID_COLLISION",
+                  "PLAN_MODIFIED",
+                  "STALE_PLAN",
+                  "PROVIDER_ERROR",
+                  "AUTH_REQUIRED",
+                  "INTERNAL",
+                ],
+                "type": "string",
+              },
+              {
+                "type": "null",
+              },
+            ],
+          },
+          "id": {
+            "maximum": 9007199254740991,
+            "minimum": -9007199254740991,
+            "type": "integer",
+          },
+          "kind": {
+            "enum": [
+              "tool_call",
+              "cli_command",
+              "plan_created",
+              "approved",
+              "approve_refused",
+              "rejected",
+              "applied",
+              "apply_refused",
+              "apply_failed",
+            ],
+            "type": "string",
+          },
+          "outcome": {
+            "enum": [
+              "ok",
+              "error",
+              "rejected",
+            ],
+            "type": "string",
+          },
+          "preview": {},
+          "tool": {
+            "type": "string",
+          },
+          "ts": {
+            "type": "string",
+          },
+        },
+        "required": [
+          "id",
+          "ts",
+          "action_id",
+          "tool",
+          "kind",
+          "outcome",
+          "error_code",
+          "preview",
+        ],
+        "type": "object",
+      },
+      "type": "array",
+    },
+    "plan": {},
+    "rationale": {
+      "type": [
+        "string",
+        "null",
+      ],
+    },
+  },
+  "required": [
+    "action",
+    "plan",
+    "rationale",
+    "diff",
+    "events",
+  ],
+  "type": "object",
+}
+`;

@@ -69,7 +69,7 @@ Output:
   plan: unknown,               // actions.plan_json parsed
   rationale: string | null,    // plan.rationale when it is a string, else null
   diff: string[] | null,       // null in M2a; M2b fills it from the deterministic plan renderer
-  events: EventRow[]           // this action's events, oldest first
+  events: EventRow[]           // this action's events, oldest first; at most the newest 1000
 }
 ```
 
