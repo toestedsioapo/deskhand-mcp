@@ -20,6 +20,8 @@ Calls I made after the builder check (reversible; please skim): ledger `kind`/`e
 - **Fixture world shape:** settled in M2 with `docs/fixture-format.md`; until then everything about the format is provisional (JSON only, `DESKHAND_FIXTURE`, deterministic clock/id seed are the working proposal).
 - **Deskbench/Deskflow access to the ledger:** the contract is the documented ledger schema plus `ledger_query` output. Whether they may read `ledger.db` directly is decided during Deskbench planning.
 
+**For M3 (recorded 2026-11-10):** the Google Calendar adapter must treat a `409` on `events.insert` with our idempotency-derived event id as "already created": fetch that event and return it, never retry with a new id. This keeps the apply recovery path (M2b) honest against the real API.
+
 Still open or unverified:
 
 1. **Action id format** is not decided: it must make "last 4 chars" a usable confirmation (ADR 0002 regenerates on a last-4 collision at plan time). The plan should pick the format (e.g. ULID, which has a time-ordered prefix and random tail, or random base32; the last 4 must come from the random part).
