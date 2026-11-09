@@ -28,7 +28,7 @@ describe("createServer with a ledger", () => {
     await client.connect(clientSide);
     try {
       const list = await client.listTools();
-      expect(list.tools.map((t) => t.name)).toEqual(["ping", "ledger_query", "action_explain"]);
+      expect(list.tools.map((t) => t.name)).toEqual(["ping", "ledger_query", "action_explain", "action_apply"]);
       // Snapshot first recorded against the M1 createServer: ping's listing must not change.
       expect({ ...list, tools: list.tools.filter((t) => t.name === "ping") }).toMatchSnapshot();
     } finally {

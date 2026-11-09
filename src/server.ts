@@ -13,6 +13,12 @@ import { LedgerDb } from "./ledger/db.js";
 import { createIdGenerator, type Clock } from "./ledger/ids.js";
 import { LoggingTransport } from "./ledger/logging-transport.js";
 import {
+  ACTION_APPLY_DESCRIPTION,
+  actionApplyHandler,
+  actionApplyInputSchema,
+  actionApplyOutputSchema,
+} from "./tools/action-apply.js";
+import {
   ACTION_EXPLAIN_DESCRIPTION,
   actionExplainHandler,
   actionExplainInputSchema,
@@ -77,6 +83,18 @@ export function createServer(deps: ServerDeps): McpServer {
       annotations: { readOnlyHint: true },
     },
     (input) => actionExplainHandler(deps.db, input),
+  );
+
+  // The only MCP tool that can cause a provider write (through the apply engine).
+  server.registerTool(
+    "action_apply",
+    {
+      description: ACTION_APPLY_DESCRIPTION,
+      inputSchema: actionApplyInputSchema,
+      outputSchema: actionApplyOutputSchema,
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
+    },
+    (input) => actionApplyHandler(deps, input),
   );
 
   return server;

@@ -16,11 +16,11 @@ function expectOneLineStartupError(stderr: string): void {
 }
 
 describe("stdio server (built bin)", () => {
-  it("lists ping, ledger_query and action_explain, calls ping, survives bad input, stays silent on stderr", async () => {
+  it("lists ping, ledger_query, action_explain and action_apply, calls ping, survives bad input, stays silent on stderr", async () => {
     const { client, stderr, close } = await spawnBin();
     try {
       const { tools } = await client.listTools();
-      expect(tools.map((t) => t.name)).toEqual(["ping", "ledger_query", "action_explain"]);
+      expect(tools.map((t) => t.name)).toEqual(["ping", "ledger_query", "action_explain", "action_apply"]);
 
       const ok = await client.callTool({ name: "ping" });
       expect(ok.isError).toBeFalsy();

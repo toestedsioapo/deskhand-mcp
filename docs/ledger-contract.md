@@ -160,12 +160,14 @@ Column notes:
 3. Replay: `status = applied`. Returns the stored `result_json`; `tool_call` row `ok`; no lifecycle row; no provider call.
 4. `NOT_APPROVED`: `status` is anything other than `approved` (`planned`, `rejected`, `failed`). Refusal.
 5. Hash check: recompute `sha256(canonical(plan_json))`; it must equal `plan_hash` and `approved_plan_hash`. Else `PLAN_MODIFIED`, status becomes `failed`.
-6. Recovery: if the provider already holds an event for this action's idempotency key, an earlier apply wrote it and crashed before the ledger update. Finalise as `applied` with the existing provider result, `replayed: true`, an `applied` event whose `preview.note` is `recovered`, and no second provider write. This runs before expiry and re-check because the world now contains our own event and the plan may have expired since the crash.
-7. `PLAN_EXPIRED`: `expires_at` has passed. Refusal.
-8. Re-check (ADR 0002 item 4): slot still free and referenced etags unchanged. Else `STALE_PLAN`, status becomes `failed`, no write.
-9. Provider write with the idempotency key. Failure is `PROVIDER_ERROR`, status becomes `failed`. Success sets `applied`, `applied_at`, `result_json`.
+6. Recovery: if the provider already holds an event for this action's idempotency key, an earlier apply wrote it and crashed before the ledger update. Finalise as `applied` with the existing provider result, `replayed: true`, an `applied` event whose `preview.note` is `recovered`, and no second provider write. This runs before expiry and re-check because the world now contains our own event and the plan may have expired since the crash. A provider error during this lookup is a refusal: `apply_refused` (error, `PROVIDER_ERROR`), status unchanged, retryable.
+7. `PLAN_EXPIRED`: `expires_at` has passed (fails closed: `now >= expires_at`, or an unparseable `expires_at`, is expired). Refusal.
+8. Re-check (ADR 0002 item 4): slot still free and referenced etags unchanged. If not, the idempotency key is looked up again first: if our event exists (a concurrent apply of the same action wrote it after this call's recovery lookup), finalise as in gate 6 (`recovered`). Otherwise `STALE_PLAN`, status becomes `failed`, no write. A provider error while reading (re-check or the second lookup) is a refusal: `apply_refused` (error, `PROVIDER_ERROR`), status unchanged, retryable.
+9. Provider write with the idempotency key. On a write failure the key is looked up again (the failure may be ambiguous, for example a timeout after the provider accepted the event): if our event exists, finalise as in gate 6 (`recovered`); if it is confirmed absent, `PROVIDER_ERROR`, status becomes `failed`; if the lookup itself errors, a `PROVIDER_ERROR` refusal with status unchanged. Success sets `applied`, `applied_at`, `result_json`. The provider's `createEvent` with an existing key must return the existing event (never throw, never duplicate).
 
-Gate refusals (1, 2, 4, 7) leave `status` unchanged. A provider error on a re-check or write is recorded in `actions.error` with the code.
+Gate refusals (1, 2, 4, 7), provider read errors and the stored-plan `INTERNAL` refusal leave `status` unchanged. Only `PLAN_MODIFIED`, `STALE_PLAN` and a confirmed provider write failure move the plan to `failed`; `actions.error` then holds `<CODE>: <message>`, with provider text passed through the preview redactor.
+
+After gate 5, a stored plan whose kind is unknown or that fails its kind's schema (unreachable through the plan tools, which validate) is refused with `INTERNAL`, status unchanged.
 
 ## Approve and reject refusals (CLI)
 
@@ -195,7 +197,9 @@ Cancellation: a client may cancel a `tools/call` with a valid `notifications/can
 | Apply recovered | `applied` (ok, `preview.note` = `recovered`), `tool_call` (ok) | `applied` |
 | Apply repeated on applied | `tool_call` (ok), stored result returned | `applied` |
 | Apply refused by a gate | `apply_refused` (rejected, code), `tool_call` (rejected, code) | unchanged |
-| Apply `PLAN_MODIFIED` / `STALE_PLAN` / `PROVIDER_ERROR` | `apply_failed` (error, code), `tool_call` (error, code) | `failed` |
+| Apply provider read error (lookup or re-check) | `apply_refused` (error, `PROVIDER_ERROR`), `tool_call` (error, `PROVIDER_ERROR`) | unchanged |
+| Apply on a stored plan with unknown kind / invalid shape | `apply_refused` (error, `INTERNAL`), `tool_call` (error, `INTERNAL`) | unchanged |
+| Apply `PLAN_MODIFIED` / `STALE_PLAN` / `PROVIDER_ERROR` (write confirmed failed) | `apply_failed` (error, code), `tool_call` (error, code) | `failed` |
 | Invalid input / unknown tool | `tool_call` (error, `INVALID_INPUT` / `UNKNOWN_TOOL`) | n/a |
 | Other CLI command (`pending`, `export`, `auth`) | `cli_command` | n/a |
 
@@ -209,7 +213,7 @@ Every `tools/call` writes exactly one `tool_call` row, including calls rejected 
 
 Shape: `{"v":1,"input":<redacted>,"output":<redacted|null>,"note":<string|null>}`; lifecycle previews may also carry `"action_id"`.
 
-- `input`: the tool arguments (or CLI arguments) after redaction. `output`: the structured result after redaction, or `null` when there is none. `note`: short free text such as `recovered`, `cancelled`, `preview failed`, or (on `tool_call` error rows) the redacted error message; `null` otherwise. Success rows carry `null` unless one of the documented notes applies.
+- `input`: the tool arguments (or CLI arguments) after redaction. `output`: the structured result after redaction, or `null` when there is none. `note`: short free text. The listed values are examples: `recovered`, `cancelled`, `preview failed`; on error and refusal rows (`tool_call` errors, `apply_refused`, `apply_failed`, `approve_refused`) it is the redacted human-readable error message; `null` otherwise. Success rows carry `null` unless one of the documented notes applies.
 - Redaction is one function with a leak test, applied recursively to all strings and keys:
   1. Object keys matching `/token|secret|password|authorization|credential|api[_-]?key|private[_-]?key|cookie|passphrase/i` (substring, case-insensitive; a bare `auth` is deliberately not matched, it would hit `author`) have their value replaced by the string `"[redacted]"`.
   2. Values of keys named `body`, `html` or `content` (case-insensitive, any depth) store no text at all. The value is replaced by the string `[omitted N chars sha256:<first 8 hex>]`, where N is the UTF-16 length (JavaScript `string.length`) and the hash is over the full string. A non-string value is hashed over its canonical JSON and N is that JSON's character count.

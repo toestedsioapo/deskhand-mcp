@@ -41,6 +41,12 @@ Calls I made after the builder check (reversible; please skim): ledger `kind`/`e
 
 **For M3 (recorded 2026-11-10):** the Google Calendar adapter must treat a `409` on `events.insert` with our idempotency-derived event id as "already created": fetch that event and return it, never retry with a new id. This keeps the apply recovery path (M2b) honest against the real API.
 
+**M2b Task 3 review rulings (recorded 2026-11-10):**
+- A provider **read** error during apply (recovery lookup, re-check, or a post-failure lookup) is retryable: `apply_refused` / `PROVIDER_ERROR`, status stays `approved`. Only a confirmed write failure (createEvent rejected and a follow-up lookup finds no event under our key) makes the plan `failed`.
+- After a failed re-check or a failed write, apply looks up our idempotency key again and finalises `applied` (`recovered`) if our event exists, so the ledger never says `failed` while our event is in the calendar.
+- `CalendarProvider.createEvent` with an existing key must return the existing event (documented on the interface); M3's Google adapter maps the `409` accordingly.
+- The expiry gate fails closed (`now >= expires_at` or unparseable is expired).
+
 Still open or unverified:
 
 1. **Calendar idempotency:** I rely on Google Calendar accepting a client-supplied event id for apply idempotency. To be verified against the API when the adapter is built (M3).

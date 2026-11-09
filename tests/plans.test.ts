@@ -12,27 +12,9 @@ import { last4 } from "../src/ledger/ids.js";
 import type { FixtureProvider } from "../src/providers/fixture/provider.js";
 import { createFixtureProvider } from "../src/providers/fixture/provider.js";
 import { makeTempHome } from "./helpers/home.js";
-import { makeWorld } from "./helpers/seed.js";
+import { makeWorld, validPlan } from "./helpers/seed.js";
 
 const NOW = "2026-11-10T09:00:00.000Z";
-
-export function validPlan(over: Record<string, unknown> = {}, evOver: Record<string, unknown> = {}) {
-  return {
-    kind: "calendar.create_event",
-    rationale: "Sync with Ana",
-    event: {
-      title: "Sync",
-      start: "2026-11-12T10:00:00.000Z",
-      end: "2026-11-12T10:30:00.000Z",
-      attendees: ["a@example.com", "b@example.com", "c@example.com"],
-      sendUpdates: "all",
-      calendarId: "primary",
-      ...evOver,
-    },
-    observed: { slotFree: true, etags: { evt_standup: "e1" } },
-    ...over,
-  };
-}
 
 let home: ReturnType<typeof makeTempHome>;
 let db: LedgerDb;
