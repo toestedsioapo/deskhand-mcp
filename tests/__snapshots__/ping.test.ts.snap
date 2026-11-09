@@ -1,0 +1,36 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`ping > has a stable input schema (contract) 1`] = `
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {},
+  "type": "object",
+}
+`;
+
+exports[`ping > has a stable output schema (contract) 1`] = `
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "ok": {
+      "const": true,
+      "type": "boolean",
+    },
+    "server": {
+      "const": "deskhand-mcp",
+      "type": "string",
+    },
+    "version": {
+      "type": "string",
+    },
+  },
+  "required": [
+    "ok",
+    "server",
+    "version",
+  ],
+  "type": "object",
+}
+`;
