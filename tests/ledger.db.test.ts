@@ -190,12 +190,55 @@ describe("nested transactions", () => {
     db.close();
   });
 
-  it("immediate inside deferred joins without error", () => {
+  it("an inner mode is ignored when joining: immediate inside deferred takes no write lock", () => {
+    const db = LedgerDb.open(path, { migrations: [v1] });
+    const other = LedgerDb.open(path, { busyTimeoutMs: 0, migrations: [v1] });
+    db.transaction(
+      () =>
+        db.transaction(() => {
+          // Joined, so no BEGIN IMMEDIATE ran: another connection can still take the write lock.
+          expect(() => other.exec("BEGIN IMMEDIATE")).not.toThrow();
+          other.exec("ROLLBACK");
+        }, "immediate"),
+      "deferred",
+    );
+    other.close();
+    db.close();
+  });
+
+  it("the default mode is immediate (a second writer is refused while one is open)", () => {
+    const db = LedgerDb.open(path, { migrations: [v1] });
+    const other = LedgerDb.open(path, { busyTimeoutMs: 0, migrations: [v1] });
+    db.transaction(() => {
+      expect(() => other.exec("BEGIN IMMEDIATE")).toThrow(/locked|busy/i);
+    });
+    expect(() => other.exec("BEGIN IMMEDIATE")).not.toThrow();
+    other.exec("ROLLBACK");
+    other.close();
+    db.close();
+  });
+
+  it("explicit deferred does not take the write lock up front", () => {
+    const db = LedgerDb.open(path, { migrations: [v1] });
+    const other = LedgerDb.open(path, { busyTimeoutMs: 0, migrations: [v1] });
+    db.transaction(() => {
+      expect(() => other.exec("BEGIN IMMEDIATE")).not.toThrow();
+      other.exec("ROLLBACK");
+    }, "deferred");
+    other.close();
+    db.close();
+  });
+
+  it("rejects a thenable-returning fn with a TypeError and rolls back", () => {
     const db = LedgerDb.open(path, { migrations: [v1] });
     expect(() =>
-      db.transaction(() => db.transaction(() => db.run("INSERT INTO a (x) VALUES (3)"), "immediate"), "deferred"),
-    ).not.toThrow();
-    expect(db.all("SELECT x FROM a")).toHaveLength(1);
+      db.transaction((() => {
+        db.run("INSERT INTO a (x) VALUES (9)");
+        return Promise.resolve(1);
+      }) as unknown as () => number),
+    ).toThrow(TypeError);
+    expect(db.all("SELECT x FROM a")).toEqual([]);
+    expect(() => db.transaction(() => db.run("INSERT INTO a (x) VALUES (1)"))).not.toThrow();
     db.close();
   });
 });

@@ -6,12 +6,15 @@ import { createHash } from "node:crypto";
  * be ISO strings; Date and non-finite numbers throw.
  */
 export function canonicalJson(value: unknown): string {
-  const out = canon(value);
+  const out = canon(value, 0);
   if (out === undefined) throw new TypeError("cannot canonicalise undefined");
   return out;
 }
 
-function canon(value: unknown): string | undefined {
+const MAX_DEPTH = 256;
+
+function canon(value: unknown, depth: number): string | undefined {
+  if (depth > MAX_DEPTH) throw new RangeError("input too deep to canonicalise");
   if (value === undefined) return undefined;
   if (value === null) return "null";
   switch (typeof value) {
@@ -28,12 +31,12 @@ function canon(value: unknown): string | undefined {
   }
   if (value instanceof Date) throw new TypeError("Date is not allowed; pass an ISO-8601 string");
   if (Array.isArray(value)) {
-    return `[${value.map((v) => canon(v) ?? "null").join(",")}]`;
+    return `[${value.map((v) => canon(v, depth + 1) ?? "null").join(",")}]`;
   }
   const obj = value as Record<string, unknown>;
   const parts: string[] = [];
   for (const key of Object.keys(obj).sort()) {
-    const c = canon(obj[key]);
+    const c = canon(obj[key], depth + 1);
     if (c !== undefined) parts.push(`${JSON.stringify(key)}:${c}`);
   }
   return `{${parts.join(",")}}`;

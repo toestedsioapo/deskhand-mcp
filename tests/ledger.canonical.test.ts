@@ -22,6 +22,11 @@ describe("canonicalJson", () => {
     expect(() => canonicalJson(Number.NaN)).toThrow();
     expect(() => canonicalJson({ a: Number.POSITIVE_INFINITY })).toThrow();
   });
+  it("throws a clear error on over-deep input instead of overflowing the stack", () => {
+    let deep: unknown = 1;
+    for (let i = 0; i < 20_000; i++) deep = [deep];
+    expect(() => canonicalJson(deep)).toThrow(/too deep/);
+  });
   it("handles scalars and null", () => {
     expect(canonicalJson([1, "a", null, true])).toBe('[1,"a",null,true]');
   });

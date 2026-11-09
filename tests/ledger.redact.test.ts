@@ -68,12 +68,75 @@ describe("redactPreview", () => {
     expect((redactPreview({ note: s }) as Loose)["note"]).toBe(s);
   });
 
-  it("caps the whole preview at 4096 bytes", () => {
-    const input: Record<string, string> = {};
-    for (let i = 0; i < 40; i++) input[`k${i}`] = "z".repeat(199);
-    const out = redactPreview({ v: 1, input, output: null, note: null });
-    expect(Buffer.byteLength(JSON.stringify(out), "utf8")).toBeLessThanOrEqual(4096);
-    expect(out).toEqual({ v: 1, input: "[omitted]", output: "[omitted]", note: null });
+  const bytes = (v: unknown) => Buffer.byteLength(JSON.stringify(v), "utf8");
+  const wide = (n: number): Record<string, string> => {
+    const o: Record<string, string> = {};
+    for (let i = 0; i < n; i++) o[`k${i}`] = "z".repeat(199);
+    return o;
+  };
+
+  it("cap step 1: omits output first, keeps input", () => {
+    const out = redactPreview({ v: 1, input: { a: 1 }, output: wide(40), note: "n" }) as Loose;
+    expect(bytes(out)).toBeLessThanOrEqual(4096);
+    expect(out).toEqual({ v: 1, input: { a: 1 }, output: "[omitted]", note: "n" });
+  });
+
+  it("cap step 2: then omits input, keeping note and action_id", () => {
+    const out = redactPreview({
+      v: 1,
+      input: wide(40),
+      output: wide(40),
+      note: "cancelled",
+      action_id: "act_X",
+    }) as Loose;
+    expect(bytes(out)).toBeLessThanOrEqual(4096);
+    expect(out).toEqual({ v: 1, input: "[omitted]", output: "[omitted]", note: "cancelled", action_id: "act_X" });
+  });
+
+  it("cap step 3: note longer than 200 chars is cut to 200 when still over the cap", () => {
+    // Extra top-level keys push the preview over the cap even with input/output omitted.
+    const out = redactPreview({ v: 1, input: wide(40), output: null, note: "n".repeat(300), ...wide(30) }) as Loose;
+    expect(bytes(out)).toBeLessThanOrEqual(4096);
+    expect(out["note"].length).toBeLessThanOrEqual(200);
+    expect(out["input"]).toBe("[omitted]");
+    expect(out["output"]).toBe("[omitted]");
+  });
+
+  it("keeps note when a huge input is capped", () => {
+    const out = redactPreview({ v: 1, input: wide(40), output: null, note: "cancelled" }) as Loose;
+    expect(out["note"]).toBe("cancelled");
+    expect(out["input"]).toBe("[omitted]");
+  });
+
+  it("caps depth: over-deep values become a marker and nothing overflows", () => {
+    let deep: unknown = "leaf";
+    for (let i = 0; i < 20_000; i++) deep = [deep];
+    const out = redactPreview({ v: 1, input: deep, output: null, note: null });
+    expect(JSON.stringify(out)).toContain("[omitted: too deep]");
+    let obj: unknown = "leaf";
+    for (let i = 0; i < 20_000; i++) obj = { body: obj };
+    expect(() => redactPreview({ v: 1, input: obj, output: null, note: null })).not.toThrow();
+  });
+
+  it("depth cap boundary: 32 levels kept, 34 omitted", () => {
+    const nest = (n: number): unknown => {
+      let v: unknown = "x";
+      for (let i = 0; i < n; i++) v = [v];
+      return v;
+    };
+    expect(JSON.stringify(redactPreview(nest(32)))).not.toContain("too deep");
+    expect(JSON.stringify(redactPreview(nest(34)))).toContain("[omitted: too deep]");
+  });
+
+  it.each(["apikey", "api_key", "api-key", "X-Api-Key", "private_key", "private-key", "Cookie", "set-cookie", "passphrase"])(
+    "redacts key %s",
+    (k) => {
+      expect((redactPreview({ [k]: "v" }) as Loose)[k]).toBe("[redacted]");
+    },
+  );
+
+  it("does not redact author", () => {
+    expect((redactPreview({ author: "Ann" }) as Loose)["author"]).toBe("Ann");
   });
 
   it("does not mutate its input", () => {

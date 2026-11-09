@@ -115,7 +115,12 @@ describe("LoggingTransport", () => {
     const rows = c.rows();
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ tool: "ping", outcome: "error", error_code: "INVALID_INPUT" });
-    expect(c.preview(rows[0])).toEqual({ v: 1, input: { x: 1 }, output: null, note: null });
+    expect(c.preview(rows[0])).toEqual({
+      v: 1,
+      input: { x: 1 },
+      output: null,
+      note: expect.stringContaining("Invalid arguments for tool ping"),
+    });
 
     const ok = await c.client.callTool({ name: "ping", arguments: {} });
     expect(ok.isError).toBeFalsy();
@@ -164,7 +169,7 @@ describe("LoggingTransport", () => {
     });
     // An id that names no action is stored as NULL (foreign key).
     expect(rows[1]).toMatchObject({ outcome: "rejected", action_id: null });
-    expect(c.preview(rows[0])).toEqual({ v: 1, input: { id: "act_EXISTS" }, output: null, note: null });
+    expect(c.preview(rows[0])).toEqual({ v: 1, input: { id: "act_EXISTS" }, output: null, note: "NOT_APPROVED: plan is not approved" });
   });
 
   it("takes a success row's action_id from _meta.deskhand only", async () => {
@@ -398,6 +403,67 @@ describe("LoggingTransport", () => {
     const raw = c.rows()[0]?.preview_json ?? "";
     expect(raw).not.toContain(SECRET);
     expect(raw).toContain("[redacted]");
+  });
+
+  it("logs one row for a 20000-deep argument, response intact, stderr clean", async () => {
+    const c = await setup();
+    let deep: unknown = "x";
+    for (let i = 0; i < 20_000; i++) deep = [deep];
+    const r = await c.client.callTool({ name: "nope", arguments: { a: deep } });
+    expect(r.isError).toBe(true);
+    expect(r.content).toEqual([{ type: "text", text: "MCP error -32602: Tool nope not found" }]);
+    const rows = c.rows();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ tool: "nope", outcome: "error", error_code: "UNKNOWN_TOOL" });
+    expect(c.stderr.join("")).toBe("");
+  });
+
+  it("caps the stored tool name at 200 chars", async () => {
+    const c = await setup();
+    const r = await c.client.callTool({ name: "t".repeat(5000), arguments: {} });
+    expect(r.isError).toBe(true);
+    const rows = c.rows();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.tool.length).toBeLessThanOrEqual(200);
+    expect(rows[0]).toMatchObject({ error_code: "UNKNOWN_TOOL" });
+  });
+
+  it("retries once with a minimal row when building the preview throws", async () => {
+    const c = await setup();
+    const hostile = {
+      get boom(): never {
+        throw new Error("getter exploded");
+      },
+    };
+    // Drive the transport directly: a getter cannot cross the in-memory wire intact.
+    const t = c.logging as unknown as {
+      pending: Map<number, unknown[]>;
+      pendingCount: number;
+      inner: { send(m: unknown): Promise<void> };
+    };
+    t.pending.set(777, [{ tool: "ping", input: hostile }]);
+    t.pendingCount++;
+    const sent: unknown[] = [];
+    t.inner.send = async (m) => {
+      sent.push(m);
+    };
+    await c.logging.send({
+      jsonrpc: "2.0",
+      id: 777,
+      result: { content: [], structuredContent: { ok: true } },
+    } as JSONRPCMessage);
+    const rows = c.rows();
+    expect(rows).toHaveLength(1);
+    expect(c.preview(rows[0])).toEqual({ v: 1, input: "[omitted]", output: "[omitted]", note: "preview failed" });
+    expect(rows[0]).toMatchObject({ tool: "ping", outcome: "ok" });
+    expect(c.stderr).toEqual([]);
+    expect((sent[0] as { result: { isError?: boolean } }).result.isError).toBeUndefined();
+  });
+
+  it("stores the redacted error message in preview.note for error rows", async () => {
+    const c = await setup();
+    await c.client.callTool({ name: "no_such_tool", arguments: {} });
+    expect(c.preview(c.rows()[0])).toMatchObject({ note: "MCP error -32602: Tool no_such_tool not found" });
   });
 
   it("replaces the response with INTERNAL and writes stderr when the ledger write fails", async () => {

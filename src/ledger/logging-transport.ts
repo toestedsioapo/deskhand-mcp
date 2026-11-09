@@ -42,6 +42,9 @@ const SDK_UNKNOWN_TOOL = /^MCP error -32602: Tool (.*) not found$/;
 
 const JSONRPC_INVALID_PARAMS = -32602;
 
+/** events.tool is stored capped; the response path is unchanged. */
+const MAX_TOOL_NAME = 200;
+
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
@@ -189,7 +192,12 @@ export class LoggingTransport implements Transport {
       const error = "error" in message ? message.error : undefined;
       const result = "result" in message ? (message.result as Record<string, unknown>) : undefined;
       try {
-        this.log(call, error, result);
+        try {
+          this.log(call, error, result, false);
+        } catch {
+          // Building/writing the full row failed: retry once with a minimal row.
+          this.log(call, error, result, true);
+        }
       } catch (err) {
         const reason = err instanceof Error ? err.message : String(err);
         this.writeStderr(`deskhand-mcp: ledger write failed: ${reason.replace(/\s+/g, " ")}\n`);
@@ -256,16 +264,26 @@ export class LoggingTransport implements Transport {
     call: PendingCall,
     error: { code: number; message: string } | undefined,
     result: Record<string, unknown> | undefined,
+    minimal: boolean,
   ): void {
     const { outcome, errorCode } = classifyResponse(call.tool, error, result);
-    // Error rows store no output; ok rows store the structured result.
-    const structured = outcome === "ok" ? result?.["structuredContent"] : undefined;
-    const output = isRecord(structured) ? structured : null;
     // action_id comes only from a valid _meta.deskhand, and must name an existing action (FK).
     const meta = result ? deskhandMeta(result) : undefined;
     const named = meta?.valid ? meta.actionId : undefined;
     const actionId = named !== undefined && actionExists(this.deps.db, named) ? named : null;
-    this.writeRow(call, outcome, errorCode, output, actionId, null);
+    if (minimal) {
+      this.writeRow({ tool: call.tool, input: "[omitted]" }, outcome, errorCode, "[omitted]", actionId, "preview failed");
+      return;
+    }
+    // Error rows store no output; ok rows store the structured result.
+    const structured = outcome === "ok" ? result?.["structuredContent"] : undefined;
+    const output = isRecord(structured) ? structured : null;
+    // Error rows keep the message in preview.note (redacted by appendEvent).
+    let note: string | null = null;
+    if (outcome !== "ok") {
+      note = error ? String(error.message) : result ? (firstText(result) ?? null) : null;
+    }
+    this.writeRow(call, outcome, errorCode, output, actionId, note);
   }
 
   private writeRow(
@@ -279,7 +297,7 @@ export class LoggingTransport implements Transport {
     appendEvent(this.deps.db, {
       ts: isoNow(this.deps.clock),
       actionId,
-      tool: call.tool,
+      tool: call.tool.slice(0, MAX_TOOL_NAME),
       kind: "tool_call",
       outcome,
       errorCode,

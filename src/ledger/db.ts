@@ -58,15 +58,19 @@ export class LedgerDb {
   }
 
   /**
-   * Runs fn in a transaction (rolled back if it throws). Composable: when a
-   * transaction is already open, fn simply joins it (no BEGIN/COMMIT, `mode`
-   * is ignored) and errors propagate so the outermost transaction rolls back.
+   * Runs fn in a transaction (rolled back if it throws). Default mode is
+   * "immediate": a deferred read-then-write transaction can fail with
+   * "database is locked" because busy_timeout is bypassed on lock upgrade.
+   * Composable: when a transaction is already open, fn simply joins it (no
+   * BEGIN/COMMIT, `mode` is ignored) and errors propagate so the outermost
+   * transaction rolls back. fn must be synchronous; a thenable result is a
+   * TypeError (an async fn would COMMIT before its awaits).
    */
-  transaction<T>(fn: () => T, mode: "deferred" | "immediate" = "deferred"): T {
-    if (this.db.isTransaction) return fn();
+  transaction<T>(fn: () => T, mode: "deferred" | "immediate" = "immediate"): T {
+    if (this.db.isTransaction) return assertSync(fn());
     this.db.exec(mode === "immediate" ? "BEGIN IMMEDIATE" : "BEGIN");
     try {
-      const result = fn();
+      const result = assertSync(fn());
       this.db.exec("COMMIT");
       return result;
     } catch (err) {
@@ -98,6 +102,15 @@ export class LedgerDb {
     }
     return (Array.isArray(params) ? [...params] : [params]) as SqlValue[];
   }
+}
+
+function assertSync<T>(result: T): T {
+  if (result !== null && (typeof result === "object" || typeof result === "function")) {
+    if (typeof (result as { then?: unknown }).then === "function") {
+      throw new TypeError("LedgerDb.transaction: fn must be synchronous (it returned a thenable)");
+    }
+  }
+  return result;
 }
 
 /**
