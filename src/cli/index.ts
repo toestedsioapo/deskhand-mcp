@@ -52,9 +52,25 @@ export function runCli(argv: readonly string[], io: CliIo): number {
   return 2;
 }
 
+/** Node check + CLI run; reports an unsupported Node as a one-line error. */
+export function runMain(
+  nodeVersion: string,
+  argv: readonly string[],
+  io: CliIo,
+): number {
+  try {
+    assertSupportedNode(nodeVersion);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    io.err(`deskhand: ${message}
+`);
+    return 1;
+  }
+  return runCli(argv, io);
+}
+
 export function main(): void {
-  assertSupportedNode(process.versions.node);
-  process.exitCode = runCli(process.argv.slice(2), {
+  process.exitCode = runMain(process.versions.node, process.argv.slice(2), {
     out: (text) => process.stdout.write(text),
     err: (text) => process.stderr.write(text),
   });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { runCli } from "../src/cli/index.js";
+import { runCli, runMain } from "../src/cli/index.js";
 import { PACKAGE_VERSION } from "../src/config/version.js";
 import { runCliBin } from "./helpers/spawn.js";
 
@@ -64,5 +64,29 @@ describe("dist/cli.js", () => {
     expect(r.status).toBe(2);
     expect(r.stderr).toContain("unknown command");
     expect(r.stdout).toBe("");
+  });
+});
+
+describe("runMain", () => {
+  it("prints 'deskhand: <message>' and exits 1 on unsupported Node, no stack trace", () => {
+    let err = "";
+    const code = runMain("24.14.0", ["--help"], {
+      out: () => {},
+      err: (s) => (err += s),
+    });
+    expect(code).toBe(1);
+    expect(err).toMatch(/^deskhand: .*requires Node >=24\.15/);
+    expect(err).not.toContain("    at ");
+    expect(err.trimEnd().split("\n")).toHaveLength(1);
+  });
+
+  it("delegates to runCli on a supported Node", () => {
+    let out = "";
+    const code = runMain("24.15.0", ["--version"], {
+      out: (s) => (out += s),
+      err: () => {},
+    });
+    expect(code).toBe(0);
+    expect(out).toBe(`${PACKAGE_VERSION}\n`);
   });
 });

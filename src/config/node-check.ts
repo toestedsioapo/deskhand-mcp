@@ -10,7 +10,7 @@ export function assertSupportedNode(version: string): void {
   const ok = major > MIN_MAJOR || (major === MIN_MAJOR && minor >= MIN_MINOR);
   if (!ok) {
     throw new Error(
-      `deskhand-mcp requires Node >=${MIN_MAJOR}.${MIN_MINOR} (found ${version}).`,
+      `this package requires Node >=${MIN_MAJOR}.${MIN_MINOR} (found ${version}).`,
     );
   }
 }

@@ -38,7 +38,7 @@ describe("stdio server (built bin)", () => {
     let stderr = "";
     child.stderr.on("data", (c: Buffer) => (stderr += c.toString("utf8")));
     child.stdin.end();
-    const [code] = (await once(child, "exit")) as [number | null];
+    const [code] = (await once(child, "close")) as [number | null];
     expect(code).toBe(0);
     expect(stderr).toBe("");
   });
