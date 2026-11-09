@@ -1,0 +1,132 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`snapshots > sqlite_master DDL 1`] = `
+[
+  "index actions_status
+CREATE INDEX actions_status ON actions(status)",
+  "index events_action_id
+CREATE INDEX events_action_id ON events(action_id)",
+  "index events_ts
+CREATE INDEX events_ts ON events(ts)",
+  "index expenses_date
+CREATE INDEX expenses_date ON expenses(date)",
+  "table actions
+CREATE TABLE actions (
+  id                 TEXT PRIMARY KEY,
+  created_at         TEXT NOT NULL,
+  tool               TEXT NOT NULL,
+  input_json         TEXT NOT NULL,
+  plan_json          TEXT NOT NULL,
+  plan_hash          TEXT NOT NULL,
+  expires_at         TEXT NOT NULL,
+  status             TEXT NOT NULL
+    CHECK (status IN ('planned','approved','applied','rejected','failed')),
+  approved_by        TEXT,
+  approved_at        TEXT,
+  approval_method    TEXT
+    CHECK (approval_method IS NULL OR approval_method IN ('cli_tty')),
+  approved_plan_hash TEXT,
+  rejected_at        TEXT,
+  rejected_reason    TEXT,
+  rejection_method   TEXT
+    CHECK (rejection_method IS NULL OR rejection_method IN ('cli_tty','cli_no_tty')),
+  applied_at         TEXT,
+  result_json        TEXT,
+  error              TEXT
+)",
+  "table events
+CREATE TABLE events (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts           TEXT NOT NULL,
+  action_id    TEXT REFERENCES actions(id),
+  tool         TEXT NOT NULL,
+  kind         TEXT NOT NULL
+    CHECK (kind IN ('tool_call','cli_command','plan_created','approved','approve_refused','rejected','applied','apply_refused','apply_failed')),
+  outcome      TEXT NOT NULL
+    CHECK (outcome IN ('ok','error','rejected')),
+  error_code   TEXT
+    CHECK (error_code IS NULL OR error_code IN ('INVALID_INPUT','WRITES_DISABLED','UNKNOWN_ACTION','UNKNOWN_TOOL','PLAN_EXPIRED','NOT_APPROVED','ALREADY_APPROVED','NOT_PENDING','NOT_A_TTY','CONFIRMATION_MISMATCH','ID_COLLISION','PLAN_MODIFIED','STALE_PLAN','PROVIDER_ERROR','AUTH_REQUIRED','INTERNAL')),
+  preview_json TEXT NOT NULL
+)",
+  "table expenses
+CREATE TABLE expenses (
+  id           TEXT PRIMARY KEY,
+  action_id    TEXT NOT NULL UNIQUE REFERENCES actions(id),
+  date         TEXT NOT NULL,
+  amount_minor INTEGER NOT NULL,
+  currency     TEXT NOT NULL
+    CHECK (length(currency) = 3 AND currency = upper(currency)),
+  category     TEXT,
+  merchant     TEXT,
+  note         TEXT,
+  created_at   TEXT NOT NULL
+)",
+  "table sqlite_sequence
+CREATE TABLE sqlite_sequence(name,seq)",
+  "trigger events_no_delete
+CREATE TRIGGER events_no_delete
+BEFORE DELETE ON events
+BEGIN
+  SELECT RAISE(ABORT, 'events is append-only');
+END",
+  "trigger events_no_update
+CREATE TRIGGER events_no_update
+BEFORE UPDATE ON events
+BEGIN
+  SELECT RAISE(ABORT, 'events is append-only');
+END",
+]
+`;
+
+exports[`snapshots > value sets 1`] = `
+{
+  "action_statuses": [
+    "planned",
+    "approved",
+    "applied",
+    "rejected",
+    "failed",
+  ],
+  "approval_methods": [
+    "cli_tty",
+  ],
+  "error_codes": [
+    "INVALID_INPUT",
+    "WRITES_DISABLED",
+    "UNKNOWN_ACTION",
+    "UNKNOWN_TOOL",
+    "PLAN_EXPIRED",
+    "NOT_APPROVED",
+    "ALREADY_APPROVED",
+    "NOT_PENDING",
+    "NOT_A_TTY",
+    "CONFIRMATION_MISMATCH",
+    "ID_COLLISION",
+    "PLAN_MODIFIED",
+    "STALE_PLAN",
+    "PROVIDER_ERROR",
+    "AUTH_REQUIRED",
+    "INTERNAL",
+  ],
+  "event_kinds": [
+    "tool_call",
+    "cli_command",
+    "plan_created",
+    "approved",
+    "approve_refused",
+    "rejected",
+    "applied",
+    "apply_refused",
+    "apply_failed",
+  ],
+  "event_outcomes": [
+    "ok",
+    "error",
+    "rejected",
+  ],
+  "rejection_methods": [
+    "cli_tty",
+    "cli_no_tty",
+  ],
+}
+`;
