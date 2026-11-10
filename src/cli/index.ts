@@ -2,7 +2,8 @@ import type { AppContext } from "../app-context.js";
 import { assertSupportedNode } from "../config/node-check.js";
 import { PACKAGE_VERSION } from "../config/version.js";
 import { createCliContext } from "./context.js";
-import { realCliIo, stripControl, type CliIo } from "./io.js";
+import { APPROVE_USAGE, approveArgsValid, approveCommand } from "./approve.js";
+import { oneLine, realCliIo, type CliIo } from "./io.js";
 import { pendingCommand } from "./pending.js";
 import { rejectCommand } from "./reject.js";
 
@@ -10,7 +11,6 @@ export type { CliIo } from "./io.js";
 
 /** Commands that are still stubs, with the milestone that implements them. */
 const PLANNED: Record<string, string> = {
-  approve: "M2",
   export: "M5",
   auth: "M3",
 };
@@ -22,7 +22,7 @@ Usage: deskhand <command> [options]
 Commands:
   pending     list planned actions awaiting approval
   reject      reject a planned action: reject <action_id> [reason]
-  approve     approve a planned action (not implemented yet, M2)
+  approve     approve a planned action: approve <action_id> (interactive terminal only)
   export      export ledger data, e.g. expenses (not implemented yet, M5)
   auth        Google OAuth: login | status | upgrade (not implemented yet, M3)
 
@@ -31,8 +31,7 @@ Options:
   --version      print the version
 `;
 
-const errMessage = (e: unknown): string =>
-  stripControl(e instanceof Error ? e.message : String(e)).replace(/\s+/g, " ").trim();
+const errMessage = (e: unknown): string => oneLine(e instanceof Error ? e.message : String(e), 500);
 
 /**
  * Runs the CLI and returns the process exit code. The context (and so the
@@ -54,14 +53,19 @@ export async function runCli(
     io.out(`${PACKAGE_VERSION}\n`);
     return 0;
   }
-  if (command === "pending" || command === "reject") {
+  if (command === "pending" || command === "reject" || command === "approve") {
     if (command === "reject" && (args[0] ?? "") === "") {
       io.err("deskhand: usage: deskhand reject <action_id> [reason]\n");
+      return 2;
+    }
+    if (command === "approve" && !approveArgsValid(args)) {
+      io.err(APPROVE_USAGE);
       return 2;
     }
     let ctx: AppContext | undefined;
     try {
       ctx = ctxFactory();
+      if (command === "approve") return await approveCommand(ctx, io, args);
       return command === "pending" ? pendingCommand(ctx, io) : rejectCommand(ctx, io, args);
     } catch (error) {
       io.err(`deskhand: ${errMessage(error)}\n`);
@@ -75,7 +79,7 @@ export async function runCli(
     io.err(`deskhand: '${command}' is not implemented yet (${milestone}).\n`);
     return 2;
   }
-  io.err(`deskhand: unknown command '${stripControl(command)}'. Try 'deskhand --help'.\n`);
+  io.err(`deskhand: unknown command '${oneLine(command, 64)}'. Try 'deskhand --help'.\n`);
   return 2;
 }
 

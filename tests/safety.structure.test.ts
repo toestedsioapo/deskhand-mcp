@@ -29,8 +29,13 @@ const importSpecifiers = (text: string): string[] =>
     (m) => (m[1] ?? m[2])!,
   );
 
-/** Files allowed to SET actions.status to 'approved' (enabled in Task 5). */
+/** Files allowed to SET actions.status to 'approved' or write the approval columns. Explicit list; extend only with review. */
 const APPROVE_ALLOWED = ["src/approval/approve.ts"];
+
+/** An SQL SET clause (up to its WHERE / end of string) that assigns status 'approved'. */
+const SETS_APPROVED = /\bSET\b(?:(?!\bWHERE\b)[^;`"])*?\bstatus\s*=\s*'approved'/i;
+/** An assignment (`col = ...`, not `==`/`!==`/`:`) to any approval column. */
+const WRITES_APPROVAL_COLUMN = /(?<![=!<>.\w])\b(approved_by|approved_at|approval_method|approved_plan_hash)\s*=(?!=)/;
 
 describe("safety structure", () => {
   it("scans a non-trivial source tree", () => {
@@ -63,7 +68,39 @@ describe("safety structure", () => {
     expect(offenders).toEqual([]);
   });
 
-  it.todo(
-    `status 'approved' is SET only in ${APPROVE_ALLOWED.join(", ")} (allowed-file list: ${JSON.stringify(APPROVE_ALLOWED)}; enabled in Task 5)`,
-  );
+  it(`status 'approved' is SET only in ${APPROVE_ALLOWED.join(", ")}`, () => {
+    expect(matching(SETS_APPROVED)).toEqual(APPROVE_ALLOWED);
+  });
+
+  it(`approval columns are written only in ${APPROVE_ALLOWED.join(", ")}`, () => {
+    expect(matching(WRITES_APPROVAL_COLUMN)).toEqual(APPROVE_ALLOWED);
+    // An INSERT into actions must never carry approval columns either.
+    expect(matching(/INSERT\s+INTO\s+actions\b[^;]*?\b(approved_by|approved_at|approval_method|approved_plan_hash)\b/i)).toEqual([]);
+  });
+
+  it("the approval guards detect what they are meant to detect (self-test)", () => {
+    expect(SETS_APPROVED.test("UPDATE actions SET status = 'approved', approved_by = ?")).toBe(true);
+    expect(SETS_APPROVED.test(`UPDATE actions SET x = 1, status='approved' WHERE id = ?`)).toBe(true);
+    // A WHERE-clause comparison (apply.ts) is not a SET.
+    expect(SETS_APPROVED.test("UPDATE actions SET status = 'failed' WHERE id = ? AND status = 'approved'")).toBe(false);
+    expect(WRITES_APPROVAL_COLUMN.test("approved_plan_hash = ?")).toBe(true);
+    expect(WRITES_APPROVAL_COLUMN.test("hash !== row.approved_plan_hash || x")).toBe(false);
+    expect(WRITES_APPROVAL_COLUMN.test("approved_by: a.approved_by")).toBe(false);
+  });
+
+  it("approveAction / rejectAction are imported only by src/cli (never by a tool or the server)", () => {
+    const importers = FILES.filter((f) => importSpecifiers(f.text).some((s) => /approval\/approve(\.js)?$|^\.\/approve(\.js)?$/.test(s)))
+      .map((f) => f.path)
+      .sort();
+    expect(importers.length).toBeGreaterThan(0);
+    expect(importers.filter((p) => !p.startsWith("src/cli/"))).toEqual([]);
+    expect(importers).toContain("src/cli/approve.ts");
+  });
+
+  it("no bypass flag or env var exists for approve", () => {
+    const cli = FILES.filter((f) => f.path.startsWith("src/cli/") || f.path === "src/approval/approve.ts");
+    for (const f of cli) {
+      expect(f.text, f.path).not.toMatch(/--yes|--force|["']-y["']|DESKHAND_[A-Z_]*APPROVE/);
+    }
+  });
 });

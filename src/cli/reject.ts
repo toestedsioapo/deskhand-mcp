@@ -1,6 +1,6 @@
 import type { AppContext } from "../app-context.js";
 import { rejectAction } from "../approval/approve.js";
-import { stripControl, type CliIo } from "./io.js";
+import { oneLine, stripControl, type CliIo } from "./io.js";
 
 /**
  * `deskhand reject <id> [reason...]`. rejectAction writes the command's single
@@ -16,9 +16,9 @@ export function rejectCommand(ctx: AppContext, io: CliIo, args: readonly string[
   const method = io.stdinIsTTY && io.stdoutIsTTY ? "cli_tty" : "cli_no_tty";
   const r = rejectAction(ctx, rawId, reason === "" ? undefined : reason, method);
   if (r.ok) {
-    io.out(`Rejected ${stripControl(rawId)}.\n`);
+    io.out(`Rejected ${oneLine(rawId, 64)}.\n`);
     return 0;
   }
-  io.err(`deskhand: ${r.errorCode}: ${stripControl(r.message)}\n`);
+  io.err(`deskhand: ${r.errorCode}: ${oneLine(r.message, 500)}\n`);
   return 1;
 }

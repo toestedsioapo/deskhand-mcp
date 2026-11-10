@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { AppContext } from "../src/app-context.js";
@@ -79,6 +79,16 @@ describe("stripControl", () => {
     expect(stripControl("a\r\nb\tc")).toBe("a\nb\tc");
     expect(stripControl("café 日本 \u{1f600}")).toBe("café 日本 \u{1f600}");
     expect(stripControl("a\u009bb\u007fc")).toBe("abc");
+  });
+
+  it("removes line/paragraph separators and bidi/zero-width/BOM characters", () => {
+    expect(stripControl("a\u2028b\u2029c")).toBe("abc");
+    expect(stripControl("a\u200bb\u200fc\u202ad\u202ee\u2066f\u2069g\ufeffh")).toBe("abcdefgh");
+  });
+
+  it("src/cli/io.ts is pure ASCII (no literal invisible characters in its regexes)", () => {
+    const text = readFileSync(new URL("../src/cli/io.ts", import.meta.url), "utf8");
+    expect([...text].filter((c) => c.charCodeAt(0) > 0x7e && c !== "\n")).toEqual([]);
   });
 });
 

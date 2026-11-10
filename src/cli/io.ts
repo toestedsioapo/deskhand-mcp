@@ -6,17 +6,29 @@ export interface CliIo {
   readLine(prompt: string): Promise<string>;
 }
 
+/**
+ * The process's real streams. The TTY flags are read from the streams
+ * themselves (never from an env var or flag), and readLine refuses to read
+ * unless both stdin and stdout are TTYs, so piped input is never consumed.
+ */
 export function realCliIo(): CliIo {
+  const stdinIsTTY = process.stdin.isTTY === true;
+  const stdoutIsTTY = process.stdout.isTTY === true;
   return {
     out: (s) => void process.stdout.write(s),
     err: (s) => void process.stderr.write(s),
-    stdinIsTTY: process.stdin.isTTY === true,
-    stdoutIsTTY: process.stdout.isTTY === true,
+    stdinIsTTY,
+    stdoutIsTTY,
     async readLine(prompt) {
+      if (!stdinIsTTY || !stdoutIsTTY) throw new Error("refusing to read: stdin and stdout must both be a TTY");
       const { createInterface } = await import("node:readline/promises");
       const rl = createInterface({ input: process.stdin, output: process.stdout, terminal: true });
       try {
-        return await rl.question(prompt);
+        // EOF (stdin closed) rejects instead of leaving the question pending forever.
+        return await new Promise<string>((resolve, reject) => {
+          rl.once("close", () => reject(new Error("input closed before a line was read")));
+          rl.question(prompt).then(resolve, reject);
+        });
       } finally {
         rl.close();
       }
@@ -28,11 +40,24 @@ export function realCliIo(): CliIo {
 const OSC = /\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)?/g;
 const CSI = /\u001b\[[0-?]*[ -/]*[@-~]?/g;
 const ESC_OTHER = /\u001b[@-Z\\-_]?/g;
-// C0 except tab and newline, DEL, C1, and bidi/invisible override characters.
+// C0 except tab and newline, DEL, C1, zero-width and bidi marks (U+200B-U+200F),
+// line/paragraph separators (U+2028, U+2029), bidi embeddings/overrides
+// (U+202A-U+202E), bidi isolates (U+2066-U+2069) and the BOM (U+FEFF).
+// Escapes only: this file must stay pure ASCII (a test enforces it).
 // eslint-disable-next-line no-control-regex
-const CONTROL = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f​-‏‪-‮⁦-⁩﻿]/g;
+const CONTROL = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u200b-\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069\ufeff]/g;
 
 /** Untrusted text made safe for a terminal: no escapes, no control characters except newline and tab. */
 export function stripControl(s: string): string {
   return s.replace(OSC, "").replace(CSI, "").replace(ESC_OTHER, "").replace(CONTROL, "");
+}
+
+/**
+ * Untrusted text for a single-line field: stripControl, whitespace runs
+ * (including newline and tab) collapsed to one space, trimmed, and capped at
+ * `max` characters (an ellipsis marks a cut).
+ */
+export function oneLine(s: string, max = 200): string {
+  const flat = stripControl(s).replace(/\s+/g, " ").trim();
+  return flat.length > max ? `${flat.slice(0, max - 3)}...` : flat;
 }
