@@ -200,7 +200,7 @@ Cancellation: a client may cancel a `tools/call` with a valid `notifications/can
 | Apply refused by a gate | `apply_refused` (rejected, code), `tool_call` (rejected, code) | unchanged |
 | Apply provider read error (lookup or re-check) | `apply_refused` (error, `PROVIDER_ERROR`), `tool_call` (error, `PROVIDER_ERROR`) | unchanged |
 | Apply on a stored plan with unknown kind / invalid shape | `apply_refused` (error, `INTERNAL`), `tool_call` (error, `INTERNAL`) | unchanged |
-| Apply `PLAN_MODIFIED` / `STALE_PLAN` / `PROVIDER_ERROR` (write confirmed failed) | `apply_failed` (error, code), `tool_call` (error, code) | `failed` |
+| Apply `PLAN_MODIFIED` / `STALE_PLAN` / `PROVIDER_ERROR` (write failed and the lookup finds nothing) | `apply_failed` (error, code), `tool_call` (error, code) | `failed` |
 | Invalid input / unknown tool | `tool_call` (error, `INVALID_INPUT` / `UNKNOWN_TOOL`) | n/a |
 | Other CLI command (`pending`, `export`, `auth`) | `cli_command` | n/a |
 

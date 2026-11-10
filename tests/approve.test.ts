@@ -80,7 +80,7 @@ afterEach(() => {
 /**
  * Asserts a refusal: the code, the row unchanged (status and all approval
  * columns), the last two ledger rows `approve_refused` then `cli_command`
- * (both outcome rejected, same code), exactly one cli_command row for the call.
+ * (outcome rejected by default, or `outcome` when given), exactly one cli_command row for the call.
  */
 async function expectRefused(
   id: string,
