@@ -19,7 +19,8 @@
     "typecheck": "tsc -p tsconfig.test.json",
     "test": "vitest run",
     "dev": "node dist/server.js",
-    "inspect": "mcp-inspector node dist/server.js"
+    "inspect": "mcp-inspector node dist/server.js",
+    "redteam:sandbox": "node scripts/redteam-sandbox.mjs"
   },
   "packageManager": "pnpm@12.15.0",
   "publishConfig": {

@@ -64,6 +64,14 @@ Still open or unverified:
 - **Inspector is pinned to 1.0.4** (2.x needs Node `^24.22.1`, above our floor); it prints a deprecation banner. Re-evaluate when the floor moves. The M1 check used `mcp-inspector --cli`; the UI route (`pnpm inspect`) is a manual owner check.
 - **Parked from M1 review, scheduled in ROADMAP:** M2: stdin-close `process.exit` vs in-flight async work (with test). **Done in M2b Task 6** (`src/shutdown.ts`: drain tracked handlers and response flushes, close the ledger, exit). M6: local-publish guard, `repository` field, CI action versions and push/PR trigger. Minor, no milestone: `server.ts` entry guard is silent for an extensionless path (`node dist/server`; bins are unaffected); the CLI stub test does not assert milestone labels.
 
+**M2b decisions (recorded 2026-11-10, reversible):**
+- Recovery (provider already holds our idempotency key) runs before the expiry gate, so a write that landed before a crash is finalised `applied` even if the plan has expired since. Gates still fire when nothing was written.
+- A provider read error during lookup or re-check leaves the plan `approved` and is retryable (`PROVIDER_ERROR` refusal); only a confirmed write failure marks it `failed`.
+- Typed confirmation is case-insensitive and trimmed.
+- `hooks.beforeCommit` on `AppContext` is a test seam in production code, used only by the crash-retry test.
+- The red-team sandbox (`scripts/redteam-sandbox.mjs`) builds its states through built `dist/` modules (`createPlan`, `rejectAction`, direct SQL for approved/expired/failed/tampered), never from `tests/`. It runs on a fixed fixture clock so its output is reproducible. `cliCommand` is an argv array. A faked-TTY approval is the documented limit (SECURITY.md), not a blocker.
+- **For M3:** Google adapter errors must not carry tokens or response bodies into `actions.error` or event previews (`redactInput` on a bare string only truncates; it does not scrub secrets). `createEvent` with an existing key must return the existing event; a `409` on insert with our key means already created.
+
 **M2b shutdown limits (Task 6, 2026-11-10):**
 - **The stdin-close drain is capped at 10 s by default.** A real Google write in M3 that is still running at the cap is cut off (exit 1). The re-check and the idempotency key make the retry safe: the recovery gate finds the event and records it as `applied`.
 - **SIGINT/SIGTERM keep Node's default immediate exit** (M1 behaviour). A SIGTERM mid-apply can leave a provider write without its `applied` row; recovery handles it on the next `action_apply`.
