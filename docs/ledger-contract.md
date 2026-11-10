@@ -1,6 +1,6 @@
-# Ledger contract (v1)
+# Ledger contract (v2)
 
-Status: written in M2a before migration 1. This is the contract Deskbench scores against and Deskflow renders (ADR 0003). Changing a table, a column, or any value set below is a breaking change and bumps the package major. `PRAGMA user_version` is the only schema version; v1 of this document is `user_version = 1`. Tests parse the "Value sets" block and the "DDL v1" block of this file, so keep their format exact.
+Status: written in M2a before migration 1. This is the contract Deskbench scores against and Deskflow renders (ADR 0003). Changing a table, a column, or any value set below is a breaking change and bumps the package major. `PRAGMA user_version` is the only schema version; this document is `user_version = 2`. v2 (2026-11-10, M2b red-team follow-up) only adds the error code `UNTRUSTED_RUNTIME`; migration 2 rebuilds `events` so its `error_code` CHECK allows it. Tests parse the "Value sets" block and the "DDL v1" block of this file, so keep their format exact.
 
 Sources: ARCHITECTURE.md (Ledger, vocabulary and row sequences, Expenses), SPEC section 5, ADR 0002, ADR 0003.
 
@@ -9,12 +9,12 @@ Sources: ARCHITECTURE.md (Ledger, vocabulary and row sequences, Expenses), SPEC 
 - **Timestamps:** `TEXT`, ISO-8601 UTC with milliseconds and a trailing `Z` (`2026-11-10T09:30:00.123Z`).
 - **JSON columns:** `TEXT` holding canonical-or-plain JSON text; `plan_json` is stored exactly as hashed.
 - **Action id:** `act_` followed by a 26-character ULID in Crockford base32 (alphabet `0123456789ABCDEFGHJKMNPQRSTVWXYZ`, uppercase). Example: `act_01JC3Z8K4V7Q2W9X5R6T1N0BHM`. The first 10 ULID characters are a timestamp, the last 16 are random.
-- **Confirmation string:** the last 4 characters of the whole id (always in the random part). Compared case-insensitively after trimming whitespace. Collisions among pending plans are regenerated at plan time (ADR 0002 item 7).
+- **Confirmation string:** the last 4 characters of the whole id (always in the random part). Compared after trimming whitespace and uppercasing ASCII `a-z` only (no Unicode case mapping, so input such as `ß` or `ſ`, which `toUpperCase` turns into `S`, never matches). Collisions among pending plans are regenerated at plan time (ADR 0002 item 7).
 - **`expenses.id`:** same format as the action id (`act_` + 26-character ULID). It is a separate id space from `actions.id` and is never typed by a human.
 - **`events.id`:** `INTEGER PRIMARY KEY AUTOINCREMENT`; the append order is the ordering. Never reused.
 - **Idempotency key:** the lowercase hex SHA-256 of the action id string (UTF-8). The provider derives its own write id from it (for example a deterministic Calendar event id). Stable across retries and crashes.
 - **`plan_hash`, `approved_plan_hash`:** lowercase hex SHA-256 of the canonical JSON of `plan_json` (ARCHITECTURE, "Canonical JSON").
-- **`approved_by`:** OS username of the approving process.
+- **`approved_by`:** OS username of the approving process (`os.userInfo()`, falling back to `USER`, then `USERNAME`, then `unknown`). It records what the process claims, not a verified identity (SECURITY.md, Limits).
 - **Money:** `expenses.amount_minor` is an integer count of the currency's minor unit (2 decimals for USD, 0 for JPY, 3 for KWD per ISO 4217); `currency` is an upper-case ISO-4217 code. The exponent is not stored; it comes from the currency code.
 - **Foreign keys:** the connection sets `PRAGMA foreign_keys = ON`. An event about an action that does not exist (for example `UNKNOWN_ACTION`) has `action_id = NULL`; the id the caller supplied is in the redacted preview input.
 
@@ -24,7 +24,7 @@ Sources: ARCHITECTURE.md (Ledger, vocabulary and row sequences, Expenses), SPEC 
 action_statuses: planned, approved, applied, rejected, failed
 event_kinds: tool_call, cli_command, plan_created, approved, approve_refused, rejected, applied, apply_refused, apply_failed
 event_outcomes: ok, error, rejected
-error_codes: INVALID_INPUT, WRITES_DISABLED, UNKNOWN_ACTION, UNKNOWN_TOOL, PLAN_EXPIRED, NOT_APPROVED, ALREADY_APPROVED, NOT_PENDING, NOT_A_TTY, CONFIRMATION_MISMATCH, ID_COLLISION, PLAN_MODIFIED, STALE_PLAN, PROVIDER_ERROR, AUTH_REQUIRED, INTERNAL
+error_codes: INVALID_INPUT, WRITES_DISABLED, UNKNOWN_ACTION, UNKNOWN_TOOL, PLAN_EXPIRED, NOT_APPROVED, ALREADY_APPROVED, NOT_PENDING, NOT_A_TTY, CONFIRMATION_MISMATCH, ID_COLLISION, PLAN_MODIFIED, STALE_PLAN, PROVIDER_ERROR, AUTH_REQUIRED, INTERNAL, UNTRUSTED_RUNTIME
 approval_methods: cli_tty
 rejection_methods: cli_tty, cli_no_tty
 ```
@@ -49,6 +49,7 @@ Meaning of the codes:
 | `PROVIDER_ERROR` | the provider write failed |
 | `AUTH_REQUIRED` | a Google-backed tool without a token (M3) |
 | `INTERNAL` | anything else, including a failed ledger write while answering |
+| `UNTRUSTED_RUNTIME` | approve while the process runs with `--import`, `--require`/`-r`, `--loader`, `--experimental-loader` or `--inspect*` (in `process.execArgv` or `NODE_OPTIONS`); a speed bump against the trivial fake-TTY preload, not a boundary (SECURITY.md) |
 
 ## DDL v1
 
@@ -135,6 +136,47 @@ Column notes:
 - `events.error_code` is NULL when `outcome = ok`; non-NULL otherwise.
 - Nothing outside `src/ledger/` touches SQLite. Nothing updates or deletes `events` rows; the triggers enforce it.
 
+## DDL v2
+
+Migration 2 (`src/ledger/migrations/0002-untrusted-runtime.ts`) rebuilds `events` so the `error_code` CHECK allows `UNTRUSTED_RUNTIME` (SQLite cannot alter a CHECK in place). Rows keep their ids; the indexes and append-only triggers are recreated. The `CHECK` lists must equal the value sets above. The runner sets `PRAGMA user_version = 2` after the block succeeds. A test compares this block to the migration.
+
+```sql
+CREATE TABLE events_v2 (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts           TEXT NOT NULL,
+  action_id    TEXT REFERENCES actions(id),
+  tool         TEXT NOT NULL,
+  kind         TEXT NOT NULL
+    CHECK (kind IN ('tool_call','cli_command','plan_created','approved','approve_refused','rejected','applied','apply_refused','apply_failed')),
+  outcome      TEXT NOT NULL
+    CHECK (outcome IN ('ok','error','rejected')),
+  error_code   TEXT
+    CHECK (error_code IS NULL OR error_code IN ('INVALID_INPUT','WRITES_DISABLED','UNKNOWN_ACTION','UNKNOWN_TOOL','PLAN_EXPIRED','NOT_APPROVED','ALREADY_APPROVED','NOT_PENDING','NOT_A_TTY','CONFIRMATION_MISMATCH','ID_COLLISION','PLAN_MODIFIED','STALE_PLAN','PROVIDER_ERROR','AUTH_REQUIRED','INTERNAL','UNTRUSTED_RUNTIME')),
+  preview_json TEXT NOT NULL
+);
+
+INSERT INTO events_v2 (id, ts, action_id, tool, kind, outcome, error_code, preview_json)
+  SELECT id, ts, action_id, tool, kind, outcome, error_code, preview_json FROM events ORDER BY id;
+
+DROP TABLE events;
+ALTER TABLE events_v2 RENAME TO events;
+
+CREATE INDEX events_action_id ON events(action_id);
+CREATE INDEX events_ts ON events(ts);
+
+CREATE TRIGGER events_no_update
+BEFORE UPDATE ON events
+BEGIN
+  SELECT RAISE(ABORT, 'events is append-only');
+END;
+
+CREATE TRIGGER events_no_delete
+BEFORE DELETE ON events
+BEGIN
+  SELECT RAISE(ABORT, 'events is append-only');
+END;
+```
+
 ## Status transitions
 
 `actions.status` changes only by compare-and-set inside `BEGIN IMMEDIATE` (`UPDATE ... WHERE id=? AND status=?`); zero rows changed means the transition is refused and logged.
@@ -160,16 +202,18 @@ Column notes:
 3. Replay: `status = applied`. Returns the stored `result_json`; `tool_call` row `ok`; no lifecycle row; no provider call.
 4. `NOT_APPROVED`: `status` is anything other than `approved` (`planned`, `rejected`, `failed`). Refusal.
 5. Hash check: recompute `sha256(canonical(plan_json))`; it must equal `plan_hash` and `approved_plan_hash`. Else `PLAN_MODIFIED`, status becomes `failed`.
-6. Recovery: if the provider already holds an event for this action's idempotency key, an earlier apply wrote it and crashed before the ledger update. Finalise as `applied` with the existing provider result, `replayed: true`, an `applied` event whose `preview.note` is `recovered`, and no second provider write. This runs before expiry and re-check because the world now contains our own event and the plan may have expired since the crash.
-7. `PLAN_EXPIRED`: `expires_at` has passed. Refusal.
-8. Re-check (ADR 0002 item 4): slot still free and referenced etags unchanged. Else `STALE_PLAN`, status becomes `failed`, no write.
-9. Provider write with the idempotency key. Failure is `PROVIDER_ERROR`, status becomes `failed`. Success sets `applied`, `applied_at`, `result_json`.
+6. Recovery: if the provider already holds an event for this action's idempotency key, an earlier apply wrote it and crashed before the ledger update. Finalise as `applied` with the existing provider result, `replayed: true`, an `applied` event whose `preview.note` is `recovered`, and no second provider write. This runs before expiry and re-check because the world now contains our own event and the plan may have expired since the crash. A provider error during this lookup is a refusal: `apply_refused` (error, `PROVIDER_ERROR`), status unchanged, retryable.
+7. `PLAN_EXPIRED`: `expires_at` has passed (fails closed: `now >= expires_at`, or an unparseable `expires_at`, is expired). Refusal.
+8. Re-check (ADR 0002 item 4): slot still free and referenced etags unchanged. If not, the idempotency key is looked up again first: if our event exists (a concurrent apply of the same action wrote it after this call's recovery lookup), finalise as in gate 6 (`recovered`). Otherwise `STALE_PLAN`, status becomes `failed`, no write. A provider error while reading (re-check or the second lookup) is a refusal: `apply_refused` (error, `PROVIDER_ERROR`), status unchanged, retryable.
+9. Provider write with the idempotency key. On a write failure the key is looked up again (the failure may be ambiguous, for example a timeout after the provider accepted the event): if our event exists, finalise as in gate 6 (`recovered`); if the lookup finds nothing, `PROVIDER_ERROR`, status becomes `failed` (best-effort: a provider that commits the write after the lookup leaves an event behind a `failed` row, a residual risk); if the lookup itself errors, a `PROVIDER_ERROR` refusal with status unchanged. Success sets `applied`, `applied_at`, `result_json`. The provider's `createEvent` with an existing key must return the existing event (never throw, never duplicate).
 
-Gate refusals (1, 2, 4, 7) leave `status` unchanged. A provider error on a re-check or write is recorded in `actions.error` with the code.
+Gate refusals (1, 2, 4, 7), provider read errors and the stored-plan `INTERNAL` refusal leave `status` unchanged. Only `PLAN_MODIFIED`, `STALE_PLAN` and a provider write failure whose follow-up lookup finds nothing move the plan to `failed`; `actions.error` then holds `<CODE>: <message>`, with provider text passed through the preview redactor.
+
+After gate 5, a stored plan whose kind is unknown or that fails its kind's schema (unreachable through the plan tools, which validate) is refused with `INTERNAL`, status unchanged.
 
 ## Approve and reject refusals (CLI)
 
-`deskhand approve` checks, in order: TTY on stdin and stdout (`NOT_A_TTY`, before anything is printed or read), action exists (`UNKNOWN_ACTION`), status (`approved` gives `ALREADY_APPROVED`; `rejected`, `failed`, `applied` give `NOT_PENDING`), not expired (`PLAN_EXPIRED`), recomputed hash equals `plan_hash` (`PLAN_MODIFIED`), no other pending id with the same last 4 (`ID_COLLISION`), typed last 4 matches (`CONFIRMATION_MISMATCH`). Every refusal leaves `status` unchanged.
+`deskhand approve` checks, in order: TTY on stdin and stdout (`NOT_A_TTY`, before anything is printed or read), runtime has no preload, loader or inspector flag (`UNTRUSTED_RUNTIME`, also before anything is printed or read), action exists (`UNKNOWN_ACTION`), status (`approved` gives `ALREADY_APPROVED`; `rejected`, `failed`, `applied` give `NOT_PENDING`), not expired (`PLAN_EXPIRED`), recomputed hash equals `plan_hash` (`PLAN_MODIFIED`), 5b. the stored plan has a known kind and passes its schema (`INTERNAL`, outcome `error`, before the prompt; unreachable through the plan tools, which validate, and the same code apply uses), no other pending id with the same last 4 (`ID_COLLISION`), typed last 4 matches (`CONFIRMATION_MISMATCH`). Every refusal leaves `status` unchanged.
 
 Note: a hash mismatch at approve leaves the plan `planned` (ADR 0002 item 2); only the apply-time hash check moves a plan to `failed`.
 
@@ -189,17 +233,20 @@ Cancellation: a client may cancel a `tools/call` with a valid `notifications/can
 | Plan tool ok | `plan_created` (ok), `tool_call` (ok) | `planned` |
 | Approve ok | `approved` (ok), `cli_command` (ok) | `approved` |
 | Approve refused | `approve_refused` (rejected, code), `cli_command` (rejected, code) | unchanged |
+| Approve on a stored plan with unknown kind / invalid shape (check 5b) | `approve_refused` (error, `INTERNAL`), `cli_command` (error, `INTERNAL`) | unchanged |
 | Reject ok | `rejected` (ok), `cli_command` (ok) | `rejected` |
 | Reject refused | `cli_command` (rejected, code) | unchanged |
 | Apply ok | `applied` (ok), `tool_call` (ok) | `applied` |
 | Apply recovered | `applied` (ok, `preview.note` = `recovered`), `tool_call` (ok) | `applied` |
 | Apply repeated on applied | `tool_call` (ok), stored result returned | `applied` |
 | Apply refused by a gate | `apply_refused` (rejected, code), `tool_call` (rejected, code) | unchanged |
-| Apply `PLAN_MODIFIED` / `STALE_PLAN` / `PROVIDER_ERROR` | `apply_failed` (error, code), `tool_call` (error, code) | `failed` |
+| Apply provider read error (lookup or re-check) | `apply_refused` (error, `PROVIDER_ERROR`), `tool_call` (error, `PROVIDER_ERROR`) | unchanged |
+| Apply on a stored plan with unknown kind / invalid shape | `apply_refused` (error, `INTERNAL`), `tool_call` (error, `INTERNAL`) | unchanged |
+| Apply `PLAN_MODIFIED` / `STALE_PLAN` / `PROVIDER_ERROR` (write failed and the lookup finds nothing) | `apply_failed` (error, code), `tool_call` (error, code) | `failed` |
 | Invalid input / unknown tool | `tool_call` (error, `INVALID_INPUT` / `UNKNOWN_TOOL`) | n/a |
 | Other CLI command (`pending`, `export`, `auth`) | `cli_command` | n/a |
 
-`tool_call.outcome` mapping: gate refusals (`WRITES_DISABLED`, `UNKNOWN_ACTION`, `PLAN_EXPIRED`, `NOT_APPROVED`) are `rejected`; every other error code is `error`. For CLI rows, refusals with an approve or reject code (`NOT_A_TTY`, `CONFIRMATION_MISMATCH`, `ID_COLLISION`, `ALREADY_APPROVED`, `NOT_PENDING`, `PLAN_EXPIRED`, `PLAN_MODIFIED`, `UNKNOWN_ACTION`) are `rejected`.
+`tool_call.outcome` mapping: gate refusals (`WRITES_DISABLED`, `UNKNOWN_ACTION`, `PLAN_EXPIRED`, `NOT_APPROVED`) are `rejected`; every other error code is `error`. For CLI rows, refusals with an approve or reject code (`NOT_A_TTY`, `UNTRUSTED_RUNTIME`, `CONFIRMATION_MISMATCH`, `ID_COLLISION`, `ALREADY_APPROVED`, `NOT_PENDING`, `PLAN_EXPIRED`, `PLAN_MODIFIED`, `UNKNOWN_ACTION`) are `rejected`.
 
 `INVALID_INPUT` and `INTERNAL` `tool_call` rows are outcome `error` (only the four gate refusals above are `rejected`).
 
@@ -209,7 +256,7 @@ Every `tools/call` writes exactly one `tool_call` row, including calls rejected 
 
 Shape: `{"v":1,"input":<redacted>,"output":<redacted|null>,"note":<string|null>}`; lifecycle previews may also carry `"action_id"`.
 
-- `input`: the tool arguments (or CLI arguments) after redaction. `output`: the structured result after redaction, or `null` when there is none. `note`: short free text such as `recovered`, `cancelled`, `preview failed`, or (on `tool_call` error rows) the redacted error message; `null` otherwise. Success rows carry `null` unless one of the documented notes applies.
+- `input`: the tool arguments (or CLI arguments) after redaction. `output`: the structured result after redaction, or `null` when there is none. `note`: short free text. The listed values are examples: `recovered`, `cancelled`, `preview failed`; on error and refusal rows (`tool_call` errors, `apply_refused`, `apply_failed`, `approve_refused`) it is the redacted human-readable error message; `null` otherwise. Success rows carry `null` unless one of the documented notes applies.
 - Redaction is one function with a leak test, applied recursively to all strings and keys:
   1. Object keys matching `/token|secret|password|authorization|credential|api[_-]?key|private[_-]?key|cookie|passphrase/i` (substring, case-insensitive; a bare `auth` is deliberately not matched, it would hit `author`) have their value replaced by the string `"[redacted]"`.
   2. Values of keys named `body`, `html` or `content` (case-insensitive, any depth) store no text at all. The value is replaced by the string `[omitted N chars sha256:<first 8 hex>]`, where N is the UTF-16 length (JavaScript `string.length`) and the hash is over the full string. A non-string value is hashed over its canonical JSON and N is that JSON's character count.

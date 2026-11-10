@@ -35,7 +35,7 @@ CREATE TABLE actions (
   error              TEXT
 )",
   "table events
-CREATE TABLE events (
+CREATE TABLE "events" (
   id           INTEGER PRIMARY KEY AUTOINCREMENT,
   ts           TEXT NOT NULL,
   action_id    TEXT REFERENCES actions(id),
@@ -45,7 +45,7 @@ CREATE TABLE events (
   outcome      TEXT NOT NULL
     CHECK (outcome IN ('ok','error','rejected')),
   error_code   TEXT
-    CHECK (error_code IS NULL OR error_code IN ('INVALID_INPUT','WRITES_DISABLED','UNKNOWN_ACTION','UNKNOWN_TOOL','PLAN_EXPIRED','NOT_APPROVED','ALREADY_APPROVED','NOT_PENDING','NOT_A_TTY','CONFIRMATION_MISMATCH','ID_COLLISION','PLAN_MODIFIED','STALE_PLAN','PROVIDER_ERROR','AUTH_REQUIRED','INTERNAL')),
+    CHECK (error_code IS NULL OR error_code IN ('INVALID_INPUT','WRITES_DISABLED','UNKNOWN_ACTION','UNKNOWN_TOOL','PLAN_EXPIRED','NOT_APPROVED','ALREADY_APPROVED','NOT_PENDING','NOT_A_TTY','CONFIRMATION_MISMATCH','ID_COLLISION','PLAN_MODIFIED','STALE_PLAN','PROVIDER_ERROR','AUTH_REQUIRED','INTERNAL','UNTRUSTED_RUNTIME')),
   preview_json TEXT NOT NULL
 )",
   "table expenses
@@ -107,6 +107,7 @@ exports[`snapshots > value sets 1`] = `
     "PROVIDER_ERROR",
     "AUTH_REQUIRED",
     "INTERNAL",
+    "UNTRUSTED_RUNTIME",
   ],
   "event_kinds": [
     "tool_call",

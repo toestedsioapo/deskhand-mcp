@@ -3,13 +3,21 @@ import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { loadConfig, type Config } from "./config/env.js";
+import { resolveActor } from "./config/actor.js";
+import type { AppContext } from "./app-context.js";
+import { loadConfig } from "./config/env.js";
 import { assertSupportedNode } from "./config/node-check.js";
 import { ensureDirs } from "./config/paths.js";
 import { PACKAGE_VERSION } from "./config/version.js";
 import { LedgerDb } from "./ledger/db.js";
-import type { Clock } from "./ledger/ids.js";
+import { createIdGenerator, type Clock } from "./ledger/ids.js";
 import { LoggingTransport } from "./ledger/logging-transport.js";
+import {
+  ACTION_APPLY_DESCRIPTION,
+  actionApplyHandler,
+  actionApplyInputSchema,
+  actionApplyOutputSchema,
+} from "./tools/action-apply.js";
 import {
   ACTION_EXPLAIN_DESCRIPTION,
   actionExplainHandler,
@@ -28,19 +36,31 @@ import {
   pingInputSchema,
   pingOutputSchema,
 } from "./tools/ping.js";
+import { createFixtureProvider, loadFixtureWorld } from "./providers/fixture/index.js";
+import { createClientStdout, installStdinShutdown } from "./shutdown.js";
 import { toolOk } from "./tools/result.js";
 
-export interface ServerDeps {
-  config: Config;
-  db: LedgerDb;
-  clock: Clock;
+/** Kept as an alias so existing call sites and tests keep compiling. */
+export type ServerDeps = AppContext;
+
+/** Runs one tool handler; LoggingTransport.track counts it for the shutdown drain. */
+export type HandlerTracker = <T>(fn: () => T | Promise<T>) => Promise<T>;
+
+export interface CreateServerOptions {
+  /** Wraps every tool handler (default: runs it untracked). */
+  track?: HandlerTracker;
 }
+
+const untracked: HandlerTracker = async (fn) => fn();
 
 /**
  * Registers the tools. Ledger logging of every `tools/call` is done by the
- * LoggingTransport the server is connected through (see main()).
+ * LoggingTransport the server is connected through (see main()), and every
+ * handler runs under `opts.track` so a shutdown can wait for it, including one
+ * whose call was cancelled (the SDK keeps running it but sends no response).
  */
-export function createServer(deps: ServerDeps): McpServer {
+export function createServer(deps: ServerDeps, opts: CreateServerOptions = {}): McpServer {
+  const track = opts.track ?? untracked;
   const server = new McpServer({
     name: "deskhand-mcp",
     version: PACKAGE_VERSION,
@@ -54,7 +74,7 @@ export function createServer(deps: ServerDeps): McpServer {
       outputSchema: pingOutputSchema,
       annotations: { readOnlyHint: true },
     },
-    () => toolOk(pingHandler()),
+    () => track(() => toolOk(pingHandler())),
   );
 
   server.registerTool(
@@ -65,7 +85,7 @@ export function createServer(deps: ServerDeps): McpServer {
       outputSchema: ledgerQueryOutputSchema,
       annotations: { readOnlyHint: true },
     },
-    (input) => toolOk(ledgerQueryHandler(deps.db, input)),
+    (input) => track(() => toolOk(ledgerQueryHandler(deps.db, input))),
   );
 
   server.registerTool(
@@ -76,7 +96,19 @@ export function createServer(deps: ServerDeps): McpServer {
       outputSchema: actionExplainOutputSchema,
       annotations: { readOnlyHint: true },
     },
-    (input) => actionExplainHandler(deps.db, input),
+    (input) => track(() => actionExplainHandler(deps.db, input)),
+  );
+
+  // The only MCP tool that can cause a provider write (through the apply engine).
+  server.registerTool(
+    "action_apply",
+    {
+      description: ACTION_APPLY_DESCRIPTION,
+      inputSchema: actionApplyInputSchema,
+      outputSchema: actionApplyOutputSchema,
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
+    },
+    (input) => track(() => actionApplyHandler(deps, input)),
   );
 
   return server;
@@ -88,20 +120,30 @@ export async function main(): Promise<void> {
   // below prints one line and exits 1); no tool ever runs without a ledger.
   const config = loadConfig(process.env);
   ensureDirs(config.paths);
+  // A bad fixture file is a startup config error too (loadFixtureWorld throws ConfigError).
+  const world = loadFixtureWorld(config.fixturePath);
   const db = LedgerDb.open(config.paths.ledgerPath, { busyTimeoutMs: config.busyTimeoutMs });
-  const clock: Clock = () => new Date();
-  const server = createServer({ config, db, clock });
-  const transport = new LoggingTransport(new StdioServerTransport(), { db, clock });
-  // stdin closing means the client went away: exit cleanly (M2b adds a drain).
-  const exit = (): void => {
-    try {
-      db.close();
-    } finally {
-      process.exit(0);
-    }
-  };
-  process.stdin.once("end", exit);
-  process.stdin.once("close", exit);
+  // With a fixture loaded, time is the fixture's fixed `now`; otherwise real time.
+  const clock: Clock = config.fixturePath ? () => new Date(world.now) : () => new Date();
+  const provider = createFixtureProvider(world);
+  const ids = createIdGenerator();
+  // The client usually closes both pipes when it exits, so a response can hit a
+  // dead stdout (EPIPE): the guard drops it silently instead of crashing.
+  const stdout = createClientStdout(process.stdout);
+  const transport = new LoggingTransport(new StdioServerTransport(process.stdin, stdout.stream), { db, clock });
+  const server = createServer(
+    { config, db, clock, ids, provider, actor: resolveActor() },
+    { track: transport.track },
+  );
+  // stdin closing means the client went away: finish in-flight tool calls
+  // (handlers and response flushes), close the ledger, then exit.
+  // SIGINT/SIGTERM keep Node's default (immediate termination), as in M1.
+  installStdinShutdown({
+    stdin: process.stdin,
+    transport,
+    closeDb: () => db.close(),
+    exit: (code) => stdout.flushThenExit(code),
+  });
   await server.connect(transport);
 }
 

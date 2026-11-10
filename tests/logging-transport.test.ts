@@ -15,6 +15,7 @@ import { classifyResponse, LoggingTransport } from "../src/ledger/logging-transp
 import { createServer } from "../src/server.js";
 import { toolError, toolOk } from "../src/tools/result.js";
 import { makeTempHome } from "./helpers/home.js";
+import { makeProviderDeps } from "./helpers/seed.js";
 
 const NOW = "2026-11-10T09:30:00.123Z";
 const clock = () => new Date(NOW);
@@ -32,14 +33,17 @@ interface RawRow {
 
 const open: (() => Promise<void>)[] = [];
 
-async function setup(register?: (server: McpServer) => void) {
+async function setup(register?: (server: McpServer, logging: LoggingTransport) => void) {
   const home = makeTempHome();
   const db = LedgerDb.open(join(home.home, "ledger.db"));
-  const server = createServer({ config: loadConfig(home.env), db, clock });
-  register?.(server);
   const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
   const stderr: string[] = [];
   const logging = new LoggingTransport(serverSide, { db, clock, stderr: (s) => stderr.push(s) });
+  const server = createServer(
+    { config: loadConfig(home.env), db, clock, ...makeProviderDeps() },
+    { track: logging.track },
+  );
+  register?.(server, logging);
   await server.connect(logging);
   const client = new Client({ name: "deskhand-test", version: "0.0.0" });
   await client.connect(clientSide);
@@ -320,6 +324,97 @@ describe("LoggingTransport", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ tool: "slow", outcome: "error", error_code: "INTERNAL" });
     expect(c.preview(rows[0])).toEqual({ v: 1, input: {}, output: null, note: "cancelled" });
+  });
+
+  it("whenIdle does not resolve while a cancelled (tracked) handler is still running", async () => {
+    let started!: () => void;
+    const begun = new Promise<void>((r) => (started = r));
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let finished = false;
+    const c = await setup((s, logging) => {
+      s.registerTool("slow", { inputSchema: z.object({}) }, () =>
+        logging.track(async () => {
+          started();
+          await gate;
+          finished = true;
+          return toolOk({ done: true });
+        }),
+      );
+    });
+    const ac = new AbortController();
+    const call = c.client.callTool({ name: "slow", arguments: {} }, undefined, { signal: ac.signal });
+    await begun;
+    ac.abort("stop");
+    await expect(call).rejects.toThrow();
+    await new Promise((r) => setTimeout(r, 20));
+    // The cancel row is already written, but the handler still runs.
+    expect(c.rows()).toHaveLength(1);
+    expect(c.logging.inFlight()).toBe(1);
+    let idle = false;
+    const idleP = c.logging.whenIdle().then(() => {
+      idle = true;
+      return finished;
+    });
+    await new Promise((r) => setTimeout(r, 30));
+    expect(idle).toBe(false);
+    release();
+    expect(await idleP).toBe(true);
+    expect(c.logging.inFlight()).toBe(0);
+    expect(c.rows()).toHaveLength(1);
+  });
+
+  it("whenIdle waits for a handler whose call was cancelled before the handler started (same tick)", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let started = false;
+    let finished = false;
+    const c = await setup((s, logging) => {
+      s.registerTool("slow", { inputSchema: z.object({}) }, () =>
+        logging.track(async () => {
+          started = true;
+          await gate;
+          finished = true;
+          return toolOk({ done: true });
+        }),
+      );
+    });
+    // Request, cancel and whenIdle in one tick: the cancel takes the pending
+    // count to 0 before the SDK's microtask chain has started the handler.
+    void c.clientSide.send({ jsonrpc: "2.0", id: 9, method: "tools/call", params: { name: "slow", arguments: {} } });
+    void c.clientSide.send({
+      jsonrpc: "2.0",
+      method: "notifications/cancelled",
+      params: { requestId: 9, reason: "stop" },
+    } as JSONRPCMessage);
+    expect(started).toBe(false);
+    expect(c.logging.inFlight()).toBe(0);
+    let idle = false;
+    const idleP = c.logging.whenIdle().then(() => {
+      idle = true;
+      return finished;
+    });
+    await new Promise((r) => setTimeout(r, 30));
+    expect(started).toBe(true); // the SDK runs a cancelled request's handler anyway
+    expect(idle).toBe(false);
+    release();
+    expect(await idleP).toBe(true);
+    expect(c.rows()).toHaveLength(1);
+  });
+
+  it("track counts a handler from its start, settles a throw, and is idle after", async () => {
+    const c = await setup();
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const p = c.logging.track(async () => {
+      await gate;
+      throw new Error("x");
+    });
+    expect(c.logging.inFlight()).toBe(1);
+    release();
+    await expect(p).rejects.toThrow("x");
+    expect(c.logging.inFlight()).toBe(0);
+    await c.logging.whenIdle();
   });
 
   // Raw JSON-RPC over the client side, so the test picks the request id (the

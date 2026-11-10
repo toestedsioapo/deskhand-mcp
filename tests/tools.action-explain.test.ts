@@ -59,11 +59,29 @@ describe("action_explain", () => {
     });
     expect(out.plan).toEqual({ rationale: "Because the meeting overlaps", items: [1] });
     expect(out.rationale).toBe("Because the meeting overlaps");
-    expect(out.diff).toBeNull();
+    expect(out.diff).toEqual(["(unknown plan kind)"]);
     expect(out.events.map((e) => e.kind)).toEqual(["plan_created", "approved"]);
 
     const call = h.rows().find((x) => x.tool === "action_explain");
     expect(call).toMatchObject({ kind: "tool_call", outcome: "ok", action_id: "act_ONE", error_code: null });
+  });
+
+  it("renders a diff for a calendar.create_event plan", async () => {
+    insertAction(h.db, "act_CAL", {
+      kind: "calendar.create_event",
+      event: {
+        title: "Sync",
+        start: "2026-11-12T10:00:00.000Z",
+        end: "2026-11-12T10:30:00.000Z",
+        attendees: ["a@example.com"],
+        sendUpdates: "all",
+        calendarId: "primary",
+      },
+      observed: { slotFree: true, etags: {} },
+    });
+    const r = await h.client.callTool({ name: "action_explain", arguments: { action_id: "act_CAL" } });
+    const diff = (r.structuredContent as { diff: string[] }).diff;
+    expect(diff).toContain("will email 1 attendees");
   });
 
   it("rationale is null when the plan has no string rationale", async () => {

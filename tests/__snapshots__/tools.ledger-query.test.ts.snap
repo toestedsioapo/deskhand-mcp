@@ -92,6 +92,7 @@ exports[`ledger_query schemas > output schema is stable 1`] = `
                   "PROVIDER_ERROR",
                   "AUTH_REQUIRED",
                   "INTERNAL",
+                  "UNTRUSTED_RUNTIME",
                 ],
                 "type": "string",
               },

@@ -1,6 +1,6 @@
 # Tools contract (v1, M2)
 
-Status: written in M2a. Zod input and output schemas for every tool are snapshot-tested; a change here is a breaking change. `docs/tools.md` stays generated from the schemas (M5) and is never hand-edited. Tools added after M2 (`calendar_*`, `inbox_*`, `itinerary_build`, `expense_log`, `action_apply`) extend this file when they are planned.
+Status: written in M2a. Zod input and output schemas for every tool are snapshot-tested; a change here is a breaking change. `docs/tools.md` stays generated from the schemas (M5) and is never hand-edited. Tools added after M2 (`calendar_*`, `inbox_*`, `itinerary_build`, `expense_log`) extend this file when they are planned.
 
 ## Result convention
 
@@ -68,13 +68,28 @@ Output:
   },
   plan: unknown,               // actions.plan_json parsed
   rationale: string | null,    // plan.rationale when it is a string, else null
-  diff: string[] | null,       // null in M2a; M2b fills it from the deterministic plan renderer
+  diff: string[] | null,       // lines from the deterministic plan renderer (never agent text); an unrenderable stored plan yields `(unknown plan kind)` or `(invalid plan)`. The schema stays nullable (a contract from M2a) but the handler always returns an array
   events: EventRow[]           // this action's events, oldest first; at most the newest 1000
 }
 ```
 
 Unknown id: `isError`, `error_code = UNKNOWN_ACTION`, tool_call outcome `rejected`, `action_id` NULL on the row. Content inside `plan` (which may include agent-supplied or mailbox text) is data; it triggers no further action.
 
-## `action_apply` (M2b, listed for completeness)
+## `action_apply`
 
-Input `{ action_id: string }`. Gate order, row sequences and error codes are fixed in `docs/ledger-contract.md`. Its output schema is finalised in the M2b plan.
+Applies a plan that a human approved out of band with `deskhand approve`. It cannot approve anything. Registered with `readOnlyHint: false`, `destructiveHint: true`, `idempotentHint: true`.
+
+Input (strict): `{ action_id: string }` (max 64 characters).
+
+Output (success only):
+
+```
+{
+  action_id: string,
+  status: "applied",
+  replayed: boolean,   // true when the stored result was returned (repeat call) or the write was recovered
+  result: unknown      // the stored result_json (for calendar.create_event: the created event)
+}
+```
+
+Failures are `isError` results with `_meta.deskhand.error_code` and `action_id` (`WRITES_DISABLED`, `UNKNOWN_ACTION`, `NOT_APPROVED`, `PLAN_MODIFIED`, `PLAN_EXPIRED`, `STALE_PLAN`, `PROVIDER_ERROR`, `INTERNAL`). Gate order, row sequences and which refusals change `status` are fixed in `docs/ledger-contract.md`; the schemas are snapshot-tested in `tests/tools.action-apply.test.ts`.

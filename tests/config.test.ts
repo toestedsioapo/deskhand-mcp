@@ -2,8 +2,38 @@ import { mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { resolveActor } from "../src/config/actor.js";
 import { loadConfig, ConfigError } from "../src/config/env.js";
 import { ensureDirs, resolvePaths } from "../src/config/paths.js";
+
+describe("resolveActor", () => {
+  const throwing = () => {
+    throw new Error("uv_os_get_passwd returned ENOENT");
+  };
+
+  it("uses os.userInfo().username when it works", () => {
+    expect(resolveActor({ userInfo: () => ({ username: "marvin" }), env: { USER: "other" } })).toBe("marvin");
+  });
+
+  it("falls back to USER, then USERNAME, when userInfo throws", () => {
+    expect(resolveActor({ userInfo: throwing, env: { USER: "u1", USERNAME: "u2" } })).toBe("u1");
+    expect(resolveActor({ userInfo: throwing, env: { USERNAME: "u2" } })).toBe("u2");
+  });
+
+  it("falls back to USER/USERNAME when userInfo returns an empty name", () => {
+    expect(resolveActor({ userInfo: () => ({ username: "" }), env: { USERNAME: "u2" } })).toBe("u2");
+  });
+
+  it("is 'unknown' when nothing is available (empty env values ignored)", () => {
+    expect(resolveActor({ userInfo: throwing, env: {} })).toBe("unknown");
+    expect(resolveActor({ userInfo: throwing, env: { USER: "", USERNAME: "" } })).toBe("unknown");
+  });
+
+  it("defaults to the real os.userInfo and process.env without throwing", () => {
+    expect(typeof resolveActor()).toBe("string");
+    expect(resolveActor().length).toBeGreaterThan(0);
+  });
+});
 
 describe("resolvePaths", () => {
   it("DESKHAND_HOME wins and data === config", () => {

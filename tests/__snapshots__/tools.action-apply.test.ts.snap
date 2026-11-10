@@ -1,0 +1,45 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`action_apply schemas > input schema is stable 1`] = `
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "action_id": {
+      "maxLength": 64,
+      "type": "string",
+    },
+  },
+  "required": [
+    "action_id",
+  ],
+  "type": "object",
+}
+`;
+
+exports[`action_apply schemas > output schema is stable 1`] = `
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "action_id": {
+      "type": "string",
+    },
+    "replayed": {
+      "type": "boolean",
+    },
+    "result": {},
+    "status": {
+      "const": "applied",
+      "type": "string",
+    },
+  },
+  "required": [
+    "action_id",
+    "status",
+    "replayed",
+    "result",
+  ],
+  "type": "object",
+}
+`;

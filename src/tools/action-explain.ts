@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { ACTION_STATUSES, APPROVAL_METHODS } from "../ledger/contract.js";
+import { renderDiff } from "../approval/plan-kinds.js";
 import { getAction } from "../ledger/actions.js";
 import type { LedgerDb } from "../ledger/db.js";
 import { queryEvents } from "../ledger/events.js";
@@ -66,7 +67,7 @@ export function actionExplainHandler(
     },
     plan,
     rationale,
-    diff: null,
+    diff: renderDiff(plan),
     events,
   };
   return toolOk(output, { action_id: a.id });

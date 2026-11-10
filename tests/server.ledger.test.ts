@@ -6,6 +6,7 @@ import { loadConfig } from "../src/config/env.js";
 import { LedgerDb } from "../src/ledger/db.js";
 import { createServer } from "../src/server.js";
 import { makeTempHome } from "./helpers/home.js";
+import { makeProviderDeps } from "./helpers/seed.js";
 
 let home: ReturnType<typeof makeTempHome>;
 let db: LedgerDb;
@@ -19,15 +20,15 @@ afterEach(() => {
 });
 
 describe("createServer with a ledger", () => {
-  it("lists exactly ping, with the M1 tools/list JSON unchanged", async () => {
-    const server = createServer({ config: loadConfig(home.env), db, clock: () => new Date() });
+  it("lists the four M2 tools in order, with the M1 ping listing unchanged", async () => {
+    const server = createServer({ config: loadConfig(home.env), db, clock: () => new Date(), ...makeProviderDeps() });
     const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
     await server.connect(serverSide);
     const client = new Client({ name: "deskhand-test", version: "0.0.0" });
     await client.connect(clientSide);
     try {
       const list = await client.listTools();
-      expect(list.tools.map((t) => t.name)).toEqual(["ping", "ledger_query", "action_explain"]);
+      expect(list.tools.map((t) => t.name)).toEqual(["ping", "ledger_query", "action_explain", "action_apply"]);
       // Snapshot first recorded against the M1 createServer: ping's listing must not change.
       expect({ ...list, tools: list.tools.filter((t) => t.name === "ping") }).toMatchSnapshot();
     } finally {
