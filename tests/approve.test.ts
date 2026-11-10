@@ -549,7 +549,7 @@ describe("runCli approve", () => {
     const io = scripted({ lines: ["WR\u001b[2JONG"] });
     expect(await runCli(["approve", id], io, factory)).toBe(1);
     expect(io.errText()).toMatch(/^deskhand: CONFIRMATION_MISMATCH: [^\n]*\n$/);
-    expect(io.errText()).not.toContain("WR");
+    expect(io.errText().replaceAll(id, "")).not.toContain("WR"); // the (random) id itself may contain "WR"
   });
 
   it.each([[["approve"]], [["approve", ""]], [["approve", "a", "b"]]])(
