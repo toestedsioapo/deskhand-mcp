@@ -9,12 +9,12 @@ Sources: ARCHITECTURE.md (Ledger, vocabulary and row sequences, Expenses), SPEC 
 - **Timestamps:** `TEXT`, ISO-8601 UTC with milliseconds and a trailing `Z` (`2026-11-10T09:30:00.123Z`).
 - **JSON columns:** `TEXT` holding canonical-or-plain JSON text; `plan_json` is stored exactly as hashed.
 - **Action id:** `act_` followed by a 26-character ULID in Crockford base32 (alphabet `0123456789ABCDEFGHJKMNPQRSTVWXYZ`, uppercase). Example: `act_01JC3Z8K4V7Q2W9X5R6T1N0BHM`. The first 10 ULID characters are a timestamp, the last 16 are random.
-- **Confirmation string:** the last 4 characters of the whole id (always in the random part). Compared case-insensitively after trimming whitespace. Collisions among pending plans are regenerated at plan time (ADR 0002 item 7).
+- **Confirmation string:** the last 4 characters of the whole id (always in the random part). Compared after trimming whitespace and uppercasing ASCII `a-z` only (no Unicode case mapping, so input such as `ß` or `ſ`, which `toUpperCase` turns into `S`, never matches). Collisions among pending plans are regenerated at plan time (ADR 0002 item 7).
 - **`expenses.id`:** same format as the action id (`act_` + 26-character ULID). It is a separate id space from `actions.id` and is never typed by a human.
 - **`events.id`:** `INTEGER PRIMARY KEY AUTOINCREMENT`; the append order is the ordering. Never reused.
 - **Idempotency key:** the lowercase hex SHA-256 of the action id string (UTF-8). The provider derives its own write id from it (for example a deterministic Calendar event id). Stable across retries and crashes.
 - **`plan_hash`, `approved_plan_hash`:** lowercase hex SHA-256 of the canonical JSON of `plan_json` (ARCHITECTURE, "Canonical JSON").
-- **`approved_by`:** OS username of the approving process.
+- **`approved_by`:** OS username of the approving process (`os.userInfo()`, falling back to `USER`, then `USERNAME`, then `unknown`). It records what the process claims, not a verified identity (SECURITY.md, Limits).
 - **Money:** `expenses.amount_minor` is an integer count of the currency's minor unit (2 decimals for USD, 0 for JPY, 3 for KWD per ISO 4217); `currency` is an upper-case ISO-4217 code. The exponent is not stored; it comes from the currency code.
 - **Foreign keys:** the connection sets `PRAGMA foreign_keys = ON`. An event about an action that does not exist (for example `UNKNOWN_ACTION`) has `action_id = NULL`; the id the caller supplied is in the redacted preview input.
 
@@ -163,15 +163,15 @@ Column notes:
 6. Recovery: if the provider already holds an event for this action's idempotency key, an earlier apply wrote it and crashed before the ledger update. Finalise as `applied` with the existing provider result, `replayed: true`, an `applied` event whose `preview.note` is `recovered`, and no second provider write. This runs before expiry and re-check because the world now contains our own event and the plan may have expired since the crash. A provider error during this lookup is a refusal: `apply_refused` (error, `PROVIDER_ERROR`), status unchanged, retryable.
 7. `PLAN_EXPIRED`: `expires_at` has passed (fails closed: `now >= expires_at`, or an unparseable `expires_at`, is expired). Refusal.
 8. Re-check (ADR 0002 item 4): slot still free and referenced etags unchanged. If not, the idempotency key is looked up again first: if our event exists (a concurrent apply of the same action wrote it after this call's recovery lookup), finalise as in gate 6 (`recovered`). Otherwise `STALE_PLAN`, status becomes `failed`, no write. A provider error while reading (re-check or the second lookup) is a refusal: `apply_refused` (error, `PROVIDER_ERROR`), status unchanged, retryable.
-9. Provider write with the idempotency key. On a write failure the key is looked up again (the failure may be ambiguous, for example a timeout after the provider accepted the event): if our event exists, finalise as in gate 6 (`recovered`); if it is confirmed absent, `PROVIDER_ERROR`, status becomes `failed`; if the lookup itself errors, a `PROVIDER_ERROR` refusal with status unchanged. Success sets `applied`, `applied_at`, `result_json`. The provider's `createEvent` with an existing key must return the existing event (never throw, never duplicate).
+9. Provider write with the idempotency key. On a write failure the key is looked up again (the failure may be ambiguous, for example a timeout after the provider accepted the event): if our event exists, finalise as in gate 6 (`recovered`); if the lookup finds nothing, `PROVIDER_ERROR`, status becomes `failed` (best-effort: a provider that commits the write after the lookup leaves an event behind a `failed` row, a residual risk); if the lookup itself errors, a `PROVIDER_ERROR` refusal with status unchanged. Success sets `applied`, `applied_at`, `result_json`. The provider's `createEvent` with an existing key must return the existing event (never throw, never duplicate).
 
-Gate refusals (1, 2, 4, 7), provider read errors and the stored-plan `INTERNAL` refusal leave `status` unchanged. Only `PLAN_MODIFIED`, `STALE_PLAN` and a confirmed provider write failure move the plan to `failed`; `actions.error` then holds `<CODE>: <message>`, with provider text passed through the preview redactor.
+Gate refusals (1, 2, 4, 7), provider read errors and the stored-plan `INTERNAL` refusal leave `status` unchanged. Only `PLAN_MODIFIED`, `STALE_PLAN` and a provider write failure whose follow-up lookup finds nothing move the plan to `failed`; `actions.error` then holds `<CODE>: <message>`, with provider text passed through the preview redactor.
 
 After gate 5, a stored plan whose kind is unknown or that fails its kind's schema (unreachable through the plan tools, which validate) is refused with `INTERNAL`, status unchanged.
 
 ## Approve and reject refusals (CLI)
 
-`deskhand approve` checks, in order: TTY on stdin and stdout (`NOT_A_TTY`, before anything is printed or read), action exists (`UNKNOWN_ACTION`), status (`approved` gives `ALREADY_APPROVED`; `rejected`, `failed`, `applied` give `NOT_PENDING`), not expired (`PLAN_EXPIRED`), recomputed hash equals `plan_hash` (`PLAN_MODIFIED`), no other pending id with the same last 4 (`ID_COLLISION`), typed last 4 matches (`CONFIRMATION_MISMATCH`). Every refusal leaves `status` unchanged.
+`deskhand approve` checks, in order: TTY on stdin and stdout (`NOT_A_TTY`, before anything is printed or read), action exists (`UNKNOWN_ACTION`), status (`approved` gives `ALREADY_APPROVED`; `rejected`, `failed`, `applied` give `NOT_PENDING`), not expired (`PLAN_EXPIRED`), recomputed hash equals `plan_hash` (`PLAN_MODIFIED`), 5b. the stored plan has a known kind and passes its schema (`INTERNAL`, outcome `error`, before the prompt; unreachable through the plan tools, which validate, and the same code apply uses), no other pending id with the same last 4 (`ID_COLLISION`), typed last 4 matches (`CONFIRMATION_MISMATCH`). Every refusal leaves `status` unchanged.
 
 Note: a hash mismatch at approve leaves the plan `planned` (ADR 0002 item 2); only the apply-time hash check moves a plan to `failed`.
 
@@ -191,6 +191,7 @@ Cancellation: a client may cancel a `tools/call` with a valid `notifications/can
 | Plan tool ok | `plan_created` (ok), `tool_call` (ok) | `planned` |
 | Approve ok | `approved` (ok), `cli_command` (ok) | `approved` |
 | Approve refused | `approve_refused` (rejected, code), `cli_command` (rejected, code) | unchanged |
+| Approve on a stored plan with unknown kind / invalid shape (check 5b) | `approve_refused` (error, `INTERNAL`), `cli_command` (error, `INTERNAL`) | unchanged |
 | Reject ok | `rejected` (ok), `cli_command` (ok) | `rejected` |
 | Reject refused | `cli_command` (rejected, code) | unchanged |
 | Apply ok | `applied` (ok), `tool_call` (ok) | `applied` |

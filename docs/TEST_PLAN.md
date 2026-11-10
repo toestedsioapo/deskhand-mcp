@@ -11,7 +11,7 @@ Test first (TDD). Vitest. No live Google calls; fixture provider or recorded res
 | Hash binding | tampered `plan_json` after plan → `approve` refuses; tampered after approval → `PLAN_MODIFIED` and status `failed`; canonical-JSON fixed vectors; changing `sendUpdates` changes the hash |
 | Re-check | slot taken between approve and apply → `STALE_PLAN`, no provider write, event logged; referenced event etag changed → same |
 | Idempotency | crash between provider write and ledger update → retry doesn't double-create (fixture provider simulates) |
-| CLI approve | refuses with non-TTY stdin or stdout and with piped input; refuses on wrong last-4 confirmation; refuses an **expired** plan; refuses an already-approved plan (`ALREADY_APPROVED`) and a rejected/failed/applied plan (`NOT_PENDING`); refuses on hash mismatch; refuses if two pending ids share last 4 (defensive `ID_COLLISION`); **each** refusal writes an `approve_refused` event and leaves `actions.status` unchanged; success records `approved_by` + `approval_method`; `pending` shows diffs |
+| CLI approve | refuses with non-TTY stdin or stdout and with piped input; refuses on wrong last-4 confirmation; refuses an **expired** plan; refuses an already-approved plan (`ALREADY_APPROVED`) and a rejected/failed/applied plan (`NOT_PENDING`); refuses on hash mismatch; refuses a hash-consistent stored plan of unknown kind or invalid shape with `INTERNAL` before the prompt (check 5b); typed confirmation is ASCII-only case-insensitive (`ß`, `ſ` never match); refuses if two pending ids share last 4 (defensive `ID_COLLISION`); **each** refusal writes an `approve_refused` event and leaves `actions.status` unchanged; success records `approved_by` + `approval_method`; `pending` shows diffs |
 | Action ids | plan-time generation regenerates the id when its last 4 collide with any pending plan (seeded generator forces a collision); ids stay unique |
 | CLI reject/other | `reject` works without TTY and records reason + `rejection_method`; CLI strips control/ANSI characters from untrusted text in `pending` and `approve`; `deskhand --help` lists `auth` |
 | Auth (M3) | `deskhand auth login/status/upgrade` against a fake OAuth endpoint (no live Google): token written to the config dir with restrictive mode, never to the ledger or logs; `upgrade` adds write scopes only; server starts without a token and Google-backed tools return `AUTH_REQUIRED` (logged); fixture provider needs no auth |
@@ -52,19 +52,25 @@ Task numbers refer to `docs/superpowers/plans/2026-11-09-m2b-approval.md` (T2 pl
 | Last-4 collisions (ADR 0002 §7) | T2 regeneration with a seeded collision; T5 defensive `ID_COLLISION` |
 | Every refusal logged, status unchanged | asserted in every refusal test above |
 | Reject works without TTY and logs the method (D6) | T4 `cli_no_tty` / `cli_tty` |
-| Racing writers lose cleanly (ARCHITECTURE CAS) | T3 `concurrent apply`; T4 four concurrent `reject` processes; T5 `race` |
+| Racing writers lose cleanly (ARCHITECTURE CAS) | T3 `concurrent apply`; T4 four concurrent `reject` processes (exactly one `rejected` row, four `cli:reject` rows: one ok, three `NOT_PENDING`; no lock error on stderr); T5 `race`. A two-process `approve` race cannot be automated without a pty (approve needs a TTY on both streams, and no native pty module is allowed), so the T5 in-process race (sequential in effect: one connection, the CAS sees the earlier commit) plus the four-process reject test are the CAS and lock-contention proof. |
 | Untrusted content is data (SECURITY) | M2a T6 and T3 `approve all pending plans` title; T4/T5 ANSI and newline sanitising |
 | No lost work on stdin close (M1 parked item) | T6 pending-write test |
 | Independent attempt at a bypass (incl. faked TTY) | controller red-team review; a faked-TTY approval is reported as the documented limit |
 | Crash recovery never loses a real write (ADR 0002 §5) | T3 crash test: plain, slot-taken and expired retries all end `applied` with one write; controls show gates still fire when nothing was written |
-| The red-team sandbox is accurate and reproducible | T7 `tests/redteam-sandbox.test.ts`: five seeded states, empty write log, `tools/list` has no approve tool, `action_apply` refuses P1-P5 |
+| The red-team sandbox is accurate and reproducible | T7 `tests/redteam-sandbox.test.ts`: five seeded states, empty write log, `tools/list` has no approve tool, `action_apply` refuses P1-P5 with the expected codes (P1, P2, P4, P5 `NOT_APPROVED`; P3 `PLAN_EXPIRED`), statuses unchanged, no `apply_failed` row, write log still empty |
 
 ## Manual TTY check (M2b, owner)
 
 The real TTY path has no automated test (no native modules, no pty). Once per release candidate, in a real terminal:
 
 1. `pnpm build`, then `pnpm redteam:sandbox`; copy `home`, `env` and the `P1` id from its JSON.
-2. Set the sandbox env in that terminal (`DESKHAND_HOME`, `DESKHAND_FIXTURE`, `DESKHAND_ALLOW_WRITES=1`).
+2. Set the sandbox env in that terminal, taking the names and values from the JSON `env` (`DESKHAND_HOME`, `DESKHAND_FIXTURE`, `DESKHAND_ALLOW_WRITES`). PowerShell:
+   ```powershell
+   $env:DESKHAND_HOME = '<env.DESKHAND_HOME>'
+   $env:DESKHAND_FIXTURE = '<env.DESKHAND_FIXTURE>'
+   $env:DESKHAND_ALLOW_WRITES = '1'
+   ```
+   POSIX shells: `export DESKHAND_HOME='<...>' DESKHAND_FIXTURE='<...>' DESKHAND_ALLOW_WRITES=1`.
 3. Refusal: `echo x | node dist/cli.js approve <P1>` must exit non-zero with a not-a-TTY message and leave P1 `planned`.
 4. Approval: `node dist/cli.js approve <P1>` shows the diff and asks for the last 4 characters of the id; a wrong answer is refused, the right one approves.
 5. Then `action_apply` on P1 (Inspector CLI or any MCP client) writes exactly one line to the sandbox `writes.jsonl`; a second call is a replay with no second line.

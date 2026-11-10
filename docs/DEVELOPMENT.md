@@ -23,7 +23,7 @@ The SQLite ledger is `ledger.db` in the data dir: `%LOCALAPPDATA%\deskhand` on W
 | `DESKHAND_HOME` | data and config dir, overrides the platform default |
 | `DESKHAND_ALLOW_WRITES` | must be exactly `1` for `action_apply` to do anything; anything else (including `true`) leaves writes off |
 | `DESKHAND_PLAN_TTL_HOURS` | plan lifetime, integer 1-168, default 24; out of range is a startup error |
-| `DESKHAND_FIXTURE` | path to a fixture world JSON (`docs/fixture-format.md`); selects the fixture provider and its fake clock |
+| `DESKHAND_FIXTURE` | path to a fixture world JSON (`docs/fixture-format.md`) to load into the fixture provider, with its fixed `now` as the clock. It does not select the provider: in M2 the fixture provider is always wired, and when this is unset it starts with an empty in-memory world and the real clock (M3 adds explicit provider selection, see `docs/ASSUMPTIONS.md`) |
 
 ## CLI
 

@@ -42,7 +42,7 @@ Calls I made after the builder check (reversible; please skim): ledger `kind`/`e
 **For M3 (recorded 2026-11-10):** the Google Calendar adapter must treat a `409` on `events.insert` with our idempotency-derived event id as "already created": fetch that event and return it, never retry with a new id. This keeps the apply recovery path (M2b) honest against the real API.
 
 **M2b Task 3 review rulings (recorded 2026-11-10):**
-- A provider **read** error during apply (recovery lookup, re-check, or a post-failure lookup) is retryable: `apply_refused` / `PROVIDER_ERROR`, status stays `approved`. Only a confirmed write failure (createEvent rejected and a follow-up lookup finds no event under our key) makes the plan `failed`.
+- A provider **read** error during apply (recovery lookup, re-check, or a post-failure lookup) is retryable: `apply_refused` / `PROVIDER_ERROR`, status stays `approved`. Only a write failure where createEvent rejected and the follow-up lookup finds nothing under our key makes the plan `failed`. The lookup is best-effort: a provider that commits the write after the lookup leaves an event behind a `failed` row (residual risk, revisit with the real Google adapter in M3).
 - After a failed re-check or a failed write, apply looks up our idempotency key again and finalises `applied` (`recovered`) if our event exists, so the ledger never says `failed` while our event is in the calendar.
 - `CalendarProvider.createEvent` with an existing key must return the existing event (documented on the interface); M3's Google adapter maps the `409` accordingly.
 - The expiry gate fails closed (`now >= expires_at` or unparseable is expired).
@@ -66,10 +66,12 @@ Still open or unverified:
 
 **M2b decisions (recorded 2026-11-10, reversible):**
 - Recovery (provider already holds our idempotency key) runs before the expiry gate, so a write that landed before a crash is finalised `applied` even if the plan has expired since. Gates still fire when nothing was written.
-- A provider read error during lookup or re-check leaves the plan `approved` and is retryable (`PROVIDER_ERROR` refusal); only a confirmed write failure marks it `failed`.
-- Typed confirmation is case-insensitive and trimmed.
+- A provider read error during lookup or re-check leaves the plan `approved` and is retryable (`PROVIDER_ERROR` refusal); only a write failure whose follow-up lookup finds nothing marks it `failed` (best-effort, see above).
+- Typed confirmation is trimmed and case-insensitive for ASCII only (`a-z` uppercased; no Unicode case mapping, so `ß`/`ſ` never fold into `S`).
+- `deskhand approve` refuses a hash-consistent stored plan of unknown kind or invalid shape with `INTERNAL` before the prompt (check 5b, final review 2026-11-10).
 - `hooks.beforeCommit` on `AppContext` is a test seam in production code, used only by the crash-retry test.
 - The red-team sandbox (`scripts/redteam-sandbox.mjs`) builds its states through built `dist/` modules (`createPlan`, `rejectAction`, direct SQL for approved/expired/failed/tampered), never from `tests/`. It runs on a fixed fixture clock so its output is reproducible. `cliCommand` is an argv array. A faked-TTY approval is the documented limit (SECURITY.md), not a blocker.
+- **For M3: select the provider explicitly.** In M2 the fixture provider is always wired; `DESKHAND_FIXTURE` only loads a world (unset = empty in-memory world, real clock). M3 must choose the provider by explicit configuration, and `action_apply` must refuse when no real provider is configured; otherwise `applied` could be recorded for a write into an in-memory world that dies with the process.
 - **For M3:** Google adapter errors must not carry tokens or response bodies into `actions.error` or event previews (`redactInput` on a bare string only truncates; it does not scrub secrets). `createEvent` with an existing key must return the existing event; a `409` on insert with our key means already created.
 
 **M2b shutdown limits (Task 6, 2026-11-10):**
