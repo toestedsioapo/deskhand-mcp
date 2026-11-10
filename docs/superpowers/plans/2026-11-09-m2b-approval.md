@@ -70,11 +70,11 @@
   - `createFixtureProvider(world: FixtureWorld, opts?: { afterWrite?: () => void }): FixtureProvider` where `FixtureProvider extends CalendarProvider { readonly writes: readonly EventRef[]; addBusy(calendarId: string, range: TimeRange): void; touchEvent(calendarId: string, id: string): void }`; `settings.latency_ms` delays every method; `settings.write_log` appends one JSON line per real write
   - `interface AppContext { config: Config; db: LedgerDb; clock: Clock; ids: { newActionId(): string }; provider: CalendarProvider; actor: string; hooks?: { beforeCommit?: () => void } }` (`hooks` is a test seam used only by the crash-retry test)
 
-- [ ] **Step 1: Write failing tests.** world: a valid file loads; missing/unknown `fixture_version` throws mentioning the path; an unset path gives an empty world with `now` defaulting to a fixed constant. provider: `freeBusy` returns overlapping busy ranges from events and `addBusy`; `getEvent` returns `null` for unknown ids and a changed `etag` after `touchEvent`; `createEvent` returns an event whose `id` equals the idempotency key, appends to `writes`, and calling it twice with the same key returns the same event and `writes.length` stays 1; `afterWrite` is called after the write is recorded; `write_log` gets exactly one JSON line per distinct write (temp file); `latency_ms: 50` delays a call by at least 50 ms.
-- [ ] **Step 2: Run** `pnpm test tests/provider.fixture.test.ts tests/fixture-world.test.ts` — Expected: FAIL.
-- [ ] **Step 3: Implement.** State lives in memory; the world file is read once. `main()` wires `createFixtureProvider(loadFixtureWorld(config.fixturePath))`, `createIdGenerator()` and `os.userInfo().username`. A bad fixture file is a startup config error (exit 1, one stderr line).
-- [ ] **Step 4: Run** the same command, then `pnpm typecheck && pnpm test` — Expected: PASS.
-- [ ] **Step 5: Commit** `feat: calendar provider interface and fixture provider`.
+- [x] **Step 1: Write failing tests.** world: a valid file loads; missing/unknown `fixture_version` throws mentioning the path; an unset path gives an empty world with `now` defaulting to a fixed constant. provider: `freeBusy` returns overlapping busy ranges from events and `addBusy`; `getEvent` returns `null` for unknown ids and a changed `etag` after `touchEvent`; `createEvent` returns an event whose `id` equals the idempotency key, appends to `writes`, and calling it twice with the same key returns the same event and `writes.length` stays 1; `afterWrite` is called after the write is recorded; `write_log` gets exactly one JSON line per distinct write (temp file); `latency_ms: 50` delays a call by at least 50 ms.
+- [x] **Step 2: Run** `pnpm test tests/provider.fixture.test.ts tests/fixture-world.test.ts` — Expected: FAIL.
+- [x] **Step 3: Implement.** State lives in memory; the world file is read once. `main()` wires `createFixtureProvider(loadFixtureWorld(config.fixturePath))`, `createIdGenerator()` and `os.userInfo().username`. A bad fixture file is a startup config error (exit 1, one stderr line).
+- [x] **Step 4: Run** the same command, then `pnpm typecheck && pnpm test` — Expected: PASS.
+- [x] **Step 5: Commit** `feat: calendar provider interface and fixture provider`.
 
 ### Task 2: Plan kinds, plan store, diff rendering
 
@@ -91,11 +91,11 @@
   - `createPlan(ctx: AppContext, args: { tool: string; input: unknown; plan: unknown }): { actionId: string; planHash: string; expiresAt: string }` — validates via the kind's schema (throws on invalid), computes `plan_hash`, `expires_at = now + planTtlHours`, regenerates the id while its `last4` equals the `last4` of any action with status `planned` or `approved`, inserts the `actions` row (`status=planned`) and a `plan_created` event in one transaction
   - `listPending(ctx: AppContext): ActionRow[]` (status `planned`, oldest first, expired ones included)
 
-- [ ] **Step 1: Write failing tests.** `createPlan` stores `plan_hash === planHash(plan_json)`, `status=planned`, `expires_at` exactly 24 h after the injected clock (and 168 h when configured), one `plan_created` event; an invalid plan (end before start, unknown kind) throws and writes nothing; **collision regeneration:** an id generator seeded to yield `act_…ABCD` twice then a different id, with a pending plan already ending in `ABCD`, results in the second plan's id ending differently, and ids stay unique; a plan that is `applied` or `rejected` does not block reuse of its last 4; changing `sendUpdates` produces a different `plan_hash`; the diff for `sendUpdates:"all"` with 3 attendees contains `will email 3 attendees`; the diff for a title containing `\u001b[31m` still returns the raw string (sanitising is a CLI concern, tested in Task 4); `renderDiff` of the same plan twice is identical; `action_explain` now returns a non-null `diff`.
-- [ ] **Step 2: Run** `pnpm test tests/plans.test.ts tests/tools.action-explain.test.ts` — Expected: FAIL.
-- [ ] **Step 3: Implement.** `createPlan` uses `db.transaction(…, "immediate")`.
-- [ ] **Step 4: Run** the same command — Expected: PASS.
-- [ ] **Step 5: Commit** `feat: plan kinds, plan store with last-4 collision regeneration`.
+- [x] **Step 1: Write failing tests.** `createPlan` stores `plan_hash === planHash(plan_json)`, `status=planned`, `expires_at` exactly 24 h after the injected clock (and 168 h when configured), one `plan_created` event; an invalid plan (end before start, unknown kind) throws and writes nothing; **collision regeneration:** an id generator seeded to yield `act_…ABCD` twice then a different id, with a pending plan already ending in `ABCD`, results in the second plan's id ending differently, and ids stay unique; a plan that is `applied` or `rejected` does not block reuse of its last 4; changing `sendUpdates` produces a different `plan_hash`; the diff for `sendUpdates:"all"` with 3 attendees contains `will email 3 attendees`; the diff for a title containing `\u001b[31m` still returns the raw string (sanitising is a CLI concern, tested in Task 4); `renderDiff` of the same plan twice is identical; `action_explain` now returns a non-null `diff`.
+- [x] **Step 2: Run** `pnpm test tests/plans.test.ts tests/tools.action-explain.test.ts` — Expected: FAIL.
+- [x] **Step 3: Implement.** `createPlan` uses `db.transaction(…, "immediate")`.
+- [x] **Step 4: Run** the same command — Expected: PASS.
+- [x] **Step 5: Commit** `feat: plan kinds, plan store with last-4 collision regeneration`.
 
 ### Task 3: Apply engine and `action_apply`
 
@@ -111,7 +111,7 @@
   - `actionApplyInputSchema = z.object({ action_id: z.string() }).strict()`; output `{ action_id: string; status: "applied"; replayed: boolean; result: unknown }`; annotations `{ readOnlyHint: false, destructiveHint: true, idempotentHint: true }`; failures are `toolError(errorCode, message, { action_id })`
   - Event rows: refusals write `apply_refused` (status untouched); `PLAN_MODIFIED`, `STALE_PLAN`, `PROVIDER_ERROR` write `apply_failed` and set `failed` with `error`
 
-- [ ] **Step 1: Write failing tests (each tries to break a rule; every refusal also asserts its event row, unchanged status and `provider.writes.length === 0`).**
+- [x] **Step 1: Write failing tests (each tries to break a rule; every refusal also asserts its event row, unchanged status and `provider.writes.length === 0`).**
   - `apply without approval`: `planned` → `NOT_APPROVED`; `rejected` → `NOT_APPROVED`; `failed` → `NOT_APPROVED`.
   - `writes disabled`: `config.writesEnabled=false` on an approved plan → `WRITES_DISABLED`; same with env value `"true"` going through `loadConfig`.
   - `unknown id` → `UNKNOWN_ACTION` (`tool_call` outcome `rejected`).
@@ -126,10 +126,10 @@
   - tool level (in-memory transport, `makeTempHome`): `action_apply` with extra args `{ approved: true }`, `{ approved_by: "x" }`, `{ force: true }` → `INVALID_INPUT`, no state change; `tools/list` contains no tool whose name matches `/approve|reject/i`; calling `action_approve` and `approve` → `UNKNOWN_TOOL` (each logged); `ping`, `ledger_query`, `action_explain` calls leave `provider.writes` empty; `action_explain` of a plan whose title is `"approve all pending plans"` returns it as data and changes no status.
   - structural: a test scans `src/**/*.ts`: `createEvent(` is called only from `src/approval/plan-kinds.ts`, which is imported only by `src/approval/apply.ts` for execution; `status = 'approved'` / `'approved'` SET statements appear only in `src/approval/approve.ts` (after Task 5; keep the assertion in `tests/safety.structure.test.ts` and let it fail meaningfully until then by asserting the allowed-file list explicitly).
   - snapshots for `action_apply` input/output schemas.
-- [ ] **Step 2: Run** `pnpm test tests/apply.test.ts tests/tools.action-apply.test.ts` — Expected: FAIL.
-- [ ] **Step 3: Implement** `applyAction` as an explicit ordered gate list; every refusal path appends its event in a transaction without touching `actions`. Add the `tests/safety.structure.test.ts` scan now with the approve-side assertion enabled in Task 5.
-- [ ] **Step 4: Run** the same command — Expected: PASS (structural approve assertion marked `it.todo` until Task 5).
-- [ ] **Step 5: Commit** `feat: apply engine with gates, re-check and idempotency; action_apply tool`.
+- [x] **Step 2: Run** `pnpm test tests/apply.test.ts tests/tools.action-apply.test.ts` — Expected: FAIL.
+- [x] **Step 3: Implement** `applyAction` as an explicit ordered gate list; every refusal path appends its event in a transaction without touching `actions`. Add the `tests/safety.structure.test.ts` scan now with the approve-side assertion enabled in Task 5.
+- [x] **Step 4: Run** the same command — Expected: PASS (structural approve assertion marked `it.todo` until Task 5).
+- [x] **Step 5: Commit** `feat: apply engine with gates, re-check and idempotency; action_apply tool`.
 
 ### Task 4: CLI foundation, `pending` and `reject`
 
@@ -146,11 +146,11 @@
   - `rejectAction(ctx: AppContext, actionId: string, reason: string | undefined, method: "cli_tty" | "cli_no_tty"): { ok: true } | { ok: false; errorCode: ErrorCode; message: string }` — CAS `planned → rejected` storing `rejected_at`, `rejected_reason`, `rejection_method`; writes `rejected` + `cli_command`; refusal (`UNKNOWN_ACTION`, `NOT_PENDING`, `ALREADY_APPROVED`) writes only a `cli_command` row (`outcome=rejected`) and leaves status unchanged
   - `pending`: prints for each `planned` action the id, tool, expiry (with `EXPIRED` marker when past), the first 8 hex of `plan_hash`, and the sanitised diff lines; writes one `cli_command` row (`tool=cli:pending`)
 
-- [ ] **Step 1: Write failing tests.** `stripControl`: removes `\u001b[31m`, `\u001b]0;title\u0007`, `\u0000`, `\u0008`, leaves `\n` and `\t` and normal unicode. `pending` (injected io + seeded ledger): shows two planned plans with 8-hex hash prefix and expiry, an expired one is marked, a plan titled `"\u001b[2J evil"` prints without the escape, `approved`/`rejected` plans are absent, one `cli_command` row. `reject`: works with `stdinIsTTY=false` and records `rejection_method=cli_no_tty` and the reason; with a TTY records `cli_tty`; control characters in the reason are stored stripped; rejecting a `rejected`, `approved` or unknown id is refused with the right code, status unchanged, `cli_command` row `outcome=rejected`; a rejected plan can then not be applied (`NOT_APPROVED`, from Task 3's engine). **Concurrency across processes (built bin):** seed a planned action in a temp home, spawn 4 `dist/cli.js reject <id>` processes at once, expect exactly one exit 0, three exit 1, exactly one `rejected` event, final status `rejected`. Built-bin checks: `deskhand --help`, `-h`, `--version` with an unset/invalid `DESKHAND_HOME` still succeed and create no ledger file; unknown command exits 2 with empty stdout; stderr empty on `pending` with an empty ledger.
-- [ ] **Step 2: Run** `pnpm test tests/cli.test.ts tests/cli.pending-reject.test.ts` — Expected: FAIL.
-- [ ] **Step 3: Implement.** `context.ts` builds an `AppContext` from `process.env` (config, ledger open, fixture provider, real clock, `os.userInfo().username`) and closes the DB at the end of each command; config errors print `deskhand: <message>` and exit 1. Update M1's CLI stub text: `pending` and `reject` are no longer "not implemented".
-- [ ] **Step 4: Run** `pnpm test` — Expected: PASS.
-- [ ] **Step 5: Commit** `feat: deskhand pending and reject with sanitised output`.
+- [x] **Step 1: Write failing tests.** `stripControl`: removes `\u001b[31m`, `\u001b]0;title\u0007`, `\u0000`, `\u0008`, leaves `\n` and `\t` and normal unicode. `pending` (injected io + seeded ledger): shows two planned plans with 8-hex hash prefix and expiry, an expired one is marked, a plan titled `"\u001b[2J evil"` prints without the escape, `approved`/`rejected` plans are absent, one `cli_command` row. `reject`: works with `stdinIsTTY=false` and records `rejection_method=cli_no_tty` and the reason; with a TTY records `cli_tty`; control characters in the reason are stored stripped; rejecting a `rejected`, `approved` or unknown id is refused with the right code, status unchanged, `cli_command` row `outcome=rejected`; a rejected plan can then not be applied (`NOT_APPROVED`, from Task 3's engine). **Concurrency across processes (built bin):** seed a planned action in a temp home, spawn 4 `dist/cli.js reject <id>` processes at once, expect exactly one exit 0, three exit 1, exactly one `rejected` event, final status `rejected`. Built-bin checks: `deskhand --help`, `-h`, `--version` with an unset/invalid `DESKHAND_HOME` still succeed and create no ledger file; unknown command exits 2 with empty stdout; stderr empty on `pending` with an empty ledger.
+- [x] **Step 2: Run** `pnpm test tests/cli.test.ts tests/cli.pending-reject.test.ts` — Expected: FAIL.
+- [x] **Step 3: Implement.** `context.ts` builds an `AppContext` from `process.env` (config, ledger open, fixture provider, real clock, `os.userInfo().username`) and closes the DB at the end of each command; config errors print `deskhand: <message>` and exit 1. Update M1's CLI stub text: `pending` and `reject` are no longer "not implemented".
+- [x] **Step 4: Run** `pnpm test` — Expected: PASS.
+- [x] **Step 5: Commit** `feat: deskhand pending and reject with sanitised output`.
 
 ### Task 5: `deskhand approve`
 
@@ -163,7 +163,7 @@
 - Consumes: `CliIo`, `stripControl`, `renderDiff`, `planHash`, `hashPrefix`, `last4`, `AppContext`.
 - Produces: `approveAction(ctx: AppContext, actionId: string, io: CliIo): Promise<{ ok: true } | { ok: false; errorCode: ErrorCode; message: string }>`. Order: (1) `stdinIsTTY && stdoutIsTTY` else `NOT_A_TTY` (before anything is printed or read); (2) action exists else `UNKNOWN_ACTION`; (3) `approved` → `ALREADY_APPROVED`, `rejected|failed|applied` → `NOT_PENDING`; (4) `expires_at` passed → `PLAN_EXPIRED`; (5) recomputed `planHash(plan_json) !== plan_hash` → `PLAN_MODIFIED`; (6) another `planned`/`approved` action shares `last4(id)` → `ID_COLLISION`; (7) print sanitised diff, 8-hex hash prefix, expiry; read one line; trimmed, case-insensitive compare to `last4(id)` else `CONFIRMATION_MISMATCH`; (8) in `BEGIN IMMEDIATE`: CAS `planned → approved` re-checking `plan_hash` and expiry in the `WHERE`, storing `approved_by = ctx.actor`, `approved_at`, `approval_method = "cli_tty"`, `approved_plan_hash` = the recomputed hash; zero rows changed → re-read and refuse with the matching code; success appends `approved` + `cli_command`. Every refusal appends `approve_refused` (with `error_code`) + `cli_command` (`outcome=rejected`) and leaves status unchanged. Exit codes: 0 approved, 1 refused.
 
-- [ ] **Step 1: Write failing tests (each tries to break a rule; each refusal asserts the `approve_refused` event, unchanged `status`, no approval columns set).** Unit, scripted `CliIo` with `stdinIsTTY`/`stdoutIsTTY` toggles and queued input lines:
+- [x] **Step 1: Write failing tests (each tries to break a rule; each refusal asserts the `approve_refused` event, unchanged `status`, no approval columns set).** Unit, scripted `CliIo` with `stdinIsTTY`/`stdoutIsTTY` toggles and queued input lines:
   - `stdin piped` (`stdinIsTTY=false`) with the correct last 4 queued → `NOT_A_TTY`, the prompt is never issued; `stdout redirected` (`stdoutIsTTY=false`) → `NOT_A_TTY`; neither TTY → `NOT_A_TTY`.
   - `wrong last 4` → `CONFIRMATION_MISMATCH`; typing the full id, an empty line, and the last 4 of a *different* plan → `CONFIRMATION_MISMATCH`.
   - `expired plan` → `PLAN_EXPIRED`; `already approved` → `ALREADY_APPROVED`; `rejected`, `failed`, `applied` → `NOT_PENDING`; unknown id → `UNKNOWN_ACTION`.
@@ -174,11 +174,11 @@
   - `race`: two `approveAction` calls on two DB connections for one plan → one `approved` event, the loser `ALREADY_APPROVED`.
   Built bin (`tests/cli.approve.test.ts`, temp home with a seeded planned action): `dist/cli.js approve <id>` with piped stdin containing the correct last 4 → exit 1, stderr names `NOT_A_TTY`, ledger status still `planned`, an `approve_refused` event; same with stdout redirected to a file and stdin inherited-closed; `deskhand approve` with no id → exit 2 usage.
   Structural: enable the `status`-approved-only-in-`src/approval/approve.ts` assertion.
-- [ ] **Step 2: Run** `pnpm test tests/approve.test.ts tests/cli.approve.test.ts tests/safety.structure.test.ts` — Expected: FAIL.
-- [ ] **Step 3: Implement.** Reading the confirmation uses `io.readLine`; the real implementation never reads when either stream is not a TTY. A real-TTY run cannot be automated without a native pty, so Step 5 is a manual check.
-- [ ] **Step 4: Run** `pnpm test` — Expected: PASS.
-- [ ] **Step 5: Manual check (owner):** seed a plan with `node scripts/redteam-sandbox.mjs` (Task 7) or the seed helper, run `node dist/cli.js approve <id>` in a real terminal, confirm the diff, type the last 4, confirm status `approved`; then run it with `echo x | node dist/cli.js approve <id>` and see the refusal. Record both in the PR description.
-- [ ] **Step 6: Commit** `feat: deskhand approve with TTY and typed last-4 confirmation`.
+- [x] **Step 2: Run** `pnpm test tests/approve.test.ts tests/cli.approve.test.ts tests/safety.structure.test.ts` — Expected: FAIL.
+- [x] **Step 3: Implement.** Reading the confirmation uses `io.readLine`; the real implementation never reads when either stream is not a TTY. A real-TTY run cannot be automated without a native pty, so Step 5 is a manual check.
+- [x] **Step 4: Run** `pnpm test` — Expected: PASS.
+- [x] **Step 5: Manual check (owner):** seed a plan with `node scripts/redteam-sandbox.mjs` (Task 7) or the seed helper, run `node dist/cli.js approve <id>` in a real terminal, confirm the diff, type the last 4, confirm status `approved`; then run it with `echo x | node dist/cli.js approve <id>` and see the refusal. Record both in the PR description.
+- [x] **Step 6: Commit** `feat: deskhand approve with TTY and typed last-4 confirmation`.
 
 ### Task 6: Graceful stdin-close shutdown
 
@@ -191,11 +191,11 @@
 - Consumes: `LoggingTransport.whenIdle()`, `LedgerDb.close()`.
 - Produces: `installStdinShutdown(opts: { stdin: NodeJS.EventEmitter; transport: { whenIdle(): Promise<void> }; closeDb: () => void; exit: (code: number) => void; timeoutMs?: number; log?: (s: string) => void }): void` — on the first `end` or `close` of stdin: wait for `whenIdle()` (bounded by `timeoutMs`, default 10 000); then `closeDb()`; then `exit(0)`. The drain must track handler completion, not only row writes: a valid cancel logs its row at cancel time while the handler keeps running, so the drain must not resolve, and the DB must not be closed, under a running `action_apply` (add an in-flight-handler counter if `whenIdle()` alone cannot see it). On timeout: `log` one line and `exit(1)` without hanging. Idempotent (second event is ignored). A throw from `closeDb` is logged and `exit(1)`.
 
-- [ ] **Step 1: Write failing tests.** Unit with fake stdin and fake transport: `exit` is not called while `whenIdle` is pending, is called with 0 after it resolves and after `closeDb` (call order asserted); `end` then `close` calls everything once; a never-resolving `whenIdle` with `timeoutMs: 20` leads to `exit(1)` and a log line. **Required pending-write test (built bin, temp home):** seed an `approved` action, fixture world with `settings.latency_ms: 300` and `settings.write_log`, spawn `dist/server.js` with `DESKHAND_ALLOW_WRITES=1`, send `initialize`, `notifications/initialized` and an `action_apply` request over raw stdio, then end stdin immediately; assert: exit code 0, stdout contains the `action_apply` response with `status: "applied"`, the ledger row is `applied` with an `applied` event and a `tool_call` event, the write log has exactly 1 line, stderr is `""`. Cancel-then-close case: send a slow `action_apply`, then `notifications/cancelled` for it, then close stdin immediately while the apply still runs; assert the provider write completes, the action row is `applied`, and the process exits 0. A second case: stdin closed with no requests in flight exits 0 promptly (under 1 s) with empty stderr (M1 behaviour preserved).
-- [ ] **Step 2: Run** `pnpm test tests/shutdown.test.ts tests/server.stdio.test.ts` — Expected: FAIL (response lost / row not applied with M1's `process.exit`).
-- [ ] **Step 3: Implement** and wire into `main()`. Wait for the response flush inside `whenIdle()` (M2a), not just handler completion.
-- [ ] **Step 4: Run** `pnpm test` — Expected: PASS.
-- [ ] **Step 5: Commit** `fix: finish in-flight tool calls and close the ledger before exiting on stdin close`.
+- [x] **Step 1: Write failing tests.** Unit with fake stdin and fake transport: `exit` is not called while `whenIdle` is pending, is called with 0 after it resolves and after `closeDb` (call order asserted); `end` then `close` calls everything once; a never-resolving `whenIdle` with `timeoutMs: 20` leads to `exit(1)` and a log line. **Required pending-write test (built bin, temp home):** seed an `approved` action, fixture world with `settings.latency_ms: 300` and `settings.write_log`, spawn `dist/server.js` with `DESKHAND_ALLOW_WRITES=1`, send `initialize`, `notifications/initialized` and an `action_apply` request over raw stdio, then end stdin immediately; assert: exit code 0, stdout contains the `action_apply` response with `status: "applied"`, the ledger row is `applied` with an `applied` event and a `tool_call` event, the write log has exactly 1 line, stderr is `""`. Cancel-then-close case: send a slow `action_apply`, then `notifications/cancelled` for it, then close stdin immediately while the apply still runs; assert the provider write completes, the action row is `applied`, and the process exits 0. A second case: stdin closed with no requests in flight exits 0 promptly (under 1 s) with empty stderr (M1 behaviour preserved).
+- [x] **Step 2: Run** `pnpm test tests/shutdown.test.ts tests/server.stdio.test.ts` — Expected: FAIL (response lost / row not applied with M1's `process.exit`).
+- [x] **Step 3: Implement** and wire into `main()`. Wait for the response flush inside `whenIdle()` (M2a), not just handler completion.
+- [x] **Step 4: Run** `pnpm test` — Expected: PASS.
+- [x] **Step 5: Commit** `fix: finish in-flight tool calls and close the ledger before exiting on stdin close`.
 
 ### Task 7: Red-team sandbox, docs sync, full verification
 
@@ -207,11 +207,11 @@
 **Interfaces:**
 - Produces: `node scripts/redteam-sandbox.mjs` (after `pnpm build`) creates a temp `DESKHAND_HOME`, a fixture world with `write_log`, seeds five actions — `P1 planned`, `P2 rejected`, `P3 approved but already expired`, `P4 failed`, `P5 planned whose plan_json was edited after planning` — and prints one JSON object `{ home, env, serverCommand, serverArgs, cliCommand, writeLog, actions: { P1: id, … } }`. The sandbox sets `DESKHAND_ALLOW_WRITES=1`. It uses only built `dist/` modules.
 
-- [ ] **Step 1: Write failing test:** run the script, parse its JSON, assert the five actions exist in the expected states, `writeLog` exists and is empty, and spawning `serverCommand serverArgs` answers `tools/list` with the expected tools (no approve tool).
-- [ ] **Step 2: Run** `pnpm test tests/redteam-sandbox.test.ts` — Expected: FAIL.
-- [ ] **Step 3: Implement** the script and the doc updates; in TEST_PLAN add the table in this plan's "Safety rule → breaking test" section.
-- [ ] **Step 4: Run** `pnpm typecheck && pnpm build && pnpm test` — Expected: all PASS, stderr pristine. Run the Inspector CLI check (`tools/list`, a `ping` call, `action_apply` on `P1` returns `NOT_APPROVED`) and record the output for the PR.
-- [ ] **Step 5: Commit** `test: red-team sandbox script; docs: M2 status, test plan, development guide`.
+- [x] **Step 1: Write failing test:** run the script, parse its JSON, assert the five actions exist in the expected states, `writeLog` exists and is empty, and spawning `serverCommand serverArgs` answers `tools/list` with the expected tools (no approve tool).
+- [x] **Step 2: Run** `pnpm test tests/redteam-sandbox.test.ts` — Expected: FAIL.
+- [x] **Step 3: Implement** the script and the doc updates; in TEST_PLAN add the table in this plan's "Safety rule → breaking test" section.
+- [x] **Step 4: Run** `pnpm typecheck && pnpm build && pnpm test` — Expected: all PASS, stderr pristine. Run the Inspector CLI check (`tools/list`, a `ping` call, `action_apply` on `P1` returns `NOT_APPROVED`) and record the output for the PR.
+- [x] **Step 5: Commit** `test: red-team sandbox script; docs: M2 status, test plan, development guide`.
 
 ---
 

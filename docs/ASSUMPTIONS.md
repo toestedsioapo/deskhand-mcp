@@ -78,7 +78,7 @@ Still open or unverified:
 **For M3 (recorded 2026-11-10, owner TTY check):** the `deskhand approve` diff shows times in UTC (for example `2026-11-12T10:00:00.000Z`). Once calendar tools land it must show the user's **local time zone, with the zone name** (for example `11:00 CET, Europe/Berlin`), computed from the event's own zone or the user's configured zone, with UTC kept as a secondary detail. Approving a meeting at the wrong hour because the diff was in UTC is a real failure mode. The plan JSON and its hash stay in UTC; only the rendering changes (`renderDiff` in `src/approval/plan-kinds.ts`).
 
 **M2b shutdown limits (Task 6, 2026-11-10):**
-- **The stdin-close drain is capped at 10 s by default.** A real Google write in M3 that is still running at the cap is cut off (exit 1). The re-check and the idempotency key make the retry safe: the recovery gate finds the event and records it as `applied`.
+- **The stdin-close drain is capped at 10 s by default.** A real Google write in M3 that is still running at the cap is cut off (exit 1). The re-check and the idempotency key make the retry safe: the recovery gate finds the event and records it as `applied`. **For M3: revisit the cap** against real Google write latency (raise it, or make it configurable) before the Google adapter ships.
 - **SIGINT/SIGTERM keep Node's default immediate exit** (M1 behaviour). A SIGTERM mid-apply can leave a provider write without its `applied` row; recovery handles it on the next `action_apply`.
 - **Exit after a failed stdout flush reports the original code.** If stdout never drains (the client is alive but not reading), the 2 s fallback exits with the drain's code, not 1. A client that closed stdout (EPIPE and similar) counts as gone: no log, exit 0.
 
