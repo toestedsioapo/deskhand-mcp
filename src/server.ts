@@ -37,16 +37,30 @@ import {
   pingOutputSchema,
 } from "./tools/ping.js";
 import { createFixtureProvider, loadFixtureWorld } from "./providers/fixture/index.js";
+import { createClientStdout, installStdinShutdown } from "./shutdown.js";
 import { toolOk } from "./tools/result.js";
 
 /** Kept as an alias so existing call sites and tests keep compiling. */
 export type ServerDeps = AppContext;
 
+/** Runs one tool handler; LoggingTransport.track counts it for the shutdown drain. */
+export type HandlerTracker = <T>(fn: () => T | Promise<T>) => Promise<T>;
+
+export interface CreateServerOptions {
+  /** Wraps every tool handler (default: runs it untracked). */
+  track?: HandlerTracker;
+}
+
+const untracked: HandlerTracker = async (fn) => fn();
+
 /**
  * Registers the tools. Ledger logging of every `tools/call` is done by the
- * LoggingTransport the server is connected through (see main()).
+ * LoggingTransport the server is connected through (see main()), and every
+ * handler runs under `opts.track` so a shutdown can wait for it, including one
+ * whose call was cancelled (the SDK keeps running it but sends no response).
  */
-export function createServer(deps: ServerDeps): McpServer {
+export function createServer(deps: ServerDeps, opts: CreateServerOptions = {}): McpServer {
+  const track = opts.track ?? untracked;
   const server = new McpServer({
     name: "deskhand-mcp",
     version: PACKAGE_VERSION,
@@ -60,7 +74,7 @@ export function createServer(deps: ServerDeps): McpServer {
       outputSchema: pingOutputSchema,
       annotations: { readOnlyHint: true },
     },
-    () => toolOk(pingHandler()),
+    () => track(() => toolOk(pingHandler())),
   );
 
   server.registerTool(
@@ -71,7 +85,7 @@ export function createServer(deps: ServerDeps): McpServer {
       outputSchema: ledgerQueryOutputSchema,
       annotations: { readOnlyHint: true },
     },
-    (input) => toolOk(ledgerQueryHandler(deps.db, input)),
+    (input) => track(() => toolOk(ledgerQueryHandler(deps.db, input))),
   );
 
   server.registerTool(
@@ -82,7 +96,7 @@ export function createServer(deps: ServerDeps): McpServer {
       outputSchema: actionExplainOutputSchema,
       annotations: { readOnlyHint: true },
     },
-    (input) => actionExplainHandler(deps.db, input),
+    (input) => track(() => actionExplainHandler(deps.db, input)),
   );
 
   // The only MCP tool that can cause a provider write (through the apply engine).
@@ -94,7 +108,7 @@ export function createServer(deps: ServerDeps): McpServer {
       outputSchema: actionApplyOutputSchema,
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
     },
-    (input) => actionApplyHandler(deps, input),
+    (input) => track(() => actionApplyHandler(deps, input)),
   );
 
   return server;
@@ -113,18 +127,23 @@ export async function main(): Promise<void> {
   const clock: Clock = config.fixturePath ? () => new Date(world.now) : () => new Date();
   const provider = createFixtureProvider(world);
   const ids = createIdGenerator();
-  const server = createServer({ config, db, clock, ids, provider, actor: userInfo().username });
-  const transport = new LoggingTransport(new StdioServerTransport(), { db, clock });
-  // stdin closing means the client went away: exit cleanly (M2b adds a drain).
-  const exit = (): void => {
-    try {
-      db.close();
-    } finally {
-      process.exit(0);
-    }
-  };
-  process.stdin.once("end", exit);
-  process.stdin.once("close", exit);
+  // The client usually closes both pipes when it exits, so a response can hit a
+  // dead stdout (EPIPE): the guard drops it silently instead of crashing.
+  const stdout = createClientStdout(process.stdout);
+  const transport = new LoggingTransport(new StdioServerTransport(process.stdin, stdout.stream), { db, clock });
+  const server = createServer(
+    { config, db, clock, ids, provider, actor: userInfo().username },
+    { track: transport.track },
+  );
+  // stdin closing means the client went away: finish in-flight tool calls
+  // (handlers and response flushes), close the ledger, then exit.
+  // SIGINT/SIGTERM keep Node's default (immediate termination), as in M1.
+  installStdinShutdown({
+    stdin: process.stdin,
+    transport,
+    closeDb: () => db.close(),
+    exit: (code) => stdout.flushThenExit(code),
+  });
   await server.connect(transport);
 }
 

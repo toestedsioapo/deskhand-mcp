@@ -62,7 +62,12 @@ Still open or unverified:
 - **pnpm `engineStrict` only checks dependencies' `engines`, not the root package's** (`pnpm-workspace.yaml` sets it; `.npmrc` `engine-strict` is ignored by pnpm 12). The runtime `assertSupportedNode` check is what enforces the Node floor.
 - **`.gitattributes` is `* text=auto eol=lf`** repo-wide so shebang files cannot get CRLF.
 - **Inspector is pinned to 1.0.4** (2.x needs Node `^24.22.1`, above our floor); it prints a deprecation banner. Re-evaluate when the floor moves. The M1 check used `mcp-inspector --cli`; the UI route (`pnpm inspect`) is a manual owner check.
-- **Parked from M1 review, scheduled in ROADMAP:** M2: stdin-close `process.exit` vs in-flight async work (with test). M6: local-publish guard, `repository` field, CI action versions and push/PR trigger. Minor, no milestone: `server.ts` entry guard is silent for an extensionless path (`node dist/server`; bins are unaffected); the CLI stub test does not assert milestone labels.
+- **Parked from M1 review, scheduled in ROADMAP:** M2: stdin-close `process.exit` vs in-flight async work (with test). **Done in M2b Task 6** (`src/shutdown.ts`: drain tracked handlers and response flushes, close the ledger, exit). M6: local-publish guard, `repository` field, CI action versions and push/PR trigger. Minor, no milestone: `server.ts` entry guard is silent for an extensionless path (`node dist/server`; bins are unaffected); the CLI stub test does not assert milestone labels.
+
+**M2b shutdown limits (Task 6, 2026-11-10):**
+- **The stdin-close drain is capped at 10 s by default.** A real Google write in M3 that is still running at the cap is cut off (exit 1). The re-check and the idempotency key make the retry safe: the recovery gate finds the event and records it as `applied`.
+- **SIGINT/SIGTERM keep Node's default immediate exit** (M1 behaviour). A SIGTERM mid-apply can leave a provider write without its `applied` row; recovery handles it on the next `action_apply`.
+- **Exit after a failed stdout flush reports the original code.** If stdout never drains (the client is alive but not reading), the 2 s fallback exits with the drain's code, not 1. A client that closed stdout (EPIPE and similar) counts as gone: no log, exit 0.
 
 ## Builder-check findings (2026-11-07), to resolve in M2
 

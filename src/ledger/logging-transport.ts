@@ -137,6 +137,7 @@ export class LoggingTransport implements Transport {
   private readonly pending = new Map<RequestId, PendingCall[]>();
   private pendingCount = 0;
   private flushing = 0;
+  private handlers = 0;
   private idleWaiters: (() => void)[] = [];
   private readonly writeStderr: (line: string) => void;
 
@@ -169,15 +170,42 @@ export class LoggingTransport implements Transport {
     return this.inner.close();
   }
 
-  /** `tools/call` requests awaiting their response (including its flush). */
+  /**
+   * `tools/call` requests awaiting their response (including its flush), plus
+   * tool handlers still running under track(). A cancelled call leaves the
+   * first count at cancel time while its handler keeps running, so only the
+   * second count sees it.
+   */
   inFlight(): number {
-    return this.pendingCount + this.flushing;
+    return this.pendingCount + this.flushing + this.handlers;
   }
 
-  /** Resolves once inFlight() is 0. */
-  whenIdle(): Promise<void> {
-    if (this.inFlight() === 0) return Promise.resolve();
-    return new Promise((resolve) => this.idleWaiters.push(resolve));
+  /**
+   * Runs one tool handler and counts it in inFlight() until it settles.
+   * createServer wraps every tool with this (an arrow, so it can be passed bare).
+   */
+  readonly track = async <T>(fn: () => T | Promise<T>): Promise<T> => {
+    this.handlers++;
+    try {
+      return await fn();
+    } finally {
+      this.handlers--;
+      this.notifyIfIdle();
+    }
+  };
+
+  /**
+   * Resolves once inFlight() is 0 and is still 0 after one macrotask turn. The
+   * turn lets the SDK's microtask chain between a request's arrival and its
+   * handler start settle, so a call cancelled before its handler started is
+   * seen once that handler is running.
+   */
+  async whenIdle(): Promise<void> {
+    for (;;) {
+      if (this.inFlight() !== 0) await new Promise<void>((resolve) => this.idleWaiters.push(resolve));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      if (this.inFlight() === 0) return;
+    }
   }
 
   async send(message: JSONRPCMessage, options?: TransportSendOptions): Promise<void> {
