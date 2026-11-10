@@ -301,7 +301,7 @@ describe("concurrent first open", () => {
       for (const r of done) expect(r.err).not.toMatch(/locked|already exists/i);
       expect(done.map((r) => r.code)).toEqual([0, 0, 0, 0]);
       const db = LedgerDb.open(path);
-      expect(db.userVersion()).toBe(1);
+      expect(db.userVersion()).toBe(2);
       expect(tables(db).filter((t) => t === "actions")).toHaveLength(1);
       db.close();
     } finally {

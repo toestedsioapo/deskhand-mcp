@@ -6,6 +6,7 @@ import type { ActionStatus, ErrorCode, RejectionMethod } from "../ledger/contrac
 import { appendEvent } from "../ledger/events.js";
 import { isoNow, last4 } from "../ledger/ids.js";
 import { getPlanKind, renderDiff } from "./plan-kinds.js";
+import { untrustedRuntimeFlag } from "./runtime-guard.js";
 
 /**
  * Out-of-band approval lifecycle (CLI only, never an MCP tool). This file is
@@ -148,6 +149,14 @@ export async function approveAction(ctx: AppContext, actionId: string, io: CliIo
     return refuseApprove(ctx, shown, existingId, {
       code: "NOT_A_TTY",
       message: "approve needs an interactive terminal on both stdin and stdout; run it yourself, not from a pipe or a script.",
+    });
+  }
+  // 1b. No preload, loader or inspector in this process (the trivial fake-TTY one-liner).
+  const flag = untrustedRuntimeFlag(io.execArgv ?? [], io.nodeOptions);
+  if (flag !== null) {
+    return refuseApprove(ctx, shown, existingId, {
+      code: "UNTRUSTED_RUNTIME",
+      message: `approve refuses to run with ${flag} (execArgv or NODE_OPTIONS): run it in a plain terminal. This is a speed bump, not a boundary; see docs/SECURITY.md.`,
     });
   }
   // 2. Exists.

@@ -1,5 +1,6 @@
 import type { LedgerDb } from "../db.js";
 import { up as up0001 } from "./0001-init.js";
+import { up as up0002 } from "./0002-untrusted-runtime.js";
 
 export interface Migration {
   version: number;
@@ -7,7 +8,10 @@ export interface Migration {
 }
 
 /** Forward-only. Never edit a released migration; add a new one. */
-export const MIGRATIONS: readonly Migration[] = [{ version: 1, up: up0001 }];
+export const MIGRATIONS: readonly Migration[] = [
+  { version: 1, up: up0001 },
+  { version: 2, up: up0002 },
+];
 
 /**
  * Applies migrations above `user_version`, in order. Each runs in one

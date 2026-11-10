@@ -1,6 +1,6 @@
-# Ledger contract (v1)
+# Ledger contract (v2)
 
-Status: written in M2a before migration 1. This is the contract Deskbench scores against and Deskflow renders (ADR 0003). Changing a table, a column, or any value set below is a breaking change and bumps the package major. `PRAGMA user_version` is the only schema version; v1 of this document is `user_version = 1`. Tests parse the "Value sets" block and the "DDL v1" block of this file, so keep their format exact.
+Status: written in M2a before migration 1. This is the contract Deskbench scores against and Deskflow renders (ADR 0003). Changing a table, a column, or any value set below is a breaking change and bumps the package major. `PRAGMA user_version` is the only schema version; this document is `user_version = 2`. v2 (2026-11-10, M2b red-team follow-up) only adds the error code `UNTRUSTED_RUNTIME`; migration 2 rebuilds `events` so its `error_code` CHECK allows it. Tests parse the "Value sets" block and the "DDL v1" block of this file, so keep their format exact.
 
 Sources: ARCHITECTURE.md (Ledger, vocabulary and row sequences, Expenses), SPEC section 5, ADR 0002, ADR 0003.
 
@@ -24,7 +24,7 @@ Sources: ARCHITECTURE.md (Ledger, vocabulary and row sequences, Expenses), SPEC 
 action_statuses: planned, approved, applied, rejected, failed
 event_kinds: tool_call, cli_command, plan_created, approved, approve_refused, rejected, applied, apply_refused, apply_failed
 event_outcomes: ok, error, rejected
-error_codes: INVALID_INPUT, WRITES_DISABLED, UNKNOWN_ACTION, UNKNOWN_TOOL, PLAN_EXPIRED, NOT_APPROVED, ALREADY_APPROVED, NOT_PENDING, NOT_A_TTY, CONFIRMATION_MISMATCH, ID_COLLISION, PLAN_MODIFIED, STALE_PLAN, PROVIDER_ERROR, AUTH_REQUIRED, INTERNAL
+error_codes: INVALID_INPUT, WRITES_DISABLED, UNKNOWN_ACTION, UNKNOWN_TOOL, PLAN_EXPIRED, NOT_APPROVED, ALREADY_APPROVED, NOT_PENDING, NOT_A_TTY, CONFIRMATION_MISMATCH, ID_COLLISION, PLAN_MODIFIED, STALE_PLAN, PROVIDER_ERROR, AUTH_REQUIRED, INTERNAL, UNTRUSTED_RUNTIME
 approval_methods: cli_tty
 rejection_methods: cli_tty, cli_no_tty
 ```
@@ -49,6 +49,7 @@ Meaning of the codes:
 | `PROVIDER_ERROR` | the provider write failed |
 | `AUTH_REQUIRED` | a Google-backed tool without a token (M3) |
 | `INTERNAL` | anything else, including a failed ledger write while answering |
+| `UNTRUSTED_RUNTIME` | approve while the process runs with `--import`, `--require`/`-r`, `--loader`, `--experimental-loader` or `--inspect*` (in `process.execArgv` or `NODE_OPTIONS`); a speed bump against the trivial fake-TTY preload, not a boundary (SECURITY.md) |
 
 ## DDL v1
 
@@ -135,6 +136,47 @@ Column notes:
 - `events.error_code` is NULL when `outcome = ok`; non-NULL otherwise.
 - Nothing outside `src/ledger/` touches SQLite. Nothing updates or deletes `events` rows; the triggers enforce it.
 
+## DDL v2
+
+Migration 2 (`src/ledger/migrations/0002-untrusted-runtime.ts`) rebuilds `events` so the `error_code` CHECK allows `UNTRUSTED_RUNTIME` (SQLite cannot alter a CHECK in place). Rows keep their ids; the indexes and append-only triggers are recreated. The `CHECK` lists must equal the value sets above. The runner sets `PRAGMA user_version = 2` after the block succeeds. A test compares this block to the migration.
+
+```sql
+CREATE TABLE events_v2 (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts           TEXT NOT NULL,
+  action_id    TEXT REFERENCES actions(id),
+  tool         TEXT NOT NULL,
+  kind         TEXT NOT NULL
+    CHECK (kind IN ('tool_call','cli_command','plan_created','approved','approve_refused','rejected','applied','apply_refused','apply_failed')),
+  outcome      TEXT NOT NULL
+    CHECK (outcome IN ('ok','error','rejected')),
+  error_code   TEXT
+    CHECK (error_code IS NULL OR error_code IN ('INVALID_INPUT','WRITES_DISABLED','UNKNOWN_ACTION','UNKNOWN_TOOL','PLAN_EXPIRED','NOT_APPROVED','ALREADY_APPROVED','NOT_PENDING','NOT_A_TTY','CONFIRMATION_MISMATCH','ID_COLLISION','PLAN_MODIFIED','STALE_PLAN','PROVIDER_ERROR','AUTH_REQUIRED','INTERNAL','UNTRUSTED_RUNTIME')),
+  preview_json TEXT NOT NULL
+);
+
+INSERT INTO events_v2 (id, ts, action_id, tool, kind, outcome, error_code, preview_json)
+  SELECT id, ts, action_id, tool, kind, outcome, error_code, preview_json FROM events ORDER BY id;
+
+DROP TABLE events;
+ALTER TABLE events_v2 RENAME TO events;
+
+CREATE INDEX events_action_id ON events(action_id);
+CREATE INDEX events_ts ON events(ts);
+
+CREATE TRIGGER events_no_update
+BEFORE UPDATE ON events
+BEGIN
+  SELECT RAISE(ABORT, 'events is append-only');
+END;
+
+CREATE TRIGGER events_no_delete
+BEFORE DELETE ON events
+BEGIN
+  SELECT RAISE(ABORT, 'events is append-only');
+END;
+```
+
 ## Status transitions
 
 `actions.status` changes only by compare-and-set inside `BEGIN IMMEDIATE` (`UPDATE ... WHERE id=? AND status=?`); zero rows changed means the transition is refused and logged.
@@ -171,7 +213,7 @@ After gate 5, a stored plan whose kind is unknown or that fails its kind's schem
 
 ## Approve and reject refusals (CLI)
 
-`deskhand approve` checks, in order: TTY on stdin and stdout (`NOT_A_TTY`, before anything is printed or read), action exists (`UNKNOWN_ACTION`), status (`approved` gives `ALREADY_APPROVED`; `rejected`, `failed`, `applied` give `NOT_PENDING`), not expired (`PLAN_EXPIRED`), recomputed hash equals `plan_hash` (`PLAN_MODIFIED`), 5b. the stored plan has a known kind and passes its schema (`INTERNAL`, outcome `error`, before the prompt; unreachable through the plan tools, which validate, and the same code apply uses), no other pending id with the same last 4 (`ID_COLLISION`), typed last 4 matches (`CONFIRMATION_MISMATCH`). Every refusal leaves `status` unchanged.
+`deskhand approve` checks, in order: TTY on stdin and stdout (`NOT_A_TTY`, before anything is printed or read), runtime has no preload, loader or inspector flag (`UNTRUSTED_RUNTIME`, also before anything is printed or read), action exists (`UNKNOWN_ACTION`), status (`approved` gives `ALREADY_APPROVED`; `rejected`, `failed`, `applied` give `NOT_PENDING`), not expired (`PLAN_EXPIRED`), recomputed hash equals `plan_hash` (`PLAN_MODIFIED`), 5b. the stored plan has a known kind and passes its schema (`INTERNAL`, outcome `error`, before the prompt; unreachable through the plan tools, which validate, and the same code apply uses), no other pending id with the same last 4 (`ID_COLLISION`), typed last 4 matches (`CONFIRMATION_MISMATCH`). Every refusal leaves `status` unchanged.
 
 Note: a hash mismatch at approve leaves the plan `planned` (ADR 0002 item 2); only the apply-time hash check moves a plan to `failed`.
 
@@ -204,7 +246,7 @@ Cancellation: a client may cancel a `tools/call` with a valid `notifications/can
 | Invalid input / unknown tool | `tool_call` (error, `INVALID_INPUT` / `UNKNOWN_TOOL`) | n/a |
 | Other CLI command (`pending`, `export`, `auth`) | `cli_command` | n/a |
 
-`tool_call.outcome` mapping: gate refusals (`WRITES_DISABLED`, `UNKNOWN_ACTION`, `PLAN_EXPIRED`, `NOT_APPROVED`) are `rejected`; every other error code is `error`. For CLI rows, refusals with an approve or reject code (`NOT_A_TTY`, `CONFIRMATION_MISMATCH`, `ID_COLLISION`, `ALREADY_APPROVED`, `NOT_PENDING`, `PLAN_EXPIRED`, `PLAN_MODIFIED`, `UNKNOWN_ACTION`) are `rejected`.
+`tool_call.outcome` mapping: gate refusals (`WRITES_DISABLED`, `UNKNOWN_ACTION`, `PLAN_EXPIRED`, `NOT_APPROVED`) are `rejected`; every other error code is `error`. For CLI rows, refusals with an approve or reject code (`NOT_A_TTY`, `UNTRUSTED_RUNTIME`, `CONFIRMATION_MISMATCH`, `ID_COLLISION`, `ALREADY_APPROVED`, `NOT_PENDING`, `PLAN_EXPIRED`, `PLAN_MODIFIED`, `UNKNOWN_ACTION`) are `rejected`.
 
 `INVALID_INPUT` and `INTERNAL` `tool_call` rows are outcome `error` (only the four gate refusals above are `rejected`).
 

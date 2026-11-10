@@ -1,7 +1,7 @@
 import {
   ACTION_STATUSES,
   APPROVAL_METHODS,
-  ERROR_CODES,
+  ERROR_CODES_V1,
   EVENT_KINDS,
   EVENT_OUTCOMES,
   REJECTION_METHODS,
@@ -48,7 +48,7 @@ CREATE TABLE events (
   outcome      TEXT NOT NULL
     CHECK (outcome IN (${list(EVENT_OUTCOMES)})),
   error_code   TEXT
-    CHECK (error_code IS NULL OR error_code IN (${list(ERROR_CODES)})),
+    CHECK (error_code IS NULL OR error_code IN (${list(ERROR_CODES_V1)})),
   preview_json TEXT NOT NULL
 );
 

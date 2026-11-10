@@ -10,6 +10,9 @@ export interface CliIo {
   err(s: string): void;
   stdinIsTTY: boolean;
   stdoutIsTTY: boolean;
+  /** `process.execArgv` and `NODE_OPTIONS` of the running process (the real CLI sets both); omitted means none. */
+  execArgv?: readonly string[];
+  nodeOptions?: string;
   readLine(prompt: string): Promise<string>;
 }
 

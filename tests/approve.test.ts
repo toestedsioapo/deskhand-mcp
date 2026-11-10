@@ -39,7 +39,9 @@ function makeCtx(over: Partial<AppContext> = {}, env: NodeJS.ProcessEnv = {}): A
 type ScriptedIo = CliIo & { outText: () => string; errText: () => string; prompts: string[] };
 
 /** A CliIo with TTY toggles and queued input lines; records every prompt issued. */
-function scripted(opts: { stdin?: boolean; stdout?: boolean; lines?: string[] } = {}): ScriptedIo {
+function scripted(
+  opts: { stdin?: boolean; stdout?: boolean; lines?: string[]; execArgv?: string[]; nodeOptions?: string } = {},
+): ScriptedIo {
   let out = "";
   let err = "";
   const lines = [...(opts.lines ?? [])];
@@ -49,6 +51,8 @@ function scripted(opts: { stdin?: boolean; stdout?: boolean; lines?: string[] } 
     err: (s) => (err += s),
     stdinIsTTY: opts.stdin ?? true,
     stdoutIsTTY: opts.stdout ?? true,
+    ...(opts.execArgv ? { execArgv: opts.execArgv } : {}),
+    ...(opts.nodeOptions !== undefined ? { nodeOptions: opts.nodeOptions } : {}),
     async readLine(prompt) {
       prompts.push(prompt);
       const next = lines.shift();
@@ -142,6 +146,34 @@ describe("approveAction: TTY gate (first, before anything is printed or read)", 
 
   it("is checked before existence: an unknown id without a TTY is NOT_A_TTY with a null action_id", async () => {
     await expectRefused("act_NOPE", scripted({ stdin: false }), "NOT_A_TTY", { existing: false });
+  });
+});
+
+describe("approveAction: untrusted runtime (--import/--require/--loader/--inspect)", () => {
+  it.each([
+    ["execArgv --import", { execArgv: ["--import", "./fake-tty.mjs"] }],
+    ["execArgv --require=", { execArgv: ["--require=./x.cjs"] }],
+    ["execArgv -r", { execArgv: ["-r", "./x.cjs"] }],
+    ["execArgv --experimental-loader", { execArgv: ["--experimental-loader", "./l.mjs"] }],
+    ["execArgv --inspect-brk", { execArgv: ["--inspect-brk=9229"] }],
+    ["NODE_OPTIONS --import", { nodeOptions: "--import file:///x.mjs" }],
+    ["NODE_OPTIONS --loader", { nodeOptions: "--max-old-space-size=512 --loader ./l.mjs" }],
+  ])("%s, both streams TTY, right last 4 queued -> UNTRUSTED_RUNTIME, no prompt", async (_n, opts) => {
+    const id = seedAction(ctx, "planned");
+    const r = await expectRefused(id, scripted({ lines: [last4(id)], ...opts }), "UNTRUSTED_RUNTIME");
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.message).toMatch(/--import|--require|-r|--experimental-loader|--inspect-brk|--loader/);
+  });
+
+  it("is checked after the TTY gate (a pipe with --import is still NOT_A_TTY)", async () => {
+    const id = seedAction(ctx, "planned");
+    await expectRefused(id, scripted({ stdin: false, execArgv: ["--import", "x.mjs"] }), "NOT_A_TTY");
+  });
+
+  it("clean execArgv and NODE_OPTIONS still approve", async () => {
+    const id = seedAction(ctx, "planned");
+    const io = scripted({ lines: [last4(id)], execArgv: ["--no-warnings"], nodeOptions: "--max-old-space-size=512" });
+    expect(await approveAction(ctx, id, io)).toMatchObject({ ok: true });
   });
 });
 

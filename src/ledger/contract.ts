@@ -3,7 +3,7 @@
  * docs/ledger-contract.md ("Value sets"); a test parses the doc and compares,
  * so the two cannot drift. Changing any of them is a breaking change.
  */
-export const LEDGER_SCHEMA_VERSION = 1;
+export const LEDGER_SCHEMA_VERSION = 2;
 
 export const ACTION_STATUSES = ["planned", "approved", "applied", "rejected", "failed"] as const;
 
@@ -21,7 +21,8 @@ export const EVENT_KINDS = [
 
 export const EVENT_OUTCOMES = ["ok", "error", "rejected"] as const;
 
-export const ERROR_CODES = [
+/** The error codes of schema v1, frozen: migration 0001 builds its CHECK from this. */
+export const ERROR_CODES_V1 = [
   "INVALID_INPUT",
   "WRITES_DISABLED",
   "UNKNOWN_ACTION",
@@ -39,6 +40,9 @@ export const ERROR_CODES = [
   "AUTH_REQUIRED",
   "INTERNAL",
 ] as const;
+
+/** Schema v2 adds UNTRUSTED_RUNTIME (approve refused under --import/--require/--loader/--inspect). */
+export const ERROR_CODES = [...ERROR_CODES_V1, "UNTRUSTED_RUNTIME"] as const;
 
 export const APPROVAL_METHODS = ["cli_tty"] as const;
 

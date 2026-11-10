@@ -17,6 +17,8 @@ export function realCliIo(): CliIo {
     err: (s) => void process.stderr.write(s),
     stdinIsTTY,
     stdoutIsTTY,
+    execArgv: process.execArgv,
+    nodeOptions: process.env["NODE_OPTIONS"] ?? "",
     async readLine(prompt) {
       if (!stdinIsTTY || !stdoutIsTTY) throw new Error("refusing to read: stdin and stdout must both be a TTY");
       const { createInterface } = await import("node:readline/promises");

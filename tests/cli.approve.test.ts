@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { closeSync, openSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { AppContext } from "../src/app-context.js";
 import { loadConfig } from "../src/config/env.js";
@@ -60,6 +61,59 @@ function expectRefusedInLedger(): void {
     expect(queryEvents(db, { limit: 20, kind: "approved" })).toHaveLength(0);
   });
 }
+
+const PRELOAD = fileURLToPath(new URL("./helpers/faketty-preload.mjs", import.meta.url));
+
+/**
+ * The red-team reviewer's fake-TTY attack: a preload that makes both streams
+ * look like a TTY and types the right last 4. Before the runtime guard this
+ * approved the plan; now `approve` refuses before it prompts.
+ */
+describe("dist/cli.js approve: the fake-TTY preload attack (M2b red-team)", () => {
+  const attack = (via: "execArgv" | "NODE_OPTIONS") => {
+    const env = { ...home.env, RT_ANSWER: last4(id) };
+    return spawnSync(
+      process.execPath,
+      via === "execArgv" ? ["--import", pathToFileURL(PRELOAD).href, CLI_PATH, "approve", id] : [CLI_PATH, "approve", id],
+      {
+        env: via === "NODE_OPTIONS" ? { ...env, NODE_OPTIONS: `--import ${pathToFileURL(PRELOAD).href}` } : env,
+        encoding: "utf8",
+        timeout: 20_000,
+      },
+    );
+  };
+  const expectUntrusted = (): void => {
+    withDb((db) => {
+      const a = getAction(db, id)!;
+      expect(a.status).toBe("planned");
+      expect(a.approved_by).toBeNull();
+      expect(a.approved_plan_hash).toBeNull();
+      const kinds = queryEvents(db, { limit: 20, actionId: id })
+        .reverse()
+        .map((e) => `${e.kind}:${e.outcome}:${e.error_code}`);
+      expect(kinds).toEqual([
+        "plan_created:ok:null",
+        "approve_refused:rejected:UNTRUSTED_RUNTIME",
+        "cli_command:rejected:UNTRUSTED_RUNTIME",
+      ]);
+      expect(queryEvents(db, { limit: 20, kind: "approved" })).toHaveLength(0);
+    });
+  };
+
+  it("node --import <fake tty> dist/cli.js approve <id> -> exit 1, UNTRUSTED_RUNTIME, still planned", () => {
+    const r = attack("execArgv");
+    expect(r.stderr).toMatch(/UNTRUSTED_RUNTIME/);
+    expect(r.status).toBe(1);
+    expectUntrusted();
+  });
+
+  it("NODE_OPTIONS=--import <fake tty> -> exit 1, UNTRUSTED_RUNTIME, still planned", () => {
+    const r = attack("NODE_OPTIONS");
+    expect(r.stderr).toMatch(/UNTRUSTED_RUNTIME/);
+    expect(r.status).toBe(1);
+    expectUntrusted();
+  });
+});
 
 describe("dist/cli.js approve", () => {
   it("piped stdin containing the correct last 4 -> exit 1, NOT_A_TTY, still planned, approve_refused logged", () => {
