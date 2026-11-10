@@ -75,7 +75,7 @@ describe("dist/cli.js approve", () => {
     expectRefusedInLedger();
   });
 
-  it("stdout redirected to a file, stdin inherited -> exit 1, NOT_A_TTY, nothing written to the file", () => {
+  it("stdout redirected to a file, stdin inherited (not a TTY under vitest either, so a neither-TTY case) -> exit 1, NOT_A_TTY, nothing written to the file", () => {
     const outFile = join(home.home, "out.txt");
     const fd = openSync(outFile, "w");
     const r = (() => {

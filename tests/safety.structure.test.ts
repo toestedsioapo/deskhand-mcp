@@ -37,6 +37,11 @@ const SETS_APPROVED = /\bSET\b(?:(?!\bWHERE\b)[^;`"])*?\bstatus\s*=\s*'approved'
 /** An assignment (`col = ...`, not `==`/`!==`/`:`) to any approval column. */
 const WRITES_APPROVAL_COLUMN = /(?<![=!<>.\w])\b(approved_by|approved_at|approval_method|approved_plan_hash)\s*=(?!=)/;
 
+/** A status assignment from a bound parameter; a transition must spell its target status literally. */
+const PARAM_STATUS = /\bstatus\s*=\s*\?/i;
+/** An import specifier that reaches into the CLI layer (`cli/...`). */
+const CLI_IMPORT = /(^|\/)cli\//;
+
 describe("safety structure", () => {
   it("scans a non-trivial source tree", () => {
     expect(FILES.map((f) => f.path)).toContain("src/approval/plan-kinds.ts");
@@ -95,6 +100,33 @@ describe("safety structure", () => {
     expect(importers.length).toBeGreaterThan(0);
     expect(importers.filter((p) => !p.startsWith("src/cli/"))).toEqual([]);
     expect(importers).toContain("src/cli/approve.ts");
+  });
+
+  it("no status is ever SET from a bound parameter (`status = ?`): every transition names its literal target", () => {
+    expect(matching(PARAM_STATUS)).toEqual([]);
+  });
+
+  it("nothing outside src/cli/ and src/cli.ts imports from cli/ (tools, server, approval stay CLI-free)", () => {
+    const offenders = FILES.filter((f) => !f.path.startsWith("src/cli/") && f.path !== "src/cli.ts").flatMap((f) =>
+      importSpecifiers(f.text)
+        .filter((s) => CLI_IMPORT.test(s))
+        .map((s) => `${f.path}: ${s}`),
+    );
+    expect(offenders).toEqual([]);
+  });
+
+  it("os.userInfo is used only by src/config/actor.ts (resolveActor has the fallback)", () => {
+    expect(matching(/\buserInfo\b/)).toEqual(["src/config/actor.ts"]);
+  });
+
+  it("the status and cli-import guards detect what they are meant to detect (self-test)", () => {
+    expect(PARAM_STATUS.test("UPDATE actions SET status = ? WHERE id = ?")).toBe(true);
+    expect(PARAM_STATUS.test("SET status=?, error = ?")).toBe(true);
+    expect(PARAM_STATUS.test("UPDATE actions SET status = 'failed' WHERE id = ? AND status = 'approved'")).toBe(false);
+    expect(CLI_IMPORT.test("../cli/io.js")).toBe(true);
+    expect(CLI_IMPORT.test("./cli/index.js")).toBe(true);
+    expect(CLI_IMPORT.test("../util/sanitize.js")).toBe(false);
+    expect(CLI_IMPORT.test("./client.js")).toBe(false);
   });
 
   it("no bypass flag or env var exists for approve", () => {

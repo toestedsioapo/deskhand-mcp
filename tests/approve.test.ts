@@ -7,6 +7,7 @@ import { runCli } from "../src/cli/index.js";
 import type { CliIo } from "../src/cli/io.js";
 import { loadConfig } from "../src/config/env.js";
 import { getAction, type ActionRow } from "../src/ledger/actions.js";
+import { canonicalJson, planHash } from "../src/ledger/canonical.js";
 import { LedgerDb } from "../src/ledger/db.js";
 import { queryEvents, type EventRow } from "../src/ledger/events.js";
 import { createIdGenerator, last4 } from "../src/ledger/ids.js";
@@ -85,9 +86,10 @@ async function expectRefused(
   id: string,
   io: ScriptedIo,
   code: string,
-  opts: { existing?: boolean; promptIssued?: boolean } = {},
+  opts: { existing?: boolean; promptIssued?: boolean; outcome?: "rejected" | "error" } = {},
 ) {
   const existing = opts.existing ?? true;
+  const outcome = opts.outcome ?? "rejected";
   const before: ActionRow | undefined = getAction(db, id);
   const cliBefore = approveCliRows().length;
   const r = await approveAction(ctx, id, io);
@@ -102,14 +104,14 @@ async function expectRefused(
   expect(refused).toMatchObject({
     kind: "approve_refused",
     tool: "cli:approve",
-    outcome: "rejected",
+    outcome,
     error_code: code,
     action_id: existing ? id : null,
   });
   expect(cli).toMatchObject({
     kind: "cli_command",
     tool: "cli:approve",
-    outcome: "rejected",
+    outcome,
     error_code: code,
     action_id: existing ? id : null,
   });
@@ -168,6 +170,18 @@ describe("approveAction: typed confirmation", () => {
     const other = seedAction(ctx, "planned", validPlan({}, { title: "Other" }));
     await expectRefused(id, scripted({ lines: [last4(other)] }), "CONFIRMATION_MISMATCH", { promptIssued: true });
     expect(getAction(db, other)!.status).toBe("planned");
+  });
+
+  it.each([
+    ["sharp s (U+00DF, uppercases to SS)", "\u00df\u00df"],
+    ["long s (U+017F, uppercases to S)", "\u017f\u017f\u017f\u017f"],
+    ["mixed long s and ASCII", "S\u017fS\u017f"],
+  ])("non-ASCII input whose Unicode uppercase is the last 4 never matches: %s", async (_label, typed) => {
+    const id = "act_01JC3Z8K4V7Q2W9X5R6T1NSSSS";
+    const c = makeCtx({ ids: { newActionId: () => id } });
+    expect(seedAction(c, "planned")).toBe(id);
+    expect(typed.toUpperCase()).toBe("SSSS"); // the trap is real: String#toUpperCase maps these to ASCII S
+    await expectRefused(id, scripted({ lines: [typed] }), "CONFIRMATION_MISMATCH", { promptIssued: true });
   });
 
   it("no line could be read (EOF / read error) -> CONFIRMATION_MISMATCH", async () => {
@@ -263,6 +277,17 @@ describe("approveAction: state checks", () => {
     ]);
   });
 
+  it.each([
+    ["an unknown kind", { kind: "calendar.delete_everything", event: { title: "x" } }],
+    ["a known kind with an invalid shape", { ...validPlan(), observed: { slotFree: false, etags: {} } }],
+  ])("hash-consistent stored plan with %s -> INTERNAL before the prompt, status unchanged", async (_label, plan) => {
+    const id = seedAction(ctx, "planned");
+    db.run("UPDATE actions SET plan_json = ?, plan_hash = ? WHERE id = ?", [canonicalJson(plan), planHash(plan), id]);
+    const io = scripted({ lines: [last4(id)] });
+    await expectRefused(id, io, "INTERNAL", { outcome: "error" });
+    expect(getAction(db, id)!.status).toBe("planned");
+  });
+
   it("id collision (defensive): two pending rows forced to share the last 4 -> ID_COLLISION for both", async () => {
     const a = seedAction(ctx, "planned");
     const b = `act_${"0".repeat(22)}${a.slice(-4)}`;
@@ -318,6 +343,24 @@ describe("approveAction: check order", () => {
     );
     db.run("UPDATE actions SET plan_hash = ? WHERE id = ?", ["0".repeat(64), a]);
     await expectRefused(a, scripted({ lines: [last4(a)] }), "PLAN_MODIFIED");
+  });
+
+  it("hash before plan validity: tampered and of unknown kind -> PLAN_MODIFIED", async () => {
+    const id = seedAction(ctx, "planned");
+    db.run("UPDATE actions SET plan_json = ? WHERE id = ?", [canonicalJson({ kind: "nope" }), id]);
+    await expectRefused(id, scripted({ lines: [last4(id)] }), "PLAN_MODIFIED");
+  });
+
+  it("plan validity (5b) before collision: unknown kind and colliding -> INTERNAL", async () => {
+    const a = seedAction(ctx, "planned");
+    const plan = { kind: "nope" };
+    db.run("UPDATE actions SET plan_json = ?, plan_hash = ? WHERE id = ?", [canonicalJson(plan), planHash(plan), a]);
+    db.run(
+      `INSERT INTO actions (id, created_at, tool, input_json, plan_json, plan_hash, expires_at, status)
+       SELECT ?, created_at, tool, input_json, plan_json, plan_hash, expires_at, 'planned' FROM actions WHERE id = ?`,
+      [`act_${"0".repeat(22)}${a.slice(-4)}`, a],
+    );
+    await expectRefused(a, scripted({ lines: [last4(a)] }), "INTERNAL", { outcome: "error" });
   });
 });
 

@@ -63,6 +63,20 @@ describe("createPlan", () => {
     expect(ev[0]).toMatchObject({ kind: "plan_created", outcome: "ok", tool: "calendar_propose_event" });
   });
 
+  it("reads the clock once: expires_at is exactly created_at + ttl even with a ticking clock", () => {
+    let t = Date.parse(NOW);
+    const c = ctxWith();
+    let reads = 0;
+    c.clock = () => {
+      reads++;
+      return new Date((t += 7));
+    };
+    const r = plan0(c);
+    const a = getAction(db, r.actionId)!;
+    expect(Date.parse(a.expires_at) - Date.parse(a.created_at)).toBe(24 * 3_600_000);
+    expect(reads).toBe(1);
+  });
+
   it("honours a 168h ttl", () => {
     const r = plan0(ctxWith({ DESKHAND_PLAN_TTL_HOURS: "168" }));
     expect(r.expiresAt).toBe("2026-11-17T09:00:00.000Z");

@@ -20,7 +20,7 @@ afterEach(() => {
 });
 
 describe("createServer with a ledger", () => {
-  it("lists exactly ping, with the M1 tools/list JSON unchanged", async () => {
+  it("lists the four M2 tools in order, with the M1 ping listing unchanged", async () => {
     const server = createServer({ config: loadConfig(home.env), db, clock: () => new Date(), ...makeProviderDeps() });
     const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
     await server.connect(serverSide);

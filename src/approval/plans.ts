@@ -1,8 +1,8 @@
 import type { AppContext } from "../app-context.js";
 import { canonicalJson, planHash } from "../ledger/canonical.js";
-import { getAction, type ActionRow } from "../ledger/actions.js";
+import { getAction } from "../ledger/actions.js";
 import { appendEvent } from "../ledger/events.js";
-import { isoNow, last4 } from "../ledger/ids.js";
+import { last4 } from "../ledger/ids.js";
 import { redactInput } from "../ledger/redact.js";
 import { getPlanKind } from "./plan-kinds.js";
 
@@ -23,8 +23,10 @@ export function createPlan(
   const plan = validate(args.plan);
   const planJson = canonicalJson(plan);
   const hash = planHash(plan);
-  const createdAt = isoNow(ctx.clock);
-  const expiresAt = new Date(ctx.clock().getTime() + ctx.config.planTtlHours * 3_600_000).toISOString();
+  // One clock read, so expires_at is exactly created_at + ttl.
+  const now = ctx.clock();
+  const createdAt = now.toISOString();
+  const expiresAt = new Date(now.getTime() + ctx.config.planTtlHours * 3_600_000).toISOString();
   const inputJson = JSON.stringify(redactInput(args.input) ?? null);
 
   return ctx.db.transaction(() => {
@@ -59,10 +61,31 @@ export function createPlan(
   }, "immediate");
 }
 
-/** Planned actions, oldest first, expired ones included. */
-export function listPending(ctx: AppContext): ActionRow[] {
-  const ids = ctx.db.all<{ id: string }>(
-    "SELECT id FROM actions WHERE status = 'planned' ORDER BY created_at ASC, id ASC",
+/** A planned action as `deskhand pending` shows it; `plan` is undefined when plan_json does not parse. */
+export interface PendingRow {
+  id: string;
+  created_at: string;
+  tool: string;
+  plan_hash: string;
+  expires_at: string;
+  plan: { value: unknown } | undefined;
+}
+
+/**
+ * Planned actions, oldest first, expired ones included. Reads raw rows, so a
+ * corrupt plan_json never throws here (it shows as an invalid plan).
+ */
+export function listPending(ctx: AppContext): PendingRow[] {
+  const rows = ctx.db.all<Omit<PendingRow, "plan"> & { plan_json: string }>(
+    "SELECT id, created_at, tool, plan_hash, expires_at, plan_json FROM actions WHERE status = 'planned' ORDER BY created_at ASC, id ASC",
   );
-  return ids.map((r) => getAction(ctx.db, r.id)!);
+  return rows.map(({ plan_json, ...r }) => {
+    let plan: PendingRow["plan"];
+    try {
+      plan = { value: JSON.parse(plan_json) as unknown };
+    } catch {
+      plan = undefined;
+    }
+    return { ...r, plan };
+  });
 }

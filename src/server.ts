@@ -3,7 +3,7 @@ import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { userInfo } from "node:os";
+import { resolveActor } from "./config/actor.js";
 import type { AppContext } from "./app-context.js";
 import { loadConfig } from "./config/env.js";
 import { assertSupportedNode } from "./config/node-check.js";
@@ -132,7 +132,7 @@ export async function main(): Promise<void> {
   const stdout = createClientStdout(process.stdout);
   const transport = new LoggingTransport(new StdioServerTransport(process.stdin, stdout.stream), { db, clock });
   const server = createServer(
-    { config, db, clock, ids, provider, actor: userInfo().username },
+    { config, db, clock, ids, provider, actor: resolveActor() },
     { track: transport.track },
   );
   // stdin closing means the client went away: finish in-flight tool calls

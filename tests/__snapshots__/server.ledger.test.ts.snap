@@ -1,6 +1,6 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
-exports[`createServer with a ledger > lists exactly ping, with the M1 tools/list JSON unchanged 1`] = `
+exports[`createServer with a ledger > lists the four M2 tools in order, with the M1 ping listing unchanged 1`] = `
 {
   "tools": [
     {

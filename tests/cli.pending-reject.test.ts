@@ -86,9 +86,19 @@ describe("stripControl", () => {
     expect(stripControl("a\u200bb\u200fc\u202ad\u202ee\u2066f\u2069g\ufeffh")).toBe("abcdefgh");
   });
 
-  it("src/cli/io.ts is pure ASCII (no literal invisible characters in its regexes)", () => {
-    const text = readFileSync(new URL("../src/cli/io.ts", import.meta.url), "utf8");
-    expect([...text].filter((c) => c.charCodeAt(0) > 0x7e && c !== "\n")).toEqual([]);
+  it.each(["../src/cli/io.ts", "../src/util/sanitize.ts"])(
+    "%s is pure ASCII (no literal invisible characters in its regexes)",
+    (path) => {
+      const text = readFileSync(new URL(path, import.meta.url), "utf8");
+      expect([...text].filter((c) => c.charCodeAt(0) > 0x7e && c !== "\n")).toEqual([]);
+    },
+  );
+
+  it("src/cli/io.ts re-exports the neutral sanitisers (same functions)", async () => {
+    const neutral = await import("../src/util/sanitize.js");
+    const cli = await import("../src/cli/io.js");
+    expect(cli.stripControl).toBe(neutral.stripControl);
+    expect(cli.oneLine).toBe(neutral.oneLine);
   });
 });
 
@@ -132,6 +142,21 @@ describe("pending", () => {
     const r = await run(["pending"]);
     expect(r.out).toContain("evil");
     expect(r.out).not.toContain("\u001b");
+  });
+
+  it("a planned row whose plan_json is not JSON shows '(invalid plan)', exits 0 and still logs", async () => {
+    const bad = seedAction(makeCtx(), "planned");
+    const good = seedAction(makeCtx(), "planned", validPlan({}, { title: "Still listed" }));
+    db.run("UPDATE actions SET plan_json = ? WHERE id = ?", ["{not json", bad]);
+    const r = await run(["pending"]);
+    expect(r).toMatchObject({ code: 0, err: "" });
+    expect(r.out).toContain(bad);
+    expect(r.out).toContain("(invalid plan)");
+    expect(r.out).toContain(good);
+    expect(r.out).toContain("create event: Still listed");
+    expect(cliRows()).toHaveLength(1);
+    expect(cliRows()[0]).toMatchObject({ tool: "cli:pending", outcome: "ok", error_code: null });
+    expect((cliRows()[0]!.preview as { output: unknown }).output).toEqual({ count: 2 });
   });
 
   it("empty ledger: friendly line, empty stderr, still logs", async () => {
@@ -219,24 +244,40 @@ describe("reject", () => {
 });
 
 describe("dist/cli.js", () => {
-  it("4 concurrent rejects of one plan: exactly one wins", async () => {
+  it("4 concurrent rejects of one plan: exactly one wins, every process is logged, no lock error", async () => {
     const id = seedAction(makeCtx(), "planned");
     db.close();
     const results = await Promise.all(
       Array.from(
         { length: 4 },
         () =>
-          new Promise<number | null>((resolve) => {
-            const child = spawn(process.execPath, [CLI_PATH, "reject", id], { env: home.env, stdio: "ignore" });
-            child.on("close", resolve);
+          new Promise<{ code: number | null; stderr: string }>((resolve) => {
+            const child = spawn(process.execPath, [CLI_PATH, "reject", id], {
+              env: home.env,
+              stdio: ["ignore", "ignore", "pipe"],
+            });
+            let stderr = "";
+            child.stderr.on("data", (c: Buffer) => (stderr += c.toString("utf8")));
+            child.on("close", (code) => resolve({ code, stderr }));
           }),
       ),
     );
     db = LedgerDb.open(join(home.home, "ledger.db"));
-    expect(results.filter((c) => c === 0)).toHaveLength(1);
-    expect(results.filter((c) => c === 1)).toHaveLength(3);
+    expect(results.filter((r) => r.code === 0)).toHaveLength(1);
+    const losers = results.filter((r) => r.code === 1);
+    expect(losers).toHaveLength(3);
+    for (const l of losers) {
+      expect(l.stderr).toMatch(/NOT_PENDING/);
+      expect(l.stderr.toLowerCase()).not.toContain("locked");
+    }
     expect(queryEvents(db, { limit: 50, kind: "rejected", actionId: id })).toHaveLength(1);
     expect(getAction(db, id)!.status).toBe("rejected");
+    // Every process wrote its own cli_command row: one ok, three NOT_PENDING refusals.
+    const rows = cliRows().filter((r) => r.tool === "cli:reject");
+    expect(cliRows()).toHaveLength(4);
+    expect(rows).toHaveLength(4);
+    expect(rows.filter((r) => r.outcome === "ok" && r.error_code === null)).toHaveLength(1);
+    expect(rows.filter((r) => r.outcome === "rejected" && r.error_code === "NOT_PENDING")).toHaveLength(3);
   }, 30_000);
 
   it.each([[["--help"]], [["-h"]], [["--version"]], [[]]])("%j with an invalid DESKHAND_HOME opens no ledger", (args) => {
@@ -246,6 +287,17 @@ describe("dist/cli.js", () => {
     expect(r.status).toBe(0);
     expect(r.stderr).toBe("");
     expect(existsSync(bad)).toBe(false);
+  });
+
+  it("pending with a corrupt plan_json row exits 0 and prints '(invalid plan)'", () => {
+    const id = seedAction(makeCtx(), "planned");
+    db.run("UPDATE actions SET plan_json = ? WHERE id = ?", ["{not json", id]);
+    const r = runCliBin(["pending"], home.env);
+    expect(r.status).toBe(0);
+    expect(r.stderr).toBe("");
+    expect(r.stdout).toContain(id);
+    expect(r.stdout).toContain("(invalid plan)");
+    expect(queryEvents(db, { limit: 10, kind: "cli_command" })).toHaveLength(1);
   });
 
   it("unknown command exits 2 with empty stdout", () => {

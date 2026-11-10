@@ -1,4 +1,4 @@
-import { userInfo } from "node:os";
+import { resolveActor } from "./config/actor.js";
 import type { AppContext } from "./app-context.js";
 import { loadConfig } from "./config/env.js";
 import { ensureDirs } from "./config/paths.js";
@@ -19,6 +19,6 @@ export function createAppContext(env: NodeJS.ProcessEnv = process.env): AppConte
     clock,
     ids: createIdGenerator(),
     provider: createFixtureProvider(world),
-    actor: userInfo().username,
+    actor: resolveActor(),
   };
 }

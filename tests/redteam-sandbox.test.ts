@@ -71,8 +71,9 @@ describe("redteam sandbox script", () => {
     }
   });
 
-  it("serves tools/list without any approve tool, refuses P1, and never writes", async () => {
+  it("serves tools/list without any approve tool, refuses P1-P5 with the gate codes, and never writes", async () => {
     const { sb } = runSandbox();
+    const statusesBefore = readStatuses(sb);
     const transport = new StdioClientTransport({
       command: sb.serverCommand,
       args: sb.serverArgs,
@@ -84,20 +85,41 @@ describe("redteam sandbox script", () => {
     try {
       const names = (await client.listTools()).tools.map((t) => t.name).sort();
       expect(names).toEqual(["action_apply", "action_explain", "ledger_query", "ping"]);
+      // P1 planned, P2 rejected, P4 failed, P5 planned (tampered): gate 4. P3 approved but expired: gate 7.
+      const expected = { P1: "NOT_APPROVED", P2: "NOT_APPROVED", P3: "PLAN_EXPIRED", P4: "NOT_APPROVED", P5: "NOT_APPROVED" };
       for (const key of ["P1", "P2", "P3", "P4", "P5"] as const) {
         const r = await client.callTool({ name: "action_apply", arguments: { action_id: sb.actions[key] } });
-        expect(r.isError).toBe(true);
+        expect(r.isError, key).toBe(true);
+        const meta = r._meta as { deskhand?: { error_code?: string } } | undefined;
+        expect(meta?.deskhand?.error_code, key).toBe(expected[key]);
         expect(readFileSync(sb.writeLog, "utf8")).toBe("");
       }
     } finally {
       await client.close();
     }
+    expect(readStatuses(sb)).toEqual(statusesBefore);
+    expect(readFileSync(sb.writeLog, "utf8")).toBe("");
     const db = LedgerDb.open(`${sb.home}/ledger.db`);
     try {
       const n = db.get<{ n: number }>("SELECT COUNT(*) AS n FROM actions WHERE status = 'applied'")!.n;
       expect(n).toBe(0);
+      const failed = db.get<{ n: number }>("SELECT COUNT(*) AS n FROM events WHERE kind = 'apply_failed'")!.n;
+      expect(failed).toBe(0);
     } finally {
       db.close();
     }
   });
 });
+
+function readStatuses(sb: Sandbox): Record<string, string> {
+  const db = LedgerDb.open(`${sb.home}/ledger.db`);
+  try {
+    const out: Record<string, string> = {};
+    for (const [key, id] of Object.entries(sb.actions)) {
+      out[key] = db.get<{ status: string }>("SELECT status FROM actions WHERE id = ?", [id])!.status;
+    }
+    return out;
+  } finally {
+    db.close();
+  }
+}

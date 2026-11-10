@@ -1,11 +1,11 @@
 import type { AppContext } from "../app-context.js";
-import { oneLine, stripControl, type CliIo } from "../cli/io.js";
+import { oneLine, stripControl, type CliIo } from "../util/sanitize.js";
 import { getAction } from "../ledger/actions.js";
 import { hashPrefix, planHash } from "../ledger/canonical.js";
 import type { ActionStatus, ErrorCode, RejectionMethod } from "../ledger/contract.js";
 import { appendEvent } from "../ledger/events.js";
 import { isoNow, last4 } from "../ledger/ids.js";
-import { renderDiff } from "./plan-kinds.js";
+import { getPlanKind, renderDiff } from "./plan-kinds.js";
 
 /**
  * Out-of-band approval lifecycle (CLI only, never an MCP tool). This file is
@@ -49,6 +49,30 @@ function recomputeHash(planJson: string): string | undefined {
 type Refusal = { code: ErrorCode; message: string };
 
 /**
+ * Check 5b: the stored plan (hash already verified) has a known kind and
+ * passes that kind's schema. Unreachable through the plan tools, which
+ * validate; refusing here (INTERNAL, as apply does) means a human is never
+ * asked to approve something the diff cannot render faithfully.
+ */
+function storedPlanValid(planJson: string): boolean {
+  let plan: unknown;
+  try {
+    plan = JSON.parse(planJson) as unknown;
+  } catch {
+    return false;
+  }
+  const k = typeof plan === "object" && plan !== null ? (plan as { kind?: unknown }).kind : undefined;
+  const pk = typeof k === "string" ? getPlanKind(k) : undefined;
+  return pk !== undefined && pk.schema.safeParse(plan).success;
+}
+
+/** INTERNAL is outcome `error`; every approve-specific refusal code is `rejected` (ledger-contract.md). */
+const refusalOutcome = (r: Refusal): "rejected" | "error" => (r.code === "INTERNAL" ? "error" : "rejected");
+
+/** ASCII-only uppercase: a-z become A-Z and nothing else changes, so no non-ASCII input can fold into a match. */
+const asciiUpper = (s: string): string => s.replace(/[a-z]/g, (c) => c.toUpperCase());
+
+/**
  * Steps 3-5 of the contract's approve order (status, expiry, hash) for a row
  * that exists. Used before the prompt and again when the CAS changes no row.
  * Expiry fails closed: now >= expires_at, or an unparseable value, is expired.
@@ -81,7 +105,7 @@ function logApproveCommand(ctx: AppContext, shown: string, existingId: string | 
     actionId: existingId,
     tool: APPROVE_TOOL,
     kind: "cli_command",
-    outcome: refusal ? "rejected" : "ok",
+    outcome: refusal ? refusalOutcome(refusal) : "ok",
     errorCode: refusal?.code ?? null,
     preview: approvePreview(shown, existingId, refusal?.message ?? null),
   });
@@ -95,7 +119,7 @@ function refuseApprove(ctx: AppContext, shown: string, existingId: string | null
       actionId: existingId,
       tool: APPROVE_TOOL,
       kind: "approve_refused",
-      outcome: "rejected",
+      outcome: refusalOutcome(refusal),
       errorCode: refusal.code,
       preview: approvePreview(shown, existingId, refusal.message),
     });
@@ -108,7 +132,7 @@ function refuseApprove(ctx: AppContext, shown: string, existingId: string | null
  * `deskhand approve <id>`: the human-approval gate. Check order is fixed by
  * docs/ledger-contract.md ("Approve and reject refusals"): TTY on stdin AND
  * stdout (before anything is printed or read), exists, status, expiry, hash,
- * last-4 collision, typed confirmation. Then `planned -> approved` by CAS in
+ * stored plan valid (5b, INTERNAL), last-4 collision, typed confirmation. Then `planned -> approved` by CAS in
  * BEGIN IMMEDIATE, re-checking status, plan bytes, plan_hash and expiry in
  * the WHERE clause; the `approved` row is in the same transaction. Every
  * refusal writes `approve_refused` + `cli_command` and leaves the row as is.
@@ -131,6 +155,13 @@ export async function approveAction(ctx: AppContext, actionId: string, io: CliIo
   // 3-5. Status, expiry, hash.
   const state = stateRefusal(initial, ctx.clock().getTime(), shown);
   if (state) return refuseApprove(ctx, shown, initial.id, state);
+  // 5b. Fail closed on a stored plan we cannot render faithfully (unknown kind or invalid shape).
+  if (!storedPlanValid(initial.plan_json)) {
+    return refuseApprove(ctx, shown, initial.id, {
+      code: "INTERNAL",
+      message: `The stored plan for ${shown} has an unknown kind or is invalid; it was not approved.`,
+    });
+  }
   // 6. Defensive: another pending (planned or approved) id with the same last 4.
   const confirm = last4(initial.id);
   const twins = ctx.db
@@ -157,7 +188,7 @@ export async function approveAction(ctx: AppContext, actionId: string, io: CliIo
   } catch {
     typed = "";
   }
-  if (typed.trim().toUpperCase() !== confirm) {
+  if (asciiUpper(typed.trim()) !== confirm) {
     return refuseApprove(ctx, shown, initial.id, {
       code: "CONFIRMATION_MISMATCH",
       message: `The typed confirmation did not match the last 4 characters of ${shown}; nothing was approved.`,
