@@ -38,6 +38,12 @@ import {
   calendarListEventsOutputSchema,
 } from "./tools/calendar-list-events.js";
 import {
+  CALENDAR_PROPOSE_EVENT_DESCRIPTION,
+  calendarProposeEventHandler,
+  calendarProposeEventInputSchema,
+  calendarProposeEventOutputSchema,
+} from "./tools/calendar-propose-event.js";
+import {
   LEDGER_QUERY_DESCRIPTION,
   ledgerQueryHandler,
   ledgerQueryInputSchema,
@@ -131,6 +137,18 @@ export function createServer(deps: ServerDeps, opts: CreateServerOptions = {}): 
       annotations: { readOnlyHint: true },
     },
     (input) => track(() => calendarFindSlotsHandler(deps, input)),
+  );
+
+  // A plan tool: writes a ledger plan row, nothing in the calendar.
+  server.registerTool(
+    "calendar_propose_event",
+    {
+      description: CALENDAR_PROPOSE_EVENT_DESCRIPTION,
+      inputSchema: calendarProposeEventInputSchema,
+      outputSchema: calendarProposeEventOutputSchema,
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+    },
+    (input) => track(() => calendarProposeEventHandler(deps, input)),
   );
 
   // The only MCP tool that can cause a provider write (through the apply engine).

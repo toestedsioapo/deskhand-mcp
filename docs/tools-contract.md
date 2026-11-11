@@ -201,4 +201,47 @@ Errors: `INVALID_INPUT` for a bad `time_zone`, no usable own rules, or a Tempo e
 
 ## `calendar_propose_event`
 
-Written by the task that implements the tool (Task 7 of the M3a plan).
+Plans a new calendar event. It writes a plan row (`actions` status `planned`) in the ledger and nothing in the calendar: it never calls a provider write. A human must read the diff and approve with `deskhand approve <action_id>` (out of band, never an MCP tool); only then can `action_apply` create the event. Registered with `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: false` (each call creates a new plan). Needs a configured provider, else `PROVIDER_NOT_CONFIGURED` (tool_call outcome `rejected`).
+
+Input (strict):
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `title` | string, 1 to 200 characters | required | stored verbatim; the diff shows it flattened to one line |
+| `start` | ISO-8601 datetime, offset allowed | required | stored as UTC with milliseconds and `Z`; must be after the server clock |
+| `end` | ISO-8601 datetime, offset allowed | required | stored as UTC; must be after `start` |
+| `attendees` | email[], at most 50, each at most 254 characters | `[]` | the diff never truncates an address |
+| `send_updates` | `"none"` \| `"all"` \| `"externalOnly"` | `"none"` | whether attendees are emailed when the event is created |
+| `calendar_id` | string, 1 to 256 characters | `"primary"` | |
+| `time_zone` | IANA zone name | none | the event's own zone, stored in the plan and shown on an `event zone:` diff line when it differs from `Config.timeZone`. Offsets (`+01:00`), POSIX names and unknown names are `INVALID_INPUT` |
+| `rationale` | string, at most 500 characters | none | why the agent proposes it; stored in the plan |
+
+Output:
+
+```
+{
+  action_id: string,
+  plan_hash: string,       // 64 hex characters
+  expires_at: string,      // ISO-8601 UTC, plan creation time + Config.planTtlHours
+  diff: string[],          // what the approver will read, in Config.timeZone
+  next_step: string        // exactly "A human must run: deskhand approve <action_id>"
+}
+```
+
+The result sets `_meta.deskhand.action_id`, so the `tool_call` row carries the action id. Ledger rows on success: `plan_created`, then `tool_call`, both with the action id.
+
+Refused as `INVALID_INPUT` (no plan row): `end <= start`; `start` not after the server clock; a `time_zone` that is not an IANA name; an unknown extra field; a slot that overlaps a busy block in the calendar (`The slot is busy in calendar <id>; use calendar_find_slots.`, checked with `provider.freeBusy`; all-day events are not busy time). A provider failure while checking is `PROVIDER_ERROR`.
+
+The plan it stores (`plan_json`, hashed with the canonical JSON):
+
+```
+{ kind: "calendar.create_event", rationale?,
+  event: { title, start, end, attendees, sendUpdates, calendarId, timeZone? },
+  observed: { slotFree: true, etags: {} } }
+```
+
+`timeZone` is part of the plan hash (two plans differing only in zone have different hashes); the viewer zone is not. `action_apply` re-checks that the slot is still free and, if not, fails with `STALE_PLAN` without writing.
+
+Diff lines, in order: `create event: <title flattened to one line, at most 200 characters>`, `when: <range in Config.timeZone>`, `event zone: <range in the event zone>` (only when it differs), `utc: <start> to <end>`, `calendar: <id>`, `<N> attendees`, one `  <address>` line per attendee, then `will email <N> attendees` or `no attendee notifications (sendUpdates=none)`.
+
+The output schemas are snapshot-tested in `tests/tools.calendar-propose-event.test.ts`.

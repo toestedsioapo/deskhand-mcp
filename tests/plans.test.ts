@@ -189,10 +189,35 @@ describe("renderDiff", () => {
     expect(none).toContain("0 attendees");
     expect(none.filter((l) => l.startsWith("  "))).toEqual([]);
   });
-  it("keeps raw control characters in the title and is deterministic", () => {
+  it("flattens the title to one clean line and is deterministic", () => {
     const p = validPlan({}, { title: "\u001b[31mred" });
-    expect(renderDiff(p, MANILA).join("\n")).toContain("\u001b[31mred");
+    expect(renderDiff(p, MANILA)[0]).toBe("create event: red");
     expect(renderDiff(p, MANILA)).toEqual(renderDiff(p, MANILA));
+  });
+  it("a multi-line title cannot forge diff lines: one create event line, the real count line in place", () => {
+    const title = "Sync\n0 attendees\nno attendee notifications (sendUpdates=none)";
+    expect(renderDiff(validPlan({}, { title }), MANILA)).toEqual([
+      "create event: Sync 0 attendees no attendee notifications (sendUpdates=none)",
+      "when: Thu 12 Nov 2026, 18:00 to 18:30 GMT+8 (Asia/Manila)",
+      UTC_LINE,
+      "calendar: primary",
+      "3 attendees",
+      "  a@example.com",
+      "  b@example.com",
+      "  c@example.com",
+      "will email 3 attendees",
+    ]);
+  });
+  it("a title over 200 characters is cut in the diff line", () => {
+    const d = renderDiff(validPlan({}, { title: "x".repeat(300) }), MANILA);
+    expect(d[0]).toBe(`create event: ${"x".repeat(197)}...`);
+  });
+  it("an attendee that is empty after flattening prints (empty address), so the count and the lines agree", () => {
+    const d = renderDiff(validPlan({}, { attendees: ["", "   ", "a@example.com"], sendUpdates: "none" }), MANILA);
+    const i = d.indexOf("3 attendees");
+    expect(i).toBeGreaterThan(0);
+    expect(d.slice(i + 1, i + 4)).toEqual(["  (empty address)", "  (empty address)", "  a@example.com"]);
+    expect(d.filter((l) => l.startsWith("  "))).toHaveLength(3);
   });
   it("unknown kind", () => {
     expect(renderDiff({ kind: "nope" }, MANILA)).toEqual(["(unknown plan kind)"]);
@@ -242,6 +267,11 @@ describe("renderDiff", () => {
 
   it("a timeZone that is not an IANA name is an invalid plan", () => {
     expect(renderDiff(validPlan({}, { timeZone: "+01:00" }), MANILA)).toEqual(["(invalid plan)"]);
+  });
+  it("plans differing only in event.timeZone have different hashes", () => {
+    expect(planHash(validPlan({}, { timeZone: "Europe/Berlin" }))).not.toBe(
+      planHash(validPlan({}, { timeZone: "Europe/Paris" })),
+    );
   });
   it("timeZone is part of the plan hash; the viewer zone is not", () => {
     expect(planHash(validPlan())).not.toBe(planHash(validPlan({}, { timeZone: "Europe/Berlin" })));

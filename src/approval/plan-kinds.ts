@@ -9,9 +9,11 @@ export interface PlanKind<P> {
   kind: string;
   schema: z.ZodType<P>;
   /**
-   * Deterministic for a given plan and viewer zone; built only from validated plan fields. Titles and other
-   * fields are raw strings (terminal sanitising is CLI-side), except attendee lines, which are flattened here
-   * so an address can never start a forged diff line. `viewerTimeZone` is the reader's zone, never the plan's.
+   * Deterministic for a given plan and viewer zone; built only from validated plan fields. The title and each
+   * attendee are flattened to one line here, because the CLI splits every line on newlines and indents each piece
+   * alike, so a multi-line value could forge diff lines; the stored plan keeps them verbatim. An attendee that
+   * flattens to nothing prints `(empty address)`, so the count line and the visible lines agree.
+   * `viewerTimeZone` is the reader's zone, never the plan's.
    */
   renderDiff(plan: P, viewerTimeZone: string): string[];
   recheck(plan: P, provider: CalendarProvider): Promise<RecheckResult>;
@@ -54,12 +56,12 @@ export const calendarCreateEvent: PlanKind<CalendarCreateEventPlan> = {
   renderDiff(plan, viewerTimeZone) {
     const e = plan.event;
     const n = e.attendees.length;
-    const lines = [`create event: ${e.title}`, `when: ${formatLocalRange(e.start, e.end, viewerTimeZone)}`];
+    const lines = [`create event: ${oneLine(e.title, 200)}`, `when: ${formatLocalRange(e.start, e.end, viewerTimeZone)}`];
     if (e.timeZone !== undefined && e.timeZone !== viewerTimeZone) {
       lines.push(`event zone: ${formatLocalRange(e.start, e.end, e.timeZone)}`);
     }
     lines.push(`utc: ${e.start} to ${e.end}`, `calendar: ${e.calendarId}`, `${n} attendees`);
-    for (const a of e.attendees) lines.push(`  ${oneLine(a, 254)}`);
+    for (const a of e.attendees) lines.push(`  ${oneLine(a, 254) || "(empty address)"}`);
     lines.push(
       e.sendUpdates !== "none" && n > 0
         ? `will email ${n} attendees`

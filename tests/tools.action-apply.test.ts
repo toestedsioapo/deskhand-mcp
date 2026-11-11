@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { z } from "zod";
 import { getAction } from "../src/ledger/actions.js";
+import { approveAction } from "../src/approval/approve.js";
+import type { CliIo } from "../src/cli/io.js";
+import { last4 } from "../src/ledger/ids.js";
 import { idempotencyKey } from "../src/approval/apply.js";
 import { actionApplyInputSchema, actionApplyOutputSchema } from "../src/tools/action-apply.js";
 import { setupHarness } from "./helpers/harness.js";
@@ -172,5 +175,52 @@ describe("action_apply tool", () => {
     expect(getAction(hh.db, other)!.status).toBe("planned");
     expect(hh.provider.writes).toHaveLength(0);
     expect(hh.rows().filter((x) => !["plan_created", "tool_call"].includes(x.kind))).toEqual([]);
+  });
+});
+
+describe("calendar_propose_event -> approve -> action_apply (end to end)", () => {
+  const SLOT = { start: "2026-11-12T10:00:00.000Z", end: "2026-11-12T10:30:00.000Z" };
+  const RANGE = { start: "2026-11-12T00:00:00.000Z", end: "2026-11-13T00:00:00.000Z" };
+
+  function approvalIo(id: string): CliIo {
+    return {
+      out: () => undefined,
+      err: () => undefined,
+      stdinIsTTY: true,
+      stdoutIsTTY: true,
+      readLine: async () => last4(id),
+    };
+  }
+  async function proposeAndApprove(hh: H): Promise<string> {
+    const r = await hh.client.callTool({ name: "calendar_propose_event", arguments: { title: "Planning", ...SLOT, attendees: ["ana@example.com"] } });
+    expect(r.isError).toBeFalsy();
+    const id = (r.structuredContent as { action_id: string }).action_id;
+    expect(await approveAction(hh.ctx, id, approvalIo(id))).toEqual({ ok: true });
+    return id;
+  }
+
+  it("applies once, the event shows up in the calendar, a second apply is a replay", async () => {
+    const hh = await harness();
+    const id = await proposeAndApprove(hh);
+    expect(hh.provider.writes).toHaveLength(0);
+    const applied = await hh.client.callTool({ name: "action_apply", arguments: { action_id: id } });
+    expect(applied.structuredContent).toMatchObject({ action_id: id, status: "applied", replayed: false });
+    expect(hh.provider.writes).toHaveLength(1);
+    const { events } = await hh.provider.listEvents("primary", RANGE, 50);
+    expect(events.map((e) => e.title)).toEqual(["Planning"]);
+    const again = await hh.client.callTool({ name: "action_apply", arguments: { action_id: id } });
+    expect(again.structuredContent).toMatchObject({ replayed: true, status: "applied" });
+    expect(hh.provider.writes).toHaveLength(1);
+  });
+
+  it("a busy block added after approval -> STALE_PLAN and no write", async () => {
+    const hh = await harness();
+    const id = await proposeAndApprove(hh);
+    hh.provider.addBusy("primary", { start: "2026-11-12T10:10:00.000Z", end: "2026-11-12T10:20:00.000Z" });
+    const r = await hh.client.callTool({ name: "action_apply", arguments: { action_id: id } });
+    expect(r.isError).toBe(true);
+    expect(deskhandMeta(r)).toEqual({ error_code: "STALE_PLAN", action_id: id });
+    expect(hh.provider.writes).toHaveLength(0);
+    expect(getAction(hh.db, id)!.status).toBe("failed");
   });
 });
