@@ -115,6 +115,14 @@ describe("safety structure", () => {
     expect(offenders).toEqual([]);
   });
 
+  it("only src/tempo/ imports @marvinliem/tempo-core (ADR 0006)", () => {
+    const importers = FILES.filter((f) => importSpecifiers(f.text).some((s) => s.includes("@marvinliem/tempo-core")))
+      .map((f) => f.path)
+      .sort();
+    expect(importers.length).toBeGreaterThan(0);
+    expect(importers.filter((p) => !p.startsWith("src/tempo/"))).toEqual([]);
+  });
+
   it("os.userInfo is used only by src/config/actor.ts (resolveActor has the fallback)", () => {
     expect(matching(/\buserInfo\b/)).toEqual(["src/config/actor.ts"]);
   });
