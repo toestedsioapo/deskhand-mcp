@@ -253,9 +253,9 @@ const applyRequest = (id: number, actionId: string) => ({
  * call waits 300 ms; writes go to writes.jsonl). The DB is closed before the
  * bin is spawned.
  */
-function seedSlowApproved(home: ReturnType<typeof makeTempHome>) {
+function seedSlowApproved(home: ReturnType<typeof makeTempHome>, latencyMs = 300) {
   const fixture = join(home.home, "world.json");
-  writeFileSync(fixture, JSON.stringify(makeWorld({ settings: { latency_ms: 300, write_log: "writes.jsonl" } })));
+  writeFileSync(fixture, JSON.stringify(makeWorld({ settings: { latency_ms: latencyMs, write_log: "writes.jsonl" } })));
   const db = LedgerDb.open(join(home.home, "ledger.db"));
   let id: string;
   try {
@@ -378,6 +378,42 @@ describe("stdio server shuts down gracefully on stdin close", () => {
           .map((e) => `${e.kind}:${e.outcome}`);
         expect(rows).toEqual(["plan_created:ok", "applied:ok", "tool_call:ok"]);
       });
+    } finally {
+      home.cleanup();
+    }
+  });
+
+  it("DESKHAND_SHUTDOWN_TIMEOUT_MS caps the drain: a 1500 ms provider call under a 1000 ms cap exits 1 with one line", async () => {
+    const home = makeTempHome();
+    try {
+      const seed = seedSlowApproved(home, 1500);
+      const s = rawSession({ ...seed.env, DESKHAND_SHUTDOWN_TIMEOUT_MS: "1000" });
+      s.send(INITIALIZE);
+      await s.waitFor(1);
+      s.send(INITIALIZED);
+      s.send(applyRequest(2, seed.id));
+      await new Promise((r) => setTimeout(r, 100)); // the handler is now inside the first slow provider call
+      const t0 = Date.now();
+      s.child.stdin.end();
+      const [code] = await s.closed;
+
+      expect(code).toBe(1);
+      expect(s.stderr()).toBe("deskhand-mcp: shutdown timed out after 1000 ms waiting for in-flight tool calls\n");
+      expect(Date.now() - t0).toBeLessThan(5000);
+      expect(seed.writeLines()).toHaveLength(0);
+    } finally {
+      home.cleanup();
+    }
+  });
+
+  it("exits 1 with one line when DESKHAND_SHUTDOWN_TIMEOUT_MS is invalid", () => {
+    const home = makeTempHome();
+    try {
+      const r = runServerBin({ ...home.env, DESKHAND_SHUTDOWN_TIMEOUT_MS: "10s" });
+      expect(r.status).toBe(1);
+      expect(r.stdout).toBe("");
+      expect(r.stderr).toMatch(/^deskhand-mcp: DESKHAND_SHUTDOWN_TIMEOUT_MS must be/);
+      expect(r.stderr.trimEnd().split("\n")).toHaveLength(1);
     } finally {
       home.cleanup();
     }

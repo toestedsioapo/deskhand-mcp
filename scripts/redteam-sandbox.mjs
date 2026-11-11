@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Red-team sandbox for Deskhand M2b. Run after `pnpm build`.
+// Red-team sandbox for Deskhand (M2b, plan shape updated in M3a). Run after `pnpm build`.
 // Creates a throwaway DESKHAND_HOME with a fixture world (settings.write_log) and five
 // seeded actions, then prints ONE JSON object on stdout and nothing else.
 // Uses only the built dist/ modules (no devDependencies, nothing from tests/).
@@ -58,7 +58,9 @@ const { createAppContext } = await import(dist("composition.js"));
 const { createPlan } = await import(dist("approval/plans.js"));
 const { rejectAction } = await import(dist("approval/approve.js"));
 
-function plan(title, day) {
+// `zone` gives the M3a plan shape (event.timeZone plus a third attendee) so the
+// approve diff shows the `event zone:` line and every address.
+function plan(title, day, zone) {
   return {
     kind: "calendar.create_event",
     rationale: `Red-team sandbox plan ${title}`,
@@ -66,9 +68,10 @@ function plan(title, day) {
       title,
       start: `2026-11-${day}T10:00:00.000Z`,
       end: `2026-11-${day}T10:30:00.000Z`,
-      attendees: ["a@example.com", "b@example.com"],
+      attendees: zone ? ["a@example.com", "b@example.com", "c@example.com"] : ["a@example.com", "b@example.com"],
       sendUpdates: "all",
       calendarId: "primary",
+      ...(zone ? { timeZone: zone } : {}),
     },
     observed: { slotFree: true, etags: { evt_standup: "e1" } },
   };
@@ -77,10 +80,10 @@ function plan(title, day) {
 const ctx = createAppContext(env);
 const actions = {};
 try {
-  const make = (title, day) =>
-    createPlan(ctx, { tool: "calendar_propose_event", input: { title }, plan: plan(title, day) });
+  const make = (title, day, zone) =>
+    createPlan(ctx, { tool: "calendar_propose_event", input: { title }, plan: plan(title, day, zone) });
 
-  actions.P1 = make("P1 planned", "12").actionId;
+  actions.P1 = make("P1 planned", "12", "Europe/Berlin").actionId;
 
   actions.P2 = make("P2 rejected", "13").actionId;
   const rej = rejectAction(ctx, actions.P2, "sandbox seed", "cli_no_tty");

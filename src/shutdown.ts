@@ -6,13 +6,13 @@ export interface StdinShutdownOptions {
   transport: { whenIdle(): Promise<void> };
   closeDb: () => void;
   exit: (code: number) => void;
-  /** Upper bound on the drain; default 10 000 ms. */
+  /** Upper bound on the drain; default 30 000 ms. The server passes `Config.shutdownTimeoutMs`. */
   timeoutMs?: number;
   /** One line per failure; defaults to process.stderr. */
   log?: (s: string) => void;
 }
 
-const DEFAULT_TIMEOUT_MS = 10_000;
+export const DEFAULT_TIMEOUT_MS = 30_000;
 
 const oneLine = (e: unknown): string => (e instanceof Error ? e.message : String(e)).replace(/\s+/g, " ").trim();
 

@@ -160,6 +160,27 @@ describe("loadConfig", () => {
   });
 });
 
+describe("loadConfig shutdownTimeoutMs", () => {
+  const base = { DESKHAND_HOME: "/x/h" };
+
+  it("defaults to 30000", () => {
+    expect(loadConfig(base).shutdownTimeoutMs).toBe(30000);
+  });
+
+  it("accepts integers from 1000 to 120000", () => {
+    for (const v of ["1000", "30000", "120000"]) {
+      expect(loadConfig({ ...base, DESKHAND_SHUTDOWN_TIMEOUT_MS: v }).shutdownTimeoutMs).toBe(Number(v));
+    }
+  });
+
+  it("rejects anything else, naming the variable", () => {
+    for (const v of ["999", "120001", "10s", "", "0", "1000.5", " 5000", "5000 ", "1e4", "+5000", "-5000", "05000", "5000\n"]) {
+      expect(() => loadConfig({ ...base, DESKHAND_SHUTDOWN_TIMEOUT_MS: v }), v).toThrow(ConfigError);
+      expect(() => loadConfig({ ...base, DESKHAND_SHUTDOWN_TIMEOUT_MS: v }), v).toThrow(/DESKHAND_SHUTDOWN_TIMEOUT_MS/);
+    }
+  });
+});
+
 describe("ensureDirs", () => {
   it("creates nested dirs, mode 0700 on POSIX", () => {
     const root = mkdtempSync(join(tmpdir(), "deskhand-dirs-"));

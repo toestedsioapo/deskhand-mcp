@@ -4,7 +4,7 @@ Deskhand is an MCP server that gives AI clients executive-assistant tools (calen
 
 ## Current phase
 
-**M1 (PR #2) and M2 (M2a PR #3, M2b PR #4) are done and merged to main.** M2 delivered the SQLite audit ledger, the `LoggingTransport`, `ledger_query` / `action_explain`, the plan store, the apply engine and `action_apply`, the fixture provider, CLI `pending` / `reject` / `approve`, graceful shutdown and the red-team review. **M3 (Calendar) is in PLANNING on `docs/m3-plan`: plans written, awaiting owner review. No M3 code until the owner says "go".** M3 is split in two: M3a (calendar tools on the fixture provider, explicit provider selection, Tempo adapter, local-time diff) in `docs/superpowers/plans/2026-11-11-m3a-calendar-fixture.md`, and M3b (Google Calendar adapter, `deskhand auth`) in `docs/superpowers/plans/2026-11-11-m3b-google-auth.md`. The owner's Google Cloud setup guide is `docs/google-oauth-setup.md`. Planning docs are in `docs/` (SPEC, ARCHITECTURE, ADRs 0001-0007, SECURITY, TEST_PLAN, ROADMAP, ASSUMPTIONS). Tempo v0.1.0 is released (`@marvinliem/tempo-core@0.1.0` and `@marvinliem/tempo@0.1.0` on npm, 2026-11-06).
+**M1 (PR #2) and M2 (M2a PR #3, M2b PR #4) are done and merged to main.** M2 delivered the SQLite audit ledger, the `LoggingTransport`, `ledger_query` / `action_explain`, the plan store, the apply engine and `action_apply`, the fixture provider, CLI `pending` / `reject` / `approve`, graceful shutdown and the red-team review. **M3 (Calendar) is split in two. M3a is implemented on `feat/m3a-calendar` with its PR open (not merged): awaiting the owner's manual `pending`/`approve` check and merge.** M3a delivered explicit provider selection (`DESKHAND_PROVIDER`, ADR 0008, `PROVIDER_NOT_CONFIGURED`, ledger schema v3), `CalendarProvider.listEvents` with all-day events, the Tempo adapter and its contract test, `calendar_list_events` / `calendar_find_slots` / `calendar_propose_event` on the fixture provider, the approve diff in the viewer's time zone with every attendee, and the configurable shutdown drain cap (default 30 s). Plan: `docs/superpowers/plans/2026-11-11-m3a-calendar-fixture.md`. **M3b (Google Calendar adapter, `deskhand auth`) is planned in `docs/superpowers/plans/2026-11-11-m3b-google-auth.md` and not started: no M3b code until the owner says "go".** The owner's Google Cloud setup guide is `docs/google-oauth-setup.md`. Planning docs are in `docs/` (SPEC, ARCHITECTURE, ADRs 0001-0008, SECURITY, TEST_PLAN, ROADMAP, ASSUMPTIONS). Tempo v0.1.0 is released (`@marvinliem/tempo-core@0.1.0` and `@marvinliem/tempo@0.1.0` on npm, 2026-11-06).
 
 ## Project Guidelines
 
@@ -40,7 +40,7 @@ docs/tools.md        GENERATED from schemas — never hand-edit
 pnpm install
 pnpm build
 pnpm gen:docs                  # schemas -> docs/tools.md (from M5)
-pnpm dev                       # run the built server over stdio (fixture provider from M2)
+pnpm dev                       # run the built server over stdio (set DESKHAND_PROVIDER=fixture for the fixture provider)
 ```
 
 ## CLI commands (`deskhand`)

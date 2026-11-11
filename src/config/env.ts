@@ -13,6 +13,8 @@ export interface Config {
   timeZone: string;
   /** The caller's working-hours rules file: `DESKHAND_RULES`, else `<configDir>/rules.json`. */
   rulesPath: string;
+  /** Upper bound on the shutdown drain: `DESKHAND_SHUTDOWN_TIMEOUT_MS` (1000 to 120000), else 30000. */
+  shutdownTimeoutMs: number;
   paths: DataPaths;
 }
 
@@ -34,6 +36,17 @@ function parseTtl(raw: string | undefined): number {
   const n = Number(raw);
   if (n < 1 || n > 168) {
     throw new ConfigError(`DESKHAND_PLAN_TTL_HOURS must be an integer from 1 to 168, got "${raw}"`);
+  }
+  return n;
+}
+
+const DEFAULT_SHUTDOWN_TIMEOUT_MS = 30_000;
+
+function parseShutdownTimeout(raw: string | undefined): number {
+  if (raw === undefined) return DEFAULT_SHUTDOWN_TIMEOUT_MS;
+  const n = /^[1-9]\d*$/.test(raw) ? Number(raw) : NaN;
+  if (!(n >= 1000 && n <= 120_000)) {
+    throw new ConfigError(`DESKHAND_SHUTDOWN_TIMEOUT_MS must be an integer from 1000 to 120000, got "${raw}"`);
   }
   return n;
 }
@@ -71,6 +84,7 @@ export function loadConfig(
     fixturePath,
     timeZone: parseTimeZone(env["DESKHAND_TIMEZONE"]),
     rulesPath: env["DESKHAND_RULES"] || join(paths.configDir, "rules.json"),
+    shutdownTimeoutMs: parseShutdownTimeout(env["DESKHAND_SHUTDOWN_TIMEOUT_MS"]),
     paths,
   };
 }

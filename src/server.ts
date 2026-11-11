@@ -193,6 +193,7 @@ export async function main(): Promise<void> {
     transport,
     closeDb: () => db.close(),
     exit: (code) => stdout.flushThenExit(code),
+    timeoutMs: config.shutdownTimeoutMs,
   });
   await server.connect(transport);
 }

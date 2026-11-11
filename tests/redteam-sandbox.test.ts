@@ -72,6 +72,11 @@ describe("redteam sandbox script", () => {
       expect(planHash(JSON.parse(String(p5["plan_json"])))).not.toBe(p5["plan_hash"]);
       expect(planHash(JSON.parse(String(row(a.P1)["plan_json"])))).toBe(row(a.P1)["plan_hash"]);
       expect(new Set(Object.values(a)).size).toBe(5);
+      // P1 uses the M3a plan shape: an event zone and three attendees, so `deskhand pending`
+      // shows the `event zone:` line and every address.
+      const p1 = JSON.parse(String(row(a.P1)["plan_json"])) as { event: { timeZone?: string; attendees: string[] } };
+      expect(p1.event.timeZone).toBe("Europe/Berlin");
+      expect(p1.event.attendees).toHaveLength(3);
     } finally {
       db.close();
     }

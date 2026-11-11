@@ -8,6 +8,8 @@ The AI client and anything it reads (email, calendar text) are **untrusted**. Th
 
 - Read-only by default. Writes need `DESKHAND_ALLOW_WRITES=1`.
 - Only `action_apply` has side effects, and only for plans that are unexpired, approved by a human via the CLI, unmodified since approval (hash), unapplied, and still valid against the real world (re-check).
+- No provider, no writes: the provider is chosen explicitly with `DESKHAND_PROVIDER` (ADR 0008). With none configured, the calendar tools and `action_apply` refuse with `PROVIDER_NOT_CONFIGURED`, so nothing is ever recorded as `applied` against a world that was wired implicitly.
+- The diff a human approves shows the time in the viewer's own zone (`DESKHAND_TIMEZONE`, else the system zone), never in a zone the agent chose, and lists every attendee.
 - Approval is not reachable through MCP.
 - Every tool call, including failures and rejections, is recorded in an append-only ledger.
 - Mailbox/calendar content is returned wrapped as untrusted data; Deskhand never acts on instructions inside it.
