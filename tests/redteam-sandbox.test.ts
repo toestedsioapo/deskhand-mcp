@@ -43,7 +43,13 @@ describe("redteam sandbox script", () => {
   it("seeds P1..P5 in the expected states, with an empty write log", () => {
     const { sb } = runSandbox();
     expect(sb.env["DESKHAND_ALLOW_WRITES"]).toBe("1");
-    expect(Object.keys(sb.env).sort()).toEqual(["DESKHAND_ALLOW_WRITES", "DESKHAND_FIXTURE", "DESKHAND_HOME"]);
+    expect(Object.keys(sb.env).sort()).toEqual([
+      "DESKHAND_ALLOW_WRITES",
+      "DESKHAND_FIXTURE",
+      "DESKHAND_HOME",
+      "DESKHAND_PROVIDER",
+    ]);
+    expect(sb.env["DESKHAND_PROVIDER"]).toBe("fixture");
     expect(sb.env["DESKHAND_HOME"]).toBe(sb.home);
     expect(existsSync(sb.writeLog)).toBe(true);
     expect(statSync(sb.writeLog).size).toBe(0);

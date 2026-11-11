@@ -10,7 +10,8 @@ import { assertSupportedNode } from "./config/node-check.js";
 import { ensureDirs } from "./config/paths.js";
 import { PACKAGE_VERSION } from "./config/version.js";
 import { LedgerDb } from "./ledger/db.js";
-import { createIdGenerator, type Clock } from "./ledger/ids.js";
+import { selectProvider } from "./composition.js";
+import { createIdGenerator } from "./ledger/ids.js";
 import { LoggingTransport } from "./ledger/logging-transport.js";
 import {
   ACTION_APPLY_DESCRIPTION,
@@ -36,7 +37,6 @@ import {
   pingInputSchema,
   pingOutputSchema,
 } from "./tools/ping.js";
-import { createFixtureProvider, loadFixtureWorld } from "./providers/fixture/index.js";
 import { createClientStdout, installStdinShutdown } from "./shutdown.js";
 import { toolOk } from "./tools/result.js";
 
@@ -120,12 +120,10 @@ export async function main(): Promise<void> {
   // below prints one line and exits 1); no tool ever runs without a ledger.
   const config = loadConfig(process.env);
   ensureDirs(config.paths);
-  // A bad fixture file is a startup config error too (loadFixtureWorld throws ConfigError).
-  const world = loadFixtureWorld(config.fixturePath);
+  // A bad fixture file is a startup config error too (selectProvider throws ConfigError).
+  // With no DESKHAND_PROVIDER there is no provider (ADR 0008): the server still starts.
+  const { provider, clock } = selectProvider(config);
   const db = LedgerDb.open(config.paths.ledgerPath, { busyTimeoutMs: config.busyTimeoutMs });
-  // With a fixture loaded, time is the fixture's fixed `now`; otherwise real time.
-  const clock: Clock = config.fixturePath ? () => new Date(world.now) : () => new Date();
-  const provider = createFixtureProvider(world);
   const ids = createIdGenerator();
   // The client usually closes both pipes when it exits, so a response can hit a
   // dead stdout (EPIPE): the guard drops it silently instead of crashing.

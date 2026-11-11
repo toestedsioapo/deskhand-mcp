@@ -4,6 +4,8 @@ export interface Config {
   writesEnabled: boolean;
   planTtlHours: number;
   busyTimeoutMs: number;
+  /** Explicit provider choice (ADR 0008). null: none configured. M3b widens this to add "google". */
+  provider: "fixture" | null;
   fixturePath: string | undefined;
   paths: DataPaths;
 }
@@ -30,16 +32,28 @@ function parseTtl(raw: string | undefined): number {
   return n;
 }
 
+function parseProvider(raw: string | undefined): "fixture" | null {
+  if (raw === undefined) return null;
+  if (raw === "fixture") return "fixture";
+  throw new ConfigError(`DESKHAND_PROVIDER must be "fixture" (or unset for no provider), got "${raw}"`);
+}
+
 export function loadConfig(
   env: NodeJS.ProcessEnv,
   platform?: NodeJS.Platform,
   homedir?: string,
 ): Config {
+  const provider = parseProvider(env["DESKHAND_PROVIDER"]);
+  const fixturePath = env["DESKHAND_FIXTURE"] || undefined;
+  if (fixturePath !== undefined && provider !== "fixture") {
+    throw new ConfigError("DESKHAND_FIXTURE is set but no provider is selected; set DESKHAND_PROVIDER=fixture to use it");
+  }
   return {
     writesEnabled: env["DESKHAND_ALLOW_WRITES"] === "1",
     planTtlHours: parseTtl(env["DESKHAND_PLAN_TTL_HOURS"]),
     busyTimeoutMs: BUSY_TIMEOUT_MS,
-    fixturePath: env["DESKHAND_FIXTURE"] || undefined,
+    provider,
+    fixturePath,
     paths: resolvePaths(env, platform, homedir),
   };
 }

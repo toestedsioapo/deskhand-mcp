@@ -131,8 +131,32 @@ describe("loadConfig", () => {
   });
 
   it("fixture path maps from DESKHAND_FIXTURE, empty is undefined", () => {
-    expect(loadConfig({ ...base, DESKHAND_FIXTURE: "/f.json" }).fixturePath).toBe("/f.json");
-    expect(loadConfig({ ...base, DESKHAND_FIXTURE: "" }).fixturePath).toBeUndefined();
+    const fx = { ...base, DESKHAND_PROVIDER: "fixture" };
+    expect(loadConfig({ ...fx, DESKHAND_FIXTURE: "/f.json" }).fixturePath).toBe("/f.json");
+    expect(loadConfig({ ...fx, DESKHAND_FIXTURE: "" }).fixturePath).toBeUndefined();
+  });
+
+  it("DESKHAND_PROVIDER unset is no provider; fixture is the only accepted value", () => {
+    expect(loadConfig(base).provider).toBeNull();
+    expect(loadConfig({ ...base, DESKHAND_PROVIDER: "fixture" }).provider).toBe("fixture");
+  });
+
+  it('DESKHAND_PROVIDER rejects every other value, naming the variable', () => {
+    for (const v of ["Fixture", "google", "", "none"]) {
+      expect(() => loadConfig({ ...base, DESKHAND_PROVIDER: v })).toThrow(ConfigError);
+      expect(() => loadConfig({ ...base, DESKHAND_PROVIDER: v })).toThrow(/DESKHAND_PROVIDER must be "fixture"/);
+    }
+  });
+
+  it("DESKHAND_FIXTURE without DESKHAND_PROVIDER=fixture is a startup error", () => {
+    expect(() => loadConfig({ ...base, DESKHAND_FIXTURE: "/x.json" })).toThrow(ConfigError);
+    expect(() => loadConfig({ ...base, DESKHAND_FIXTURE: "/x.json" })).toThrow(/set DESKHAND_PROVIDER=fixture/);
+  });
+
+  it("DESKHAND_PROVIDER=fixture without DESKHAND_FIXTURE is allowed (empty world)", () => {
+    const c = loadConfig({ ...base, DESKHAND_PROVIDER: "fixture" });
+    expect(c.provider).toBe("fixture");
+    expect(c.fixturePath).toBeUndefined();
   });
 });
 

@@ -5,7 +5,7 @@ Status: written in M2a. The fixture world is the fake calendar/mail universe loa
 ## Loading
 
 - JSON only. UTF-8, no comments.
-- `DESKHAND_FIXTURE` is the path to the file. Unset means an empty world (no calendars, clock at the real current time).
+- `DESKHAND_FIXTURE` is the path to the file. Requires `DESKHAND_PROVIDER=fixture` (ADR 0008). Unset (with the provider set to `fixture`) means an empty world (no calendars, clock at the real current time).
 - The loader rejects: a missing or non-`1` `fixture_version`, unknown top-level keys, unknown keys inside `settings`, duplicate event ids within a calendar. Extra keys are errors in v1 so that later additions (mail threads, per-person rule sets) force a `fixture_version` bump.
 
 ## Shape

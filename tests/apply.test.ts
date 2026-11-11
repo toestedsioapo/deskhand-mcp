@@ -117,6 +117,35 @@ describe("writes disabled", () => {
   });
 });
 
+describe("no provider configured", () => {
+  it("writes on, approved plan, provider null -> PROVIDER_NOT_CONFIGURED: one rejected apply_refused row, status approved", async () => {
+    const id = seedAction(ctx, "approved");
+    const none = makeCtx({ provider: null });
+    expect(none.config.writesEnabled).toBe(true);
+    const r = await applyAction(none, id);
+    expect(r).toMatchObject({ ok: false, errorCode: "PROVIDER_NOT_CONFIGURED" });
+    expect(status(id)).toBe("approved");
+    const refused = events(id).filter((e) => e.kind === "apply_refused");
+    expect(refused).toEqual([
+      expect.objectContaining({ outcome: "rejected", error_code: "PROVIDER_NOT_CONFIGURED", tool: "action_apply" }),
+    ]);
+    expect(provider.writes).toHaveLength(0);
+  });
+
+  it("is also refused for an unknown id, with action_id NULL on the row", async () => {
+    const r = await applyAction(makeCtx({ provider: null }), "act_DOESNOTEXIST0000000000000");
+    expect(r).toMatchObject({ ok: false, errorCode: "PROVIDER_NOT_CONFIGURED" });
+    expect(queryEvents(db, { limit: 10 })[0]).toMatchObject({ kind: "apply_refused", outcome: "rejected", action_id: null });
+  });
+
+  it("with writes off as well, WRITES_DISABLED answers first", async () => {
+    const id = seedAction(ctx, "approved");
+    const r = await applyAction(makeCtx({ provider: null }, {}), id);
+    expect(r).toMatchObject({ ok: false, errorCode: "WRITES_DISABLED" });
+    expect(status(id)).toBe("approved");
+  });
+});
+
 describe("unknown id", () => {
   it("-> UNKNOWN_ACTION, apply_refused row with action_id NULL and the id in the preview", async () => {
     const r = await applyAction(ctx, "act_DOESNOTEXIST0000000000000");

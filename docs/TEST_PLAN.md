@@ -64,13 +64,14 @@ Task numbers refer to `docs/superpowers/plans/2026-11-09-m2b-approval.md` (T2 pl
 The real TTY path has no automated test (no native modules, no pty). Once per release candidate, in a real terminal:
 
 1. `pnpm build`, then `pnpm redteam:sandbox`; copy `home`, `env` and the `P1` id from its JSON.
-2. Set the sandbox env in that terminal, taking the names and values from the JSON `env` (`DESKHAND_HOME`, `DESKHAND_FIXTURE`, `DESKHAND_ALLOW_WRITES`). PowerShell:
+2. Set the sandbox env in that terminal, taking the names and values from the JSON `env` (`DESKHAND_HOME`, `DESKHAND_FIXTURE`, `DESKHAND_ALLOW_WRITES`, `DESKHAND_PROVIDER`). PowerShell:
    ```powershell
    $env:DESKHAND_HOME = '<env.DESKHAND_HOME>'
    $env:DESKHAND_FIXTURE = '<env.DESKHAND_FIXTURE>'
    $env:DESKHAND_ALLOW_WRITES = '1'
+   $env:DESKHAND_PROVIDER = 'fixture'
    ```
-   POSIX shells: `export DESKHAND_HOME='<...>' DESKHAND_FIXTURE='<...>' DESKHAND_ALLOW_WRITES=1`.
+   POSIX shells: `export DESKHAND_HOME='<...>' DESKHAND_FIXTURE='<...>' DESKHAND_ALLOW_WRITES=1 DESKHAND_PROVIDER=fixture`.
 3. Refusal: `echo x | node dist/cli.js approve <P1>` must exit non-zero with a not-a-TTY message and leave P1 `planned`.
 4. Approval: `node dist/cli.js approve <P1>` shows the diff and asks for the last 4 characters of the id; a wrong answer is refused, the right one approves.
 5. Then `action_apply` on P1 (Inspector CLI or any MCP client) writes exactly one line to the sandbox `writes.jsonl`; a second call is a replay with no second line.

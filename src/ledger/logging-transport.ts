@@ -27,6 +27,7 @@ interface PendingCall {
 /** `tools/call` outcome mapping (docs/ledger-contract.md, "Row sequences"). */
 const GATE_REFUSALS: ReadonlySet<ErrorCode> = new Set<ErrorCode>([
   "WRITES_DISABLED",
+  "PROVIDER_NOT_CONFIGURED",
   "UNKNOWN_ACTION",
   "PLAN_EXPIRED",
   "NOT_APPROVED",

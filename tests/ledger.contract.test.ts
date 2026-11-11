@@ -19,7 +19,7 @@ function valueSets(): Record<string, string[]> {
   return out;
 }
 
-function ddlBlock(version: 1 | 2 = 1): string {
+function ddlBlock(version: 1 | 2 | 3 = 1): string {
   const section = (doc.split(`## DDL v${version}`)[1] ?? "").split("\n## ")[0] ?? "";
   return /```sql\n([\s\S]*?)```/.exec(section)?.[1] ?? "";
 }
@@ -74,14 +74,22 @@ describe("contract doc and code agree", () => {
     expect(norm(sql.join("\n"))).toBe(norm(ddlBlock(2)));
   });
 
-  it("schema version is 2 and has one migration per version", () => {
-    expect(contract.LEDGER_SCHEMA_VERSION).toBe(2);
-    expect(MIGRATIONS.map((m) => m.version)).toEqual([1, 2]);
+  it("migration 3 DDL is textually equivalent to the doc's DDL v3 block", () => {
+    const sql: string[] = [];
+    MIGRATIONS[2]!.up({ exec: (s: string) => void sql.push(s) } as unknown as LedgerDb);
+    expect(norm(sql.join("\n"))).toBe(norm(ddlBlock(3)));
   });
 
-  it("UNTRUSTED_RUNTIME is the only error code added in v2", () => {
+  it("schema version is 3 and has one migration per version", () => {
+    expect(contract.LEDGER_SCHEMA_VERSION).toBe(3);
+    expect(MIGRATIONS.map((m) => m.version)).toEqual([1, 2, 3]);
+  });
+
+  it("UNTRUSTED_RUNTIME is the only error code added in v2; PROVIDER_NOT_CONFIGURED and NOT_FOUND in v3, in that order", () => {
     const v1: readonly string[] = contract.ERROR_CODES_V1;
-    expect(contract.ERROR_CODES.filter((c) => !v1.includes(c))).toEqual(["UNTRUSTED_RUNTIME"]);
+    expect(contract.ERROR_CODES_V2.filter((c) => !v1.includes(c))).toEqual(["UNTRUSTED_RUNTIME"]);
+    const v2: readonly string[] = contract.ERROR_CODES_V2;
+    expect(contract.ERROR_CODES.filter((c) => !v2.includes(c))).toEqual(["PROVIDER_NOT_CONFIGURED", "NOT_FOUND"]);
   });
 });
 

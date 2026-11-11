@@ -62,6 +62,54 @@ describe("stdio server (built bin)", () => {
   });
 });
 
+describe("stdio server with no provider configured", () => {
+  it("starts, answers ping, and refuses action_apply with PROVIDER_NOT_CONFIGURED (rejected row)", async () => {
+    const home = makeTempHome();
+    try {
+      const { client, stderr, close } = await spawnBin({ ...home.env, DESKHAND_ALLOW_WRITES: "1" });
+      try {
+        const ok = await client.callTool({ name: "ping" });
+        expect(ok.structuredContent).toEqual(expected);
+        const r = await client.callTool({ name: "action_apply", arguments: { action_id: "act_01JC3Z8K4V7Q2W9X5R6T1N0BHM" } });
+        expect(r.isError).toBe(true);
+        const meta = r._meta as { deskhand?: { error_code?: string } } | undefined;
+        expect(meta?.deskhand?.error_code).toBe("PROVIDER_NOT_CONFIGURED");
+      } finally {
+        await close();
+      }
+      expect(stderr()).toBe("");
+      const db = LedgerDb.open(join(home.home, "ledger.db"));
+      try {
+        const rows = db.all<{ tool: string; kind: string; outcome: string; error_code: string | null }>(
+          "SELECT tool, kind, outcome, error_code FROM events ORDER BY id",
+        );
+        expect(rows).toEqual([
+          { tool: "ping", kind: "tool_call", outcome: "ok", error_code: null },
+          { tool: "action_apply", kind: "apply_refused", outcome: "rejected", error_code: "PROVIDER_NOT_CONFIGURED" },
+          { tool: "action_apply", kind: "tool_call", outcome: "rejected", error_code: "PROVIDER_NOT_CONFIGURED" },
+        ]);
+      } finally {
+        db.close();
+      }
+    } finally {
+      home.cleanup();
+    }
+  });
+
+  it("exits 1 with one line when DESKHAND_FIXTURE is set without DESKHAND_PROVIDER=fixture", () => {
+    const home = makeTempHome();
+    try {
+      const r = runServerBin({ ...home.env, DESKHAND_FIXTURE: join(home.home, "world.json") });
+      expect(r.status).toBe(1);
+      expect(r.stdout).toBe("");
+      expect(r.stderr).toContain("set DESKHAND_PROVIDER=fixture");
+      expectOneLineStartupError(r.stderr);
+    } finally {
+      home.cleanup();
+    }
+  });
+});
+
 describe("stdio server ledger", () => {
   it("writes one tool_call row for a ping, with empty stderr", async () => {
     const home = makeTempHome();
@@ -225,7 +273,7 @@ function seedSlowApproved(home: ReturnType<typeof makeTempHome>) {
   }
   return {
     id,
-    env: { ...home.env, DESKHAND_FIXTURE: fixture, DESKHAND_ALLOW_WRITES: "1" },
+    env: { ...home.env, DESKHAND_PROVIDER: "fixture", DESKHAND_FIXTURE: fixture, DESKHAND_ALLOW_WRITES: "1" },
     writeLines: (): string[] => {
       const path = join(home.home, "writes.jsonl");
       return existsSync(path) ? readFileSync(path, "utf8").split("\n").filter((l) => l !== "") : [];

@@ -51,6 +51,7 @@ const env = {
   DESKHAND_HOME: home,
   DESKHAND_FIXTURE: fixturePath,
   DESKHAND_ALLOW_WRITES: "1",
+  DESKHAND_PROVIDER: "fixture",
 };
 
 const { createAppContext } = await import(dist("composition.js"));
