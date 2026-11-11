@@ -1,0 +1,138 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`calendar_list_events schemas > input schema is stable 1`] = `
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "calendar_id": {
+      "default": "primary",
+      "maxLength": 256,
+      "minLength": 1,
+      "type": "string",
+    },
+    "limit": {
+      "default": 50,
+      "maximum": 250,
+      "minimum": 1,
+      "type": "integer",
+    },
+    "time_max": {
+      "format": "date-time",
+      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+      "type": "string",
+    },
+    "time_min": {
+      "format": "date-time",
+      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+      "type": "string",
+    },
+  },
+  "required": [
+    "calendar_id",
+    "time_min",
+    "time_max",
+    "limit",
+  ],
+  "type": "object",
+}
+`;
+
+exports[`calendar_list_events schemas > output schema is stable 1`] = `
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "calendar_id": {
+      "type": "string",
+    },
+    "events": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "all_day": {
+            "type": "boolean",
+          },
+          "attendees": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "content": {
+                  "type": "string",
+                },
+                "source": {
+                  "type": "string",
+                },
+                "untrusted": {
+                  "const": true,
+                  "type": "boolean",
+                },
+              },
+              "required": [
+                "untrusted",
+                "source",
+                "content",
+              ],
+              "type": "object",
+            },
+            "type": "array",
+          },
+          "end": {
+            "type": "string",
+          },
+          "etag": {
+            "type": "string",
+          },
+          "id": {
+            "type": "string",
+          },
+          "start": {
+            "type": "string",
+          },
+          "title": {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "type": "string",
+              },
+              "source": {
+                "type": "string",
+              },
+              "untrusted": {
+                "const": true,
+                "type": "boolean",
+              },
+            },
+            "required": [
+              "untrusted",
+              "source",
+              "content",
+            ],
+            "type": "object",
+          },
+        },
+        "required": [
+          "id",
+          "etag",
+          "all_day",
+          "start",
+          "end",
+          "title",
+          "attendees",
+        ],
+        "type": "object",
+      },
+      "type": "array",
+    },
+    "truncated": {
+      "type": "boolean",
+    },
+  },
+  "required": [
+    "calendar_id",
+    "events",
+    "truncated",
+  ],
+  "type": "object",
+}
+`;

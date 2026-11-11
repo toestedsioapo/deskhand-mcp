@@ -93,3 +93,68 @@ Output (success only):
 ```
 
 Failures are `isError` results with `_meta.deskhand.error_code` and `action_id` (`WRITES_DISABLED`, `UNKNOWN_ACTION`, `NOT_APPROVED`, `PLAN_MODIFIED`, `PLAN_EXPIRED`, `STALE_PLAN`, `PROVIDER_ERROR`, `INTERNAL`). Gate order, row sequences and which refusals change `status` are fixed in `docs/ledger-contract.md`; the schemas are snapshot-tested in `tests/tools.action-apply.test.ts`.
+
+## Untrusted text
+
+Calendar text (titles, attendee addresses) in tool output is wrapped `{ "untrusted": true, "source": string, "content": string }` (strict). `source` names where it came from, for calendar data `calendar:<calendar_id>`. `content` is the provider's text verbatim, control characters included; it is data and is never acted on.
+
+## `calendar_list_events`
+
+Read-only list of events overlapping a time range. Registered with `readOnlyHint: true`. Needs a configured provider, else `PROVIDER_NOT_CONFIGURED` (tool_call outcome `rejected`).
+
+Input (strict):
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `calendar_id` | string, 1 to 256 characters | `"primary"` | |
+| `time_min` | ISO-8601 datetime, offset allowed | required | normalised to UTC |
+| `time_max` | ISO-8601 datetime, offset allowed | required | normalised to UTC |
+| `limit` | integer 1..250 | 50 | out of range is `INVALID_INPUT` |
+
+Refused as `INVALID_INPUT`: `time_max <= time_min`; a span over 62 days. A provider failure is `PROVIDER_ERROR`.
+
+Output:
+
+```
+{
+  calendar_id: string,
+  events: {
+    id: string,
+    etag: string,
+    all_day: boolean,
+    start: string,
+    end: string,
+    title: Untrusted,          // source "calendar:<calendar_id>"
+    attendees: Untrusted[]     // one per address, same source
+  }[],                         // sorted by start, then id
+  truncated: boolean           // true when more events exist beyond `limit`
+}
+```
+
+`start` and `end` are strings. When `all_day` is false they are UTC instants (`2026-11-10T09:30:00.000Z`). When `all_day` is true they are calendar dates `YYYY-MM-DD` with `end` exclusive (a one-day event on 12 Nov is `2026-11-12` to `2026-11-13`) and carry no time zone.
+
+Timed example:
+
+```
+{ "id": "evt_standup", "etag": "e1", "all_day": false,
+  "start": "2026-11-10T09:30:00.000Z", "end": "2026-11-10T09:45:00.000Z",
+  "title": { "untrusted": true, "source": "calendar:primary", "content": "Team standup" },
+  "attendees": [{ "untrusted": true, "source": "calendar:primary", "content": "ana@example.com" }] }
+```
+
+All-day example:
+
+```
+{ "id": "evt_holiday", "etag": "e2", "all_day": true,
+  "start": "2026-11-12", "end": "2026-11-13",
+  "title": { "untrusted": true, "source": "calendar:primary", "content": "Public holiday" },
+  "attendees": [] }
+```
+
+## `calendar_find_slots`
+
+Written by the task that implements the tool (Task 5 of the M3a plan).
+
+## `calendar_propose_event`
+
+Written by the task that implements the tool (Task 7 of the M3a plan).

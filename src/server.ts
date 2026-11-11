@@ -26,6 +26,12 @@ import {
   actionExplainOutputSchema,
 } from "./tools/action-explain.js";
 import {
+  CALENDAR_LIST_EVENTS_DESCRIPTION,
+  calendarListEventsHandler,
+  calendarListEventsInputSchema,
+  calendarListEventsOutputSchema,
+} from "./tools/calendar-list-events.js";
+import {
   LEDGER_QUERY_DESCRIPTION,
   ledgerQueryHandler,
   ledgerQueryInputSchema,
@@ -97,6 +103,17 @@ export function createServer(deps: ServerDeps, opts: CreateServerOptions = {}): 
       annotations: { readOnlyHint: true },
     },
     (input) => track(() => actionExplainHandler(deps.db, input)),
+  );
+
+  server.registerTool(
+    "calendar_list_events",
+    {
+      description: CALENDAR_LIST_EVENTS_DESCRIPTION,
+      inputSchema: calendarListEventsInputSchema,
+      outputSchema: calendarListEventsOutputSchema,
+      annotations: { readOnlyHint: true },
+    },
+    (input) => track(() => calendarListEventsHandler(deps, input)),
   );
 
   // The only MCP tool that can cause a provider write (through the apply engine).
