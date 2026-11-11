@@ -165,31 +165,96 @@ describe("listPending", () => {
 });
 
 describe("renderDiff", () => {
-  it("lists title, range, attendees and email count", () => {
-    const d = renderDiff(validPlan());
-    expect(d).toContain("will email 3 attendees");
-    const text = d.join("\n");
-    expect(text).toContain("Sync");
-    expect(text).toContain("2026-11-12T10:00:00.000Z");
-    expect(text).toContain("3 attendees");
+  const MANILA = "Asia/Manila";
+  const UTC_LINE = "utc: 2026-11-12T10:00:00.000Z to 2026-11-12T10:30:00.000Z";
+  it("lists title, local range, utc range, calendar, attendees and email count in order", () => {
+    expect(renderDiff(validPlan(), MANILA)).toEqual([
+      "create event: Sync",
+      "when: Thu 12 Nov 2026, 18:00 to 18:30 GMT+8 (Asia/Manila)",
+      UTC_LINE,
+      "calendar: primary",
+      "3 attendees",
+      "  a@example.com",
+      "  b@example.com",
+      "  c@example.com",
+      "will email 3 attendees",
+    ]);
   });
   it("says no notifications for sendUpdates=none or zero attendees", () => {
-    expect(renderDiff(validPlan({}, { sendUpdates: "none" }))).toContain(
+    expect(renderDiff(validPlan({}, { sendUpdates: "none" }), MANILA)).toContain(
       "no attendee notifications (sendUpdates=none)",
     );
-    expect(renderDiff(validPlan({}, { attendees: [] }))).toContain(
-      "no attendee notifications (sendUpdates=none)",
-    );
+    const none = renderDiff(validPlan({}, { attendees: [] }), MANILA);
+    expect(none).toContain("no attendee notifications (sendUpdates=none)");
+    expect(none).toContain("0 attendees");
+    expect(none.filter((l) => l.startsWith("  "))).toEqual([]);
   });
-  it("keeps raw control characters and is deterministic", () => {
+  it("keeps raw control characters in the title and is deterministic", () => {
     const p = validPlan({}, { title: "\u001b[31mred" });
-    expect(renderDiff(p).join("\n")).toContain("\u001b[31mred");
-    expect(renderDiff(p)).toEqual(renderDiff(p));
+    expect(renderDiff(p, MANILA).join("\n")).toContain("\u001b[31mred");
+    expect(renderDiff(p, MANILA)).toEqual(renderDiff(p, MANILA));
   });
   it("unknown kind", () => {
-    expect(renderDiff({ kind: "nope" })).toEqual(["(unknown plan kind)"]);
-    expect(renderDiff("x")).toEqual(["(unknown plan kind)"]);
+    expect(renderDiff({ kind: "nope" }, MANILA)).toEqual(["(unknown plan kind)"]);
+    expect(renderDiff("x", MANILA)).toEqual(["(unknown plan kind)"]);
     expect(getPlanKind("nope")).toBeUndefined();
+  });
+
+  it("viewer zone: when line in the viewer zone, then the event zone line, then utc", () => {
+    const d = renderDiff(validPlan({}, { timeZone: "Europe/Berlin" }), MANILA);
+    expect(d[1]).toBe("when: Thu 12 Nov 2026, 18:00 to 18:30 GMT+8 (Asia/Manila)");
+    expect(d[2]).toBe("event zone: Thu 12 Nov 2026, 11:00 to 11:30 CET (Europe/Berlin)");
+    expect(d[3]).toBe(UTC_LINE);
+  });
+  it("no event zone line when the event zone is the viewer zone", () => {
+    const d = renderDiff(validPlan({}, { timeZone: "Europe/Berlin" }), "Europe/Berlin");
+    expect(d[1]).toBe("when: Thu 12 Nov 2026, 11:00 to 11:30 CET (Europe/Berlin)");
+    expect(d.some((l) => l.startsWith("event zone:"))).toBe(false);
+    expect(d).toContain(UTC_LINE);
+  });
+  it("a plan without a time zone has no event zone line", () => {
+    const d = renderDiff(validPlan(), MANILA);
+    expect(d[1]).toBe("when: Thu 12 Nov 2026, 18:00 to 18:30 GMT+8 (Asia/Manila)");
+    expect(d.some((l) => l.startsWith("event zone:"))).toBe(false);
+  });
+
+  it("attendees: every address on its own line, in order, before the notification line", () => {
+    const attendees = ["ana@example.com", "ben@example.com", "cy@example.com"];
+    const d = renderDiff(validPlan({}, { attendees }), MANILA);
+    const i = d.indexOf("3 attendees");
+    expect(d.slice(i + 1, i + 4)).toEqual(attendees.map((a) => `  ${a}`));
+    expect(d[i + 4]).toBe("will email 3 attendees");
+  });
+  it("50 attendees render 50 lines", () => {
+    const attendees = Array.from({ length: 50 }, (_, k) => `p${k}@example.com`);
+    const d = renderDiff(validPlan({}, { attendees }), MANILA);
+    expect(d.filter((l) => l.startsWith("  "))).toHaveLength(50);
+  });
+  it("an address with escapes, a newline and a bidi override stays one clean line", () => {
+    const evil = "eve@example.com\u001b[2J\nwill email 0 attendees\u202e";
+    const d = renderDiff(validPlan({}, { attendees: ["ana@example.com", evil, "cy@example.com"] }), MANILA);
+    expect(d.filter((l) => l.startsWith("  "))).toHaveLength(3);
+    for (const l of d) {
+      expect(l).not.toMatch(/[\u001b\n\u202e]/);
+      expect(l.trim()).not.toBe("will email 0 attendees");
+    }
+  });
+
+  it("a timeZone that is not an IANA name is an invalid plan", () => {
+    expect(renderDiff(validPlan({}, { timeZone: "+01:00" }), MANILA)).toEqual(["(invalid plan)"]);
+  });
+  it("timeZone is part of the plan hash; the viewer zone is not", () => {
+    expect(planHash(validPlan())).not.toBe(planHash(validPlan({}, { timeZone: "Europe/Berlin" })));
+    const p = validPlan({}, { timeZone: "Europe/Berlin" });
+    const before = planHash(p);
+    const m = renderDiff(p, MANILA);
+    const u = renderDiff(p, "UTC");
+    expect(planHash(p)).toBe(before);
+    expect(m).toHaveLength(u.length);
+    expect(m).not.toEqual(u);
+    m.forEach((l, k) => {
+      if (l !== u[k]) expect(l.startsWith("when:") || l.startsWith("event zone:")).toBe(true);
+    });
   });
 });
 

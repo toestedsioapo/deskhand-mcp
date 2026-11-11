@@ -68,7 +68,7 @@ Output:
   },
   plan: unknown,               // actions.plan_json parsed
   rationale: string | null,    // plan.rationale when it is a string, else null
-  diff: string[] | null,       // lines from the deterministic plan renderer (never agent text); an unrenderable stored plan yields `(unknown plan kind)` or `(invalid plan)`. The schema stays nullable (a contract from M2a) but the handler always returns an array
+  diff: string[] | null,       // lines from the deterministic plan renderer (never agent text); an unrenderable stored plan yields `(unknown plan kind)` or `(invalid plan)`. Times in the diff are rendered in the server's `Config.timeZone` (the viewer's zone, never one the plan names); see the ledger contract, "Plan shape: `calendar.create_event`", for the line order. The schema stays nullable (a contract from M2a) but the handler always returns an array
   events: EventRow[]           // this action's events, oldest first; at most the newest 1000
 }
 ```

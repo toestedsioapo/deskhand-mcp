@@ -128,6 +128,30 @@ describe("pending", () => {
     expect(rows[0]).toMatchObject({ tool: "cli:pending", outcome: "ok", error_code: null });
   });
 
+  it("renders the viewer-zone when line, event zone line, utc line and every attendee", async () => {
+    const attendees = ["ana@example.com", "ben@example.com", "cy@example.com"];
+    seedAction(makeCtx(), "planned", validPlan({}, { timeZone: "Europe/Berlin", attendees }));
+    const i = io();
+    const code = await runCli(["pending"], i, () =>
+      makeCtx(() => LedgerDb.open(join(home.home, "ledger.db")), { DESKHAND_TIMEZONE: "Asia/Manila" }),
+    );
+    expect(code).toBe(0);
+    const out = i.outText();
+    expect(out).toContain("    when: Thu 12 Nov 2026, 18:00 to 18:30 GMT+8 (Asia/Manila)\n");
+    expect(out).toContain("    event zone: Thu 12 Nov 2026, 11:00 to 11:30 CET (Europe/Berlin)\n");
+    expect(out).toContain("    utc: 2026-11-12T10:00:00.000Z to 2026-11-12T10:30:00.000Z\n");
+    for (const a of attendees) expect(out).toContain(`      ${a}\n`);
+  });
+
+  it("an attendee address with control characters cannot forge a diff line", async () => {
+    const evil = "eve@example.com\u001b[2J\nwill email 0 attendees\u202e";
+    seedAction(makeCtx(), "planned", validPlan({}, { attendees: ["ana@example.com", evil, "cy@example.com"] }));
+    const r = await run(["pending"]);
+    expect(r.out).not.toContain("\u001b");
+    expect(r.out).not.toContain("\u202e");
+    expect(r.out.split("\n").filter((l) => l.trim() === "will email 0 attendees")).toEqual([]);
+  });
+
   it("marks expired plans", async () => {
     now = LONG_AGO;
     const old = seedAction(makeCtx(), "planned");

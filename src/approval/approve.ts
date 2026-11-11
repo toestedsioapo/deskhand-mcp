@@ -186,7 +186,7 @@ export async function approveAction(ctx: AppContext, actionId: string, io: CliIo
   // 7. Show exactly what is being approved (sanitised), then read the typed last 4.
   const hash = recomputeHash(initial.plan_json)!; // equals plan_hash: checked in step 5
   io.out(`Approve ${stripControl(initial.id)} (${oneLine(initial.tool, 80)})\n`);
-  for (const line of renderDiff(JSON.parse(initial.plan_json) as unknown)) {
+  for (const line of renderDiff(JSON.parse(initial.plan_json) as unknown, ctx.config.timeZone)) {
     for (const part of stripControl(line).split("\n")) io.out(`    ${part}\n`);
   }
   io.out(`plan hash ${hashPrefix(hash)}\n`);

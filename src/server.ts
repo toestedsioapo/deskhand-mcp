@@ -108,7 +108,7 @@ export function createServer(deps: ServerDeps, opts: CreateServerOptions = {}): 
       outputSchema: actionExplainOutputSchema,
       annotations: { readOnlyHint: true },
     },
-    (input) => track(() => actionExplainHandler(deps.db, input)),
+    (input) => track(() => actionExplainHandler(deps.db, input, deps.config.timeZone)),
   );
 
   server.registerTool(

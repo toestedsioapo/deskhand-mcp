@@ -423,7 +423,8 @@ describe("approveAction: happy path", () => {
     expect(out).toContain(id);
     expect(out).toContain("create event: Board red");
     expect(out).toContain("second line");
-    expect(out).toContain("when: 2026-11-12T10:00:00.000Z to 2026-11-12T10:30:00.000Z");
+    expect(out).toContain("when: Thu 12 Nov 2026, 10:00 to 10:30 UTC (UTC)"); // the harness pins DESKHAND_TIMEZONE=UTC
+    expect(out).toContain("utc: 2026-11-12T10:00:00.000Z to 2026-11-12T10:30:00.000Z");
     expect(out).toContain("will email 3 attendees");
     expect(out).toContain(a.plan_hash.slice(0, 8));
     expect(out).not.toContain(a.plan_hash.slice(0, 9));
@@ -434,6 +435,34 @@ describe("approveAction: happy path", () => {
     expect(io.prompts).toHaveLength(1);
     expect(io.prompts[0]).not.toContain("\u001b");
     expect(io.prompts[0]).not.toContain(last4(id)); // the prompt never shows the answer
+  });
+
+  it("shows the viewer-zone when line, the event zone line, the utc line and every attendee", async () => {
+    const attendees = ["ana@example.com", "ben@example.com", "cy@example.com"];
+    const id = seedAction(ctx, "planned", validPlan({}, { timeZone: "Europe/Berlin", attendees }));
+    const io = scripted({ lines: [last4(id)] });
+    const r = await approveAction(makeCtx({}, { DESKHAND_TIMEZONE: "Asia/Manila" }), id, io);
+    expect(r).toEqual({ ok: true });
+    const out = io.outText();
+    expect(out).toContain("    when: Thu 12 Nov 2026, 18:00 to 18:30 GMT+8 (Asia/Manila)\n");
+    expect(out).toContain("    event zone: Thu 12 Nov 2026, 11:00 to 11:30 CET (Europe/Berlin)\n");
+    expect(out).toContain("    utc: 2026-11-12T10:00:00.000Z to 2026-11-12T10:30:00.000Z\n");
+    for (const a of attendees) expect(out).toContain(`      ${a}\n`);
+  });
+
+  it("an attendee address with control characters cannot forge a diff line", async () => {
+    const evil = "eve@example.com\u001b[2J\nwill email 0 attendees\u202e";
+    const id = seedAction(
+      ctx,
+      "planned",
+      validPlan({}, { attendees: ["ana@example.com", evil, "cy@example.com"] }),
+    );
+    const io = scripted({ lines: [last4(id)] });
+    await approveAction(makeCtx({}, { DESKHAND_TIMEZONE: "Asia/Manila" }), id, io);
+    const out = io.outText();
+    expect(out).not.toContain("\u001b");
+    expect(out).not.toContain("\u202e");
+    expect(out.split("\n").filter((l) => l.trim() === "will email 0 attendees")).toEqual([]);
   });
 
   it("approve then apply end to end: the only test path that goes through a human approval", async () => {

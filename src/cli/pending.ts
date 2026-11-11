@@ -17,7 +17,7 @@ export function pendingCommand(ctx: AppContext, io: CliIo): number {
       `${stripControl(a.id)}  ${stripControl(a.tool)}  expires ${stripControl(a.expires_at)}${expired ? " EXPIRED" : ""}  hash ${a.plan_hash.slice(0, 8)}\n`,
     );
     // A plan_json that does not parse is shown, never thrown on: the listing must still work.
-    const diff = a.plan ? renderDiff(a.plan.value) : ["(invalid plan)"];
+    const diff = a.plan ? renderDiff(a.plan.value, ctx.config.timeZone) : ["(invalid plan)"];
     for (const line of diff) {
       for (const part of stripControl(line).split("\n")) io.out(`    ${part}\n`);
     }

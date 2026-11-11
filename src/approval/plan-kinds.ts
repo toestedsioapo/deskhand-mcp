@@ -1,13 +1,19 @@
 import { z } from "zod";
 import type { CalendarProvider, EventRef } from "../providers/types.js";
+import { formatLocalRange, isIanaTimeZone } from "../util/local-time.js";
+import { oneLine } from "../util/sanitize.js";
 
 export type RecheckResult = { ok: true } | { ok: false; reason: string };
 
 export interface PlanKind<P> {
   kind: string;
   schema: z.ZodType<P>;
-  /** Deterministic; built only from validated plan fields. Raw strings: sanitising is CLI-side. */
-  renderDiff(plan: P): string[];
+  /**
+   * Deterministic for a given plan and viewer zone; built only from validated plan fields. Titles and other
+   * fields are raw strings (terminal sanitising is CLI-side), except attendee lines, which are flattened here
+   * so an address can never start a forged diff line. `viewerTimeZone` is the reader's zone, never the plan's.
+   */
+  renderDiff(plan: P, viewerTimeZone: string): string[];
   recheck(plan: P, provider: CalendarProvider): Promise<RecheckResult>;
   lookupExisting(plan: P, idempotencyKey: string, provider: CalendarProvider): Promise<EventRef | null>;
   execute(plan: P, idempotencyKey: string, provider: CalendarProvider): Promise<EventRef>;
@@ -23,6 +29,7 @@ const newEventSchema = z
     attendees: z.array(z.string()),
     sendUpdates: z.enum(["none", "all", "externalOnly"]),
     calendarId: z.string().min(1),
+    timeZone: z.string().refine(isIanaTimeZone, { message: "must be an IANA time zone name" }).optional(),
   })
   .strict()
   .refine((e) => Date.parse(e.end) > Date.parse(e.start), { message: "end must be after start", path: ["end"] });
@@ -44,15 +51,15 @@ export const calendarCreateEvent: PlanKind<CalendarCreateEventPlan> = {
   kind: "calendar.create_event",
   schema: calendarCreateEventPlanSchema,
 
-  renderDiff(plan) {
+  renderDiff(plan, viewerTimeZone) {
     const e = plan.event;
     const n = e.attendees.length;
-    const lines = [
-      `create event: ${e.title}`,
-      `when: ${e.start} to ${e.end}`,
-      `calendar: ${e.calendarId}`,
-      `${n} attendees`,
-    ];
+    const lines = [`create event: ${e.title}`, `when: ${formatLocalRange(e.start, e.end, viewerTimeZone)}`];
+    if (e.timeZone !== undefined && e.timeZone !== viewerTimeZone) {
+      lines.push(`event zone: ${formatLocalRange(e.start, e.end, e.timeZone)}`);
+    }
+    lines.push(`utc: ${e.start} to ${e.end}`, `calendar: ${e.calendarId}`, `${n} attendees`);
+    for (const a of e.attendees) lines.push(`  ${oneLine(a, 254)}`);
     lines.push(
       e.sendUpdates !== "none" && n > 0
         ? `will email ${n} attendees`
@@ -87,13 +94,13 @@ export function getPlanKind(kind: string): PlanKind<unknown> | undefined {
   return KINDS.get(kind);
 }
 
-/** Diff lines for a stored plan; unknown or invalid plans give a fixed marker. */
-export function renderDiff(planJson: unknown): string[] {
+/** Diff lines for a stored plan, times shown in `viewerTimeZone` (the caller passes `Config.timeZone`); unknown or invalid plans give a fixed marker. */
+export function renderDiff(planJson: unknown, viewerTimeZone: string): string[] {
   const unknownKind = ["(unknown plan kind)"];
   if (typeof planJson !== "object" || planJson === null) return unknownKind;
   const k = (planJson as { kind?: unknown }).kind;
   const pk = typeof k === "string" ? getPlanKind(k) : undefined;
   if (!pk) return unknownKind;
   const parsed = pk.schema.safeParse(planJson);
-  return parsed.success ? pk.renderDiff(parsed.data) : ["(invalid plan)"];
+  return parsed.success ? pk.renderDiff(parsed.data, viewerTimeZone) : ["(invalid plan)"];
 }

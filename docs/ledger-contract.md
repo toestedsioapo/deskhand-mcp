@@ -296,6 +296,21 @@ Cancellation: a client may cancel a `tools/call` with a valid `notifications/can
 
 Every `tools/call` writes exactly one `tool_call` row, including calls rejected by SDK input validation and calls to unknown tools. If the ledger cannot be written, the response is replaced by an `INTERNAL` error. If the ledger cannot be opened at startup, the process exits (fail closed); this is a startup error, not a tool error.
 
+## Plan shape: `calendar.create_event`
+
+`actions.plan_json` for this kind (strict): `{ kind, rationale?, event, observed: { slotFree: true, etags } }`. `event` is `{ title, start, end, attendees: string[], sendUpdates, calendarId, timeZone? }`. `start` and `end` are UTC instants (ISO 8601, `Z`). `timeZone` is optional, an IANA name (`Europe/Berlin`, `UTC`; offsets and POSIX names are an invalid plan), and part of the plan hash; it is the zone the event was proposed in and is passed to the provider on create.
+
+The human diff (`deskhand pending`, `deskhand approve`, `action_explain.diff`) is rendered from the plan in the viewer's zone (`Config.timeZone`: `DESKHAND_TIMEZONE`, else the system zone), never one the plan chose. The viewer zone is not part of the plan and does not change `plan_hash`. Lines, in order:
+
+1. `create event: <title>`
+2. `when: <start> to <end>` in the viewer's zone, e.g. `Thu 12 Nov 2026, 18:00 to 18:30 GMT+8 (Asia/Manila)`; a range across midnight or a zone change names both ends in full
+3. `event zone: <range in event.timeZone>`, only when `event.timeZone` is set and differs from the viewer zone
+4. `utc: <start> to <end>` (always)
+5. `calendar: <calendarId>`
+6. `<n> attendees`
+7. one line per attendee, in plan order: two spaces then the address flattened to one line (control characters removed, whitespace collapsed, capped at 254 characters)
+8. `will email <n> attendees` or `no attendee notifications (sendUpdates=none)`
+
 ## `preview_json`
 
 Shape: `{"v":1,"input":<redacted>,"output":<redacted|null>,"note":<string|null>}`; lifecycle previews may also carry `"action_id"`.
