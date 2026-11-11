@@ -75,4 +75,39 @@ describe("loadFixtureWorld", () => {
     const p = join(dir, "missing.json");
     expect(() => loadFixtureWorld(p)).toThrow(p);
   });
+
+  describe("all_day events", () => {
+    const offsite = {
+      id: "evt_offsite",
+      title: "Offsite",
+      start: "2026-11-12",
+      end: "2026-11-13",
+      attendees: [],
+      etag: "a1",
+      all_day: true,
+    };
+    const withEvent = (e: unknown) => ({ ...valid, calendars: { primary: { events: [e] } } });
+
+    it("loads an all-day event", () => {
+      const w = loadFixtureWorld(write("allday.json", withEvent(offsite)));
+      expect(w.calendars["primary"]?.events[0]).toMatchObject({ all_day: true, start: "2026-11-12" });
+    });
+
+    it("loads all_day: false with instants", () => {
+      expect(() => loadFixtureWorld(write("adfalse.json", withEvent({ ...ev, all_day: false })))).not.toThrow();
+    });
+
+    it.each([
+      ["all_day true with instants", { ...ev, all_day: true }],
+      ["dates without all_day", { ...offsite, all_day: undefined }],
+      ["dates with all_day false", { ...offsite, all_day: false }],
+      ["start equal to end", { ...offsite, end: "2026-11-12" }],
+      ["start after end", { ...offsite, start: "2026-11-14" }],
+      ["an impossible date", { ...offsite, start: "2026-02-30", end: "2026-03-02" }],
+      ["a non-boolean all_day", { ...offsite, all_day: "yes" }],
+    ])("rejects %s", (name, e) => {
+      const p = write(`bad-${name.replace(/\W+/g, "-")}.json`, withEvent(e));
+      expect(() => loadFixtureWorld(p)).toThrow(p);
+    });
+  });
 });

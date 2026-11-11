@@ -388,6 +388,7 @@ describe("provider failure", () => {
     const failing: CalendarProvider = {
       freeBusy: (c, r) => provider.freeBusy(c, r),
       getEvent: (c, i) => provider.getEvent(c, i),
+      listEvents: (c, r, l) => provider.listEvents(c, r, l),
       createEvent: async () => {
         throw new Error("backend unavailable");
       },
@@ -402,6 +403,7 @@ describe("provider failure", () => {
     const failing: CalendarProvider = {
       freeBusy: (c, r) => provider.freeBusy(c, r),
       getEvent: (c, i) => provider.getEvent(c, i),
+      listEvents: (c, r, l) => provider.listEvents(c, r, l),
       createEvent: async () => {
         throw new Error(long);
       },
@@ -418,6 +420,7 @@ describe("provider failure", () => {
     const ambiguous: CalendarProvider = {
       freeBusy: (c, r) => provider.freeBusy(c, r),
       getEvent: (c, i) => provider.getEvent(c, i),
+      listEvents: (c, r, l) => provider.listEvents(c, r, l),
       createEvent: async (e, k) => {
         await provider.createEvent(e, k);
         throw new Error("timeout after the server accepted the event");
@@ -453,6 +456,7 @@ describe("provider read errors are not terminal", () => {
         getEvent: async () => {
           throw new Error("getEvent down");
         },
+        listEvents: (c, r, l) => provider.listEvents(c, r, l),
         createEvent: (e, k) => provider.createEvent(e, k),
       },
       id,
@@ -468,6 +472,7 @@ describe("provider read errors are not terminal", () => {
           throw new Error("freeBusy down");
         },
         getEvent: (c, i) => provider.getEvent(c, i),
+        listEvents: (c, r, l) => provider.listEvents(c, r, l),
         createEvent: (e, k) => provider.createEvent(e, k),
       },
       id,
@@ -485,6 +490,7 @@ describe("concurrent apply where our event lands between the other caller's look
     const slowReturn: CalendarProvider = {
       freeBusy: (c, r) => provider.freeBusy(c, r),
       getEvent: (c, i) => provider.getEvent(c, i),
+      listEvents: (c, r, l) => provider.listEvents(c, r, l),
       createEvent: async (e, k) => {
         const ev = await provider.createEvent(e, k);
         await sleep(40);
@@ -497,6 +503,7 @@ describe("concurrent apply where our event lands between the other caller's look
         return provider.freeBusy(c, r);
       },
       getEvent: (c, i) => provider.getEvent(c, i),
+      listEvents: (c, r, l) => provider.listEvents(c, r, l),
       createEvent: (e, k) => provider.createEvent(e, k),
     };
     const dbB = LedgerDb.open(join(home.home, "ledger.db"));

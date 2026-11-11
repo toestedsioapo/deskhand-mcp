@@ -14,6 +14,14 @@ export interface FixtureProviderOptions {
   afterWrite?: () => void;
 }
 
+/** An event as an instant range; an all-day event spans UTC midnight to UTC midnight. */
+const span = (e: EventRef): TimeRange =>
+  e.allDay
+    ? { start: `${e.start}T00:00:00.000Z`, end: `${e.end}T00:00:00.000Z` }
+    : { start: e.start, end: e.end };
+
+const copy = (e: EventRef): EventRef => ({ ...e, attendees: [...e.attendees] });
+
 const overlaps = (a: TimeRange, b: TimeRange): boolean =>
   Date.parse(a.start) < Date.parse(b.end) && Date.parse(b.start) < Date.parse(a.end);
 
@@ -26,7 +34,12 @@ export function createFixtureProvider(
   for (const [calId, cal] of Object.entries(world.calendars)) {
     calendars.set(
       calId,
-      new Map(cal.events.map((e) => [e.id, { ...e, attendees: [...e.attendees] }])),
+      new Map(
+        cal.events.map(({ all_day, ...e }) => [
+          e.id,
+          { ...e, attendees: [...e.attendees], allDay: all_day === true } satisfies EventRef,
+        ]),
+      ),
     );
   }
   const extraBusy = new Map<string, TimeRange[]>();
@@ -56,7 +69,7 @@ export function createFixtureProvider(
       await delay();
       const busy: TimeRange[] = [];
       for (const e of calendars.get(calendarId)?.values() ?? []) {
-        if (overlaps(e, range)) busy.push({ start: e.start, end: e.end });
+        if (!e.allDay && overlaps(e, range)) busy.push({ start: e.start, end: e.end });
       }
       for (const b of extraBusy.get(calendarId) ?? []) {
         if (overlaps(b, range)) busy.push({ ...b });
@@ -68,14 +81,26 @@ export function createFixtureProvider(
     async getEvent(calendarId, id) {
       await delay();
       const e = calendars.get(calendarId)?.get(id);
-      return e ? { ...e, attendees: [...e.attendees] } : null;
+      return e ? copy(e) : null;
+    },
+
+    async listEvents(calendarId, range, limit) {
+      await delay();
+      const hits = [...(calendars.get(calendarId)?.values() ?? [])]
+        .filter((e) => overlaps(span(e), range))
+        .sort(
+          (a, b) =>
+            Date.parse(span(a).start) - Date.parse(span(b).start) ||
+            (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+        );
+      return { events: hits.slice(0, limit).map(copy), truncated: hits.length > limit };
     },
 
     async createEvent(event: NewCalendarEvent, idempotencyKey: string) {
       await delay();
       const cal = calendar(event.calendarId);
       const existing = cal.get(idempotencyKey);
-      if (existing) return { ...existing, attendees: [...existing.attendees] };
+      if (existing) return copy(existing);
       const created: EventRef = {
         id: idempotencyKey,
         etag: "e1",
@@ -83,6 +108,7 @@ export function createFixtureProvider(
         start: event.start,
         end: event.end,
         attendees: [...event.attendees],
+        allDay: false,
       };
       cal.set(created.id, created);
       writes.push(created);
@@ -98,7 +124,7 @@ export function createFixtureProvider(
         appendFileSync(writeLog, `${line}\n`);
       }
       opts.afterWrite?.();
-      return { ...created, attendees: [...created.attendees] };
+      return copy(created);
     },
 
     addBusy(calendarId, range) {
