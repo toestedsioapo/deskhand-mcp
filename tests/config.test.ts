@@ -178,3 +178,25 @@ describe("ensureDirs", () => {
     }
   });
 });
+
+describe("loadConfig timeZone and rulesPath", () => {
+  const base = { DESKHAND_HOME: "/x/h" };
+
+  it("timeZone defaults to the system zone, DESKHAND_TIMEZONE overrides it", () => {
+    expect(loadConfig(base).timeZone).toBe(Intl.DateTimeFormat().resolvedOptions().timeZone);
+    expect(loadConfig({ ...base, DESKHAND_TIMEZONE: "Europe/Berlin" }).timeZone).toBe("Europe/Berlin");
+  });
+
+  it("an invalid DESKHAND_TIMEZONE is a ConfigError naming the variable", () => {
+    for (const v of ["+01:00", "EST5EDT", "Mars/Olympus", ""]) {
+      expect(() => loadConfig({ ...base, DESKHAND_TIMEZONE: v })).toThrow(ConfigError);
+      expect(() => loadConfig({ ...base, DESKHAND_TIMEZONE: v })).toThrow(/DESKHAND_TIMEZONE/);
+    }
+  });
+
+  it("rulesPath defaults to <configDir>/rules.json, DESKHAND_RULES overrides it", () => {
+    const c = loadConfig(base);
+    expect(c.rulesPath).toBe(join(c.paths.configDir, "rules.json"));
+    expect(loadConfig({ ...base, DESKHAND_RULES: "/r/mine.json" }).rulesPath).toBe("/r/mine.json");
+  });
+});

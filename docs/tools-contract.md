@@ -153,7 +153,51 @@ All-day example:
 
 ## `calendar_find_slots`
 
-Written by the task that implements the tool (Task 5 of the M3a plan).
+Read-only search for meeting slots that fit everyone's working-hours rules and are free in the caller's calendar. Registered with `readOnlyHint: true`. Needs a configured provider, else `PROVIDER_NOT_CONFIGURED` (tool_call outcome `rejected`). It writes no plan row and nothing to the provider: its only ledger rows are the usual `tool_call` row.
+
+Tempo (`src/tempo/`) decides which slots fit the working-hours rules; this tool then drops the ones that are busy in the calendar (`provider.freeBusy`, one call spanning the earliest candidate start to the latest candidate end). All-day events are not busy time for this purpose.
+
+Input (strict):
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `date` | `YYYY-MM-DD` | required | local date of the requested slot in `time_zone`; a date that is not on the calendar is `INVALID_INPUT` (Tempo rejects it) |
+| `start` | `HH:mm` | required | local start, 00:00 to 23:59 |
+| `end` | `HH:mm` | required | local end |
+| `time_zone` | IANA zone name | `Config.timeZone` | `DESKHAND_TIMEZONE`, else the system zone. Offsets (`+01:00`), POSIX names (`EST5EDT`), unknown names and `""` are `INVALID_INPUT` |
+| `participants` | `PartyRules[]`, 1 to 49 | required | the counterparties |
+| `own_rules` | `PartyRules` | none | the caller's rules; overrides the rules file |
+| `calendar_id` | string, 1 to 256 characters | `"primary"` | calendar checked for busy time |
+| `max_suggestions` | integer 1..10 | 3 | most slots returned |
+| `min_notice_minutes` | integer 0..525600 | 0 | |
+| `search_horizon_days` | integer 1..90 | 14 | how far Tempo looks for alternatives |
+
+`PartyRules` (strict): `{ partyId: string 1..64, timeZone: string, weeklyRules: { monday..sunday: { start: "HH:mm", end: "HH:mm" or "24:00" }[] (each day optional) }, blackouts: "YYYY-MM-DD"[] (default []) }`. Party ids must be unique across `own_rules` (or the rules file) and `participants`.
+
+The caller's rules are `own_rules` if given, else the JSON file at `Config.rulesPath` (`DESKHAND_RULES`, else `<config dir>/rules.json`), read and validated on every call. A missing, unparsable or schema-invalid file is `INVALID_INPUT` naming the path and the `own_rules` field; the server keeps running.
+
+Output:
+
+```
+{
+  decision: "book" | "counter_offer" | "none",
+  requested: Slot,
+  slots: Slot[],               // at most max_suggestions, best first
+  busy_dropped: integer,       // candidates dropped because the calendar is busy
+  reasons: { code: string, participant_id: string | null, message: string }[],   // Tempo's, verbatim
+  note: string | null
+}
+Slot = { start, end, startUtc, endUtc }   // start/end local ISO in time_zone, startUtc/endUtc the same instants in UTC
+```
+
+Behaviour: Tempo is asked for 10 suggestions with `now` set to the server clock. The candidates are Tempo's `slots` in every case (on a Tempo `book`, `slots[0]` is the requested slot and the rest are ranked alternatives). A candidate overlapping any busy block is dropped.
+
+- Tempo said `book` and the requested slot is free: `decision: "book"`, `slots` is the requested slot alone, `busy_dropped: 0`.
+- Tempo said `book` but the requested slot is busy: it is dropped and counted in `busy_dropped`; the surviving alternatives (first `max_suggestions`) give `counter_offer`.
+- Tempo said `counter_offer`: busy candidates are dropped, `slots` is the first `max_suggestions` survivors, `reasons` carries Tempo's reasons (for example `OUTSIDE_AVAILABILITY` with the `participant_id`).
+- `none` when no candidate survives, with `note: "All suggested slots are busy in calendar <calendar_id>."`. Otherwise `note` is null.
+
+Errors: `INVALID_INPUT` for a bad `time_zone`, no usable own rules, or a Tempo error (message carries Tempo's code and message, for example a duplicate party id or an impossible date); `PROVIDER_ERROR` when `freeBusy` fails; `PROVIDER_NOT_CONFIGURED` with no provider. The output schemas are snapshot-tested in `tests/tools.calendar-find-slots.test.ts`.
 
 ## `calendar_propose_event`
 

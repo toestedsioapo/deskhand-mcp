@@ -26,6 +26,12 @@ import {
   actionExplainOutputSchema,
 } from "./tools/action-explain.js";
 import {
+  CALENDAR_FIND_SLOTS_DESCRIPTION,
+  calendarFindSlotsHandler,
+  calendarFindSlotsInputSchema,
+  calendarFindSlotsOutputSchema,
+} from "./tools/calendar-find-slots.js";
+import {
   CALENDAR_LIST_EVENTS_DESCRIPTION,
   calendarListEventsHandler,
   calendarListEventsInputSchema,
@@ -114,6 +120,17 @@ export function createServer(deps: ServerDeps, opts: CreateServerOptions = {}): 
       annotations: { readOnlyHint: true },
     },
     (input) => track(() => calendarListEventsHandler(deps, input)),
+  );
+
+  server.registerTool(
+    "calendar_find_slots",
+    {
+      description: CALENDAR_FIND_SLOTS_DESCRIPTION,
+      inputSchema: calendarFindSlotsInputSchema,
+      outputSchema: calendarFindSlotsOutputSchema,
+      annotations: { readOnlyHint: true },
+    },
+    (input) => track(() => calendarFindSlotsHandler(deps, input)),
   );
 
   // The only MCP tool that can cause a provider write (through the apply engine).

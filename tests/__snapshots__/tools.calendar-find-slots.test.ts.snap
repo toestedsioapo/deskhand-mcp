@@ -1,0 +1,654 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`calendar_find_slots schemas > input schema is stable 1`] = `
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "calendar_id": {
+      "default": "primary",
+      "maxLength": 256,
+      "minLength": 1,
+      "type": "string",
+    },
+    "date": {
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+      "type": "string",
+    },
+    "end": {
+      "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
+      "type": "string",
+    },
+    "max_suggestions": {
+      "default": 3,
+      "maximum": 10,
+      "minimum": 1,
+      "type": "integer",
+    },
+    "min_notice_minutes": {
+      "default": 0,
+      "maximum": 525600,
+      "minimum": 0,
+      "type": "integer",
+    },
+    "own_rules": {
+      "additionalProperties": false,
+      "properties": {
+        "blackouts": {
+          "default": [],
+          "items": {
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+            "type": "string",
+          },
+          "type": "array",
+        },
+        "partyId": {
+          "maxLength": 64,
+          "minLength": 1,
+          "type": "string",
+        },
+        "timeZone": {
+          "type": "string",
+        },
+        "weeklyRules": {
+          "additionalProperties": false,
+          "properties": {
+            "friday": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "end": {
+                    "anyOf": [
+                      {
+                        "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
+                        "type": "string",
+                      },
+                      {
+                        "const": "24:00",
+                        "type": "string",
+                      },
+                    ],
+                  },
+                  "start": {
+                    "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
+                    "type": "string",
+                  },
+                },
+                "required": [
+                  "start",
+                  "end",
+                ],
+                "type": "object",
+              },
+              "type": "array",
+            },
+            "monday": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "end": {
+                    "anyOf": [
+                      {
+                        "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
+                        "type": "string",
+                      },
+                      {
+                        "const": "24:00",
+                        "type": "string",
+                      },
+                    ],
+                  },
+                  "start": {
+                    "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
+                    "type": "string",
+                  },
+                },
+                "required": [
+                  "start",
+                  "end",
+                ],
+                "type": "object",
+              },
+              "type": "array",
+            },
+            "saturday": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "end": {
+                    "anyOf": [
+                      {
+                        "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
+                        "type": "string",
+                      },
+                      {
+                        "const": "24:00",
+                        "type": "string",
+                      },
+                    ],
+                  },
+                  "start": {
+                    "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
+                    "type": "string",
+                  },
+                },
+                "required": [
+                  "start",
+                  "end",
+                ],
+                "type": "object",
+              },
+              "type": "array",
+            },
+            "sunday": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "end": {
+                    "anyOf": [
+                      {
+                        "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
+                        "type": "string",
+                      },
+                      {
+                        "const": "24:00",
+                        "type": "string",
+                      },
+                    ],
+                  },
+                  "start": {
+                    "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
+                    "type": "string",
+                  },
+                },
+                "required": [
+                  "start",
+                  "end",
+                ],
+                "type": "object",
+              },
+              "type": "array",
+            },
+            "thursday": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "end": {
+                    "anyOf": [
+                      {
+                        "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
+                        "type": "string",
+                      },
+                      {
+                        "const": "24:00",
+                        "type": "string",
+                      },
+                    ],
+                  },
+                  "start": {
+                    "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
+                    "type": "string",
+                  },
+                },
+                "required": [
+                  "start",
+                  "end",
+                ],
+                "type": "object",
+              },
+              "type": "array",
+            },
+            "tuesday": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "end": {
+                    "anyOf": [
+                      {
+                        "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
+                        "type": "string",
+                      },
+                      {
+                        "const": "24:00",
+                        "type": "string",
+                      },
+                    ],
+                  },
+                  "start": {
+                    "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
+                    "type": "string",
+                  },
+                },
+                "required": [
+                  "start",
+                  "end",
+                ],
+                "type": "object",
+              },
+              "type": "array",
+            },
+            "wednesday": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "end": {
+                    "anyOf": [
+                      {
+                        "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
+                        "type": "string",
+                      },
+                      {
+                        "const": "24:00",
+                        "type": "string",
+                      },
+                    ],
+                  },
+                  "start": {
+                    "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
+                    "type": "string",
+                  },
+                },
+                "required": [
+                  "start",
+                  "end",
+                ],
+                "type": "object",
+              },
+              "type": "array",
+            },
+          },
+          "type": "object",
+        },
+      },
+      "required": [
+        "partyId",
+        "timeZone",
+        "weeklyRules",
+        "blackouts",
+      ],
+      "type": "object",
+    },
+    "participants": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "blackouts": {
+            "default": [],
+            "items": {
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+              "type": "string",
+            },
+            "type": "array",
+          },
+          "partyId": {
+            "maxLength": 64,
+            "minLength": 1,
+            "type": "string",
+          },
+          "timeZone": {
+            "type": "string",
+          },
+          "weeklyRules": {
+            "additionalProperties": false,
+            "properties": {
+              "friday": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "end": {
+                      "anyOf": [
+                        {
+                          "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
+                          "type": "string",
+                        },
+                        {
+                          "const": "24:00",
+                          "type": "string",
+                        },
+                      ],
+                    },
+                    "start": {
+                      "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
+                      "type": "string",
+                    },
+                  },
+                  "required": [
+                    "start",
+                    "end",
+                  ],
+                  "type": "object",
+                },
+                "type": "array",
+              },
+              "monday": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "end": {
+                      "anyOf": [
+                        {
+                          "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
+                          "type": "string",
+                        },
+                        {
+                          "const": "24:00",
+                          "type": "string",
+                        },
+                      ],
+                    },
+                    "start": {
+                      "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
+                      "type": "string",
+                    },
+                  },
+                  "required": [
+                    "start",
+                    "end",
+                  ],
+                  "type": "object",
+                },
+                "type": "array",
+              },
+              "saturday": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "end": {
+                      "anyOf": [
+                        {
+                          "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
+                          "type": "string",
+                        },
+                        {
+                          "const": "24:00",
+                          "type": "string",
+                        },
+                      ],
+                    },
+                    "start": {
+                      "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
+                      "type": "string",
+                    },
+                  },
+                  "required": [
+                    "start",
+                    "end",
+                  ],
+                  "type": "object",
+                },
+                "type": "array",
+              },
+              "sunday": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "end": {
+                      "anyOf": [
+                        {
+                          "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
+                          "type": "string",
+                        },
+                        {
+                          "const": "24:00",
+                          "type": "string",
+                        },
+                      ],
+                    },
+                    "start": {
+                      "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
+                      "type": "string",
+                    },
+                  },
+                  "required": [
+                    "start",
+                    "end",
+                  ],
+                  "type": "object",
+                },
+                "type": "array",
+              },
+              "thursday": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "end": {
+                      "anyOf": [
+                        {
+                          "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
+                          "type": "string",
+                        },
+                        {
+                          "const": "24:00",
+                          "type": "string",
+                        },
+                      ],
+                    },
+                    "start": {
+                      "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
+                      "type": "string",
+                    },
+                  },
+                  "required": [
+                    "start",
+                    "end",
+                  ],
+                  "type": "object",
+                },
+                "type": "array",
+              },
+              "tuesday": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "end": {
+                      "anyOf": [
+                        {
+                          "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
+                          "type": "string",
+                        },
+                        {
+                          "const": "24:00",
+                          "type": "string",
+                        },
+                      ],
+                    },
+                    "start": {
+                      "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
+                      "type": "string",
+                    },
+                  },
+                  "required": [
+                    "start",
+                    "end",
+                  ],
+                  "type": "object",
+                },
+                "type": "array",
+              },
+              "wednesday": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "end": {
+                      "anyOf": [
+                        {
+                          "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
+                          "type": "string",
+                        },
+                        {
+                          "const": "24:00",
+                          "type": "string",
+                        },
+                      ],
+                    },
+                    "start": {
+                      "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
+                      "type": "string",
+                    },
+                  },
+                  "required": [
+                    "start",
+                    "end",
+                  ],
+                  "type": "object",
+                },
+                "type": "array",
+              },
+            },
+            "type": "object",
+          },
+        },
+        "required": [
+          "partyId",
+          "timeZone",
+          "weeklyRules",
+          "blackouts",
+        ],
+        "type": "object",
+      },
+      "maxItems": 49,
+      "minItems": 1,
+      "type": "array",
+    },
+    "search_horizon_days": {
+      "default": 14,
+      "maximum": 90,
+      "minimum": 1,
+      "type": "integer",
+    },
+    "start": {
+      "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
+      "type": "string",
+    },
+    "time_zone": {
+      "maxLength": 64,
+      "type": "string",
+    },
+  },
+  "required": [
+    "date",
+    "start",
+    "end",
+    "participants",
+    "calendar_id",
+    "max_suggestions",
+    "min_notice_minutes",
+    "search_horizon_days",
+  ],
+  "type": "object",
+}
+`;
+
+exports[`calendar_find_slots schemas > output schema is stable 1`] = `
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "busy_dropped": {
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer",
+    },
+    "decision": {
+      "enum": [
+        "book",
+        "counter_offer",
+        "none",
+      ],
+      "type": "string",
+    },
+    "note": {
+      "type": [
+        "string",
+        "null",
+      ],
+    },
+    "reasons": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "type": "string",
+          },
+          "message": {
+            "type": "string",
+          },
+          "participant_id": {
+            "type": [
+              "string",
+              "null",
+            ],
+          },
+        },
+        "required": [
+          "code",
+          "participant_id",
+          "message",
+        ],
+        "type": "object",
+      },
+      "type": "array",
+    },
+    "requested": {
+      "additionalProperties": false,
+      "properties": {
+        "end": {
+          "type": "string",
+        },
+        "endUtc": {
+          "type": "string",
+        },
+        "start": {
+          "type": "string",
+        },
+        "startUtc": {
+          "type": "string",
+        },
+      },
+      "required": [
+        "start",
+        "end",
+        "startUtc",
+        "endUtc",
+      ],
+      "type": "object",
+    },
+    "slots": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "end": {
+            "type": "string",
+          },
+          "endUtc": {
+            "type": "string",
+          },
+          "start": {
+            "type": "string",
+          },
+          "startUtc": {
+            "type": "string",
+          },
+        },
+        "required": [
+          "start",
+          "end",
+          "startUtc",
+          "endUtc",
+        ],
+        "type": "object",
+      },
+      "type": "array",
+    },
+  },
+  "required": [
+    "decision",
+    "requested",
+    "slots",
+    "busy_dropped",
+    "reasons",
+    "note",
+  ],
+  "type": "object",
+}
+`;

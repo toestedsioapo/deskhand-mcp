@@ -90,7 +90,7 @@ describe("redteam sandbox script", () => {
     await client.connect(transport);
     try {
       const names = (await client.listTools()).tools.map((t) => t.name).sort();
-      expect(names).toEqual(["action_apply", "action_explain", "calendar_list_events", "ledger_query", "ping"]);
+      expect(names).toEqual(["action_apply", "action_explain", "calendar_find_slots", "calendar_list_events", "ledger_query", "ping"]);
       // P1 planned, P2 rejected, P4 failed, P5 planned (tampered): gate 4. P3 approved but expired: gate 7.
       const expected = { P1: "NOT_APPROVED", P2: "NOT_APPROVED", P3: "PLAN_EXPIRED", P4: "NOT_APPROVED", P5: "NOT_APPROVED" };
       for (const key of ["P1", "P2", "P3", "P4", "P5"] as const) {

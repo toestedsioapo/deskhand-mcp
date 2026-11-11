@@ -199,6 +199,14 @@ describe("createServer tracks every tool handler", () => {
     action_explain: { action_id: "act_missing" },
     action_apply: { action_id: "act_missing" },
     calendar_list_events: { time_min: "2026-11-10T00:00:00Z", time_max: "2026-11-11T00:00:00Z" },
+    calendar_find_slots: {
+      date: "2026-11-10",
+      start: "10:00",
+      end: "10:30",
+      time_zone: "UTC",
+      participants: [{ partyId: "them", timeZone: "UTC", weeklyRules: { tuesday: [{ start: "09:00", end: "17:00" }] } }],
+      own_rules: { partyId: "me", timeZone: "UTC", weeklyRules: { tuesday: [{ start: "09:00", end: "17:00" }] } },
+    },
   };
 
   it("runs each registered tool's handler under track", async () => {

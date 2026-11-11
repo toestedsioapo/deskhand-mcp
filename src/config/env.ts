@@ -1,3 +1,5 @@
+import { join } from "node:path";
+import { isIanaTimeZone } from "../util/local-time.js";
 import { resolvePaths, type DataPaths } from "./paths.js";
 
 export interface Config {
@@ -7,6 +9,10 @@ export interface Config {
   /** Explicit provider choice (ADR 0008). null: none configured. M3b widens this to add "google". */
   provider: "fixture" | null;
   fixturePath: string | undefined;
+  /** IANA zone used when a tool call names none: `DESKHAND_TIMEZONE`, else the system zone. */
+  timeZone: string;
+  /** The caller's working-hours rules file: `DESKHAND_RULES`, else `<configDir>/rules.json`. */
+  rulesPath: string;
   paths: DataPaths;
 }
 
@@ -38,6 +44,14 @@ function parseProvider(raw: string | undefined): "fixture" | null {
   throw new ConfigError(`DESKHAND_PROVIDER must be "fixture" (or unset for no provider), got "${raw}"`);
 }
 
+function parseTimeZone(raw: string | undefined): string {
+  if (raw === undefined) return Intl.DateTimeFormat().resolvedOptions().timeZone;
+  if (!isIanaTimeZone(raw)) {
+    throw new ConfigError(`DESKHAND_TIMEZONE must be an IANA time zone name such as "Europe/Berlin", got "${raw}"`);
+  }
+  return raw;
+}
+
 export function loadConfig(
   env: NodeJS.ProcessEnv,
   platform?: NodeJS.Platform,
@@ -48,12 +62,15 @@ export function loadConfig(
   if (fixturePath !== undefined && provider !== "fixture") {
     throw new ConfigError("DESKHAND_FIXTURE is set but no provider is selected; set DESKHAND_PROVIDER=fixture to use it");
   }
+  const paths = resolvePaths(env, platform, homedir);
   return {
     writesEnabled: env["DESKHAND_ALLOW_WRITES"] === "1",
     planTtlHours: parseTtl(env["DESKHAND_PLAN_TTL_HOURS"]),
     busyTimeoutMs: BUSY_TIMEOUT_MS,
     provider,
     fixturePath,
-    paths: resolvePaths(env, platform, homedir),
+    timeZone: parseTimeZone(env["DESKHAND_TIMEZONE"]),
+    rulesPath: env["DESKHAND_RULES"] || join(paths.configDir, "rules.json"),
+    paths,
   };
 }

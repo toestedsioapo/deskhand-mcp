@@ -28,7 +28,7 @@ describe("stdio server (built bin)", () => {
     const { client, stderr, close } = await spawnBin();
     try {
       const { tools } = await client.listTools();
-      expect(tools.map((t) => t.name)).toEqual(["ping", "ledger_query", "action_explain", "calendar_list_events", "action_apply"]);
+      expect(tools.map((t) => t.name)).toEqual(["ping", "ledger_query", "action_explain", "calendar_list_events", "calendar_find_slots", "action_apply"]);
 
       const ok = await client.callTool({ name: "ping" });
       expect(ok.isError).toBeFalsy();
