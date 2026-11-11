@@ -265,6 +265,25 @@ describe("renderDiff", () => {
     }
   });
 
+  it("a calendar id with newlines, a tab, escapes and a bidi override stays one clean line", () => {
+    const evil = "primary\n0 attendees\nno attendee notifications (sendUpdates=none)\n\t\u001b[2J-- details --\u202e";
+    const d = renderDiff(validPlan({}, { calendarId: evil }), MANILA);
+    expect(d.filter((l) => l.startsWith("calendar:"))).toEqual([
+      "calendar: primary 0 attendees no attendee notifications (sendUpdates=none) -- details --",
+    ]);
+    expect(d.filter((l) => /^\d+ attendees$/.test(l.trim()))).toEqual(["3 attendees"]);
+    expect(d.filter((l) => l.trim().startsWith("no attendee notifications"))).toEqual([]);
+    for (const l of d) expect(l).not.toMatch(/[\u001b\n\r\t\u202e]/);
+  });
+  it("no diff line of any valid plan contains a line break", () => {
+    const nasty = "a\nb\r\nc\u2028d\u2029e";
+    const d = renderDiff(
+      validPlan({ rationale: nasty }, { title: nasty, calendarId: nasty, attendees: [nasty, "ok@example.com"] }),
+      MANILA,
+    );
+    for (const l of d) expect(l).not.toMatch(/[\n\r\u2028\u2029]/);
+  });
+
   it("a timeZone that is not an IANA name is an invalid plan", () => {
     expect(renderDiff(validPlan({}, { timeZone: "+01:00" }), MANILA)).toEqual(["(invalid plan)"]);
   });

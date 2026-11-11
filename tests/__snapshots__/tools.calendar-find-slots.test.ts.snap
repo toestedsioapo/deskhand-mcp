@@ -9,6 +9,7 @@ exports[`calendar_find_slots schemas > input schema is stable 1`] = `
       "default": "primary",
       "maxLength": 256,
       "minLength": 1,
+      "pattern": "^[\\x21-\\x7e]+$",
       "type": "string",
     },
     "date": {

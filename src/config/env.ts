@@ -57,8 +57,20 @@ function parseProvider(raw: string | undefined): "fixture" | null {
   throw new ConfigError(`DESKHAND_PROVIDER must be "fixture" (or unset for no provider), got "${raw}"`);
 }
 
-function parseTimeZone(raw: string | undefined): string {
-  if (raw === undefined) return Intl.DateTimeFormat().resolvedOptions().timeZone;
+/**
+ * `Config.timeZone`: `DESKHAND_TIMEZONE` when set, else the system zone. Both must be IANA names: the zone is
+ * stored in plans and names the zone of every diff, so a system zone such as `EST5EDT` or `+00:00` (Node reports
+ * these for some `TZ` values) is a startup error that says what to set, never a silent fallback.
+ */
+export function resolveTimeZone(raw: string | undefined, systemZone: string): string {
+  if (raw === undefined) {
+    if (!isIanaTimeZone(systemZone)) {
+      throw new ConfigError(
+        `the system time zone "${systemZone}" is not an IANA name; set DESKHAND_TIMEZONE to one such as "Europe/Berlin"`,
+      );
+    }
+    return systemZone;
+  }
   if (!isIanaTimeZone(raw)) {
     throw new ConfigError(`DESKHAND_TIMEZONE must be an IANA time zone name such as "Europe/Berlin", got "${raw}"`);
   }
@@ -82,7 +94,7 @@ export function loadConfig(
     busyTimeoutMs: BUSY_TIMEOUT_MS,
     provider,
     fixturePath,
-    timeZone: parseTimeZone(env["DESKHAND_TIMEZONE"]),
+    timeZone: resolveTimeZone(env["DESKHAND_TIMEZONE"], Intl.DateTimeFormat().resolvedOptions().timeZone),
     rulesPath: env["DESKHAND_RULES"] || join(paths.configDir, "rules.json"),
     shutdownTimeoutMs: parseShutdownTimeout(env["DESKHAND_SHUTDOWN_TIMEOUT_MS"]),
     paths,

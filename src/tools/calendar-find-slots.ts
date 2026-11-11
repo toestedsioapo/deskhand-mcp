@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { AppContext } from "../app-context.js";
+import { calendarIdSchema } from "./calendar-id.js";
 import { requireProvider } from "./provider-guard.js";
 import { toolError, toolOk, type ToolErrorResult, type ToolOkResult } from "./result.js";
 import { loadOwnRules } from "../config/own-rules.js";
@@ -16,7 +17,7 @@ export const calendarFindSlotsInputSchema = z
     time_zone: z.string().max(64).optional(),
     participants: z.array(partyRulesSchema).min(1).max(49),
     own_rules: partyRulesSchema.optional(),
-    calendar_id: z.string().min(1).max(256).default("primary"),
+    calendar_id: calendarIdSchema.default("primary"),
     max_suggestions: z.number().int().min(1).max(10).default(3),
     min_notice_minutes: z.number().int().min(0).max(525600).default(0),
     search_horizon_days: z.number().int().min(1).max(90).default(14),

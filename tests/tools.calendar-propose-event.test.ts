@@ -133,6 +133,21 @@ describe("calendar_propose_event", () => {
     });
   });
 
+  it("without time_zone the plan stores Config.timeZone as event.timeZone and the diff has no event zone line", async () => {
+    const hh = await harness({ DESKHAND_TIMEZONE: "Asia/Manila" });
+    const out = await propose(hh, base);
+    expect(storedPlan(hh, out.action_id).event.timeZone).toBe("Asia/Manila");
+    expect(out.diff[1]).toBe("when: Thu 12 Nov 2026, 18:00 to 18:30 GMT+8 (Asia/Manila)");
+    expect(out.diff.filter((l) => l.startsWith("event zone:"))).toEqual([]);
+  });
+
+  it("a Google-style calendar_id (an address with # and dots) is accepted and shown on the calendar line", async () => {
+    const hh = await harness();
+    const id = "en.usa#holiday@group.v.calendar.google.com";
+    const out = await propose(hh, { ...base, calendar_id: id });
+    expect(out.diff).toContain(`calendar: ${id}`);
+  });
+
   it("with time_zone Europe/Berlin under DESKHAND_TIMEZONE=Asia/Manila: Manila when line, then Berlin event zone line", async () => {
     const hh = await harness({ DESKHAND_TIMEZONE: "Asia/Manila" });
     const out = await propose(hh, { ...base, time_zone: "Europe/Berlin" });
@@ -191,6 +206,12 @@ describe("calendar_propose_event", () => {
       ["a +01:00 time_zone", { ...base, time_zone: "+01:00" }],
       ["a POSIX time_zone", { ...base, time_zone: "EST5EDT" }],
       ["an unknown extra field", { ...base, approved: true }],
+      ["a calendar_id with newlines", { ...base, calendar_id: "primary\n0 attendees\nno attendee notifications (sendUpdates=none)" }],
+      ["a calendar_id with a space", { ...base, calendar_id: "my calendar" }],
+      ["a calendar_id with a tab", { ...base, calendar_id: "primary\tx" }],
+      ["a calendar_id with an escape", { ...base, calendar_id: "primary\u001b[2J" }],
+      ["a calendar_id with a bidi override", { ...base, calendar_id: "primary\u202e" }],
+      ["a 257-character calendar_id", { ...base, calendar_id: "c".repeat(257) }],
       ["a 255-character attendee address", { ...base, attendees: [`${"a".repeat(243)}@example.com`] }],
       ["a malformed attendee", { ...base, attendees: ["not an email"] }],
       ["a rationale over 500 characters", { ...base, rationale: "r".repeat(501) }],

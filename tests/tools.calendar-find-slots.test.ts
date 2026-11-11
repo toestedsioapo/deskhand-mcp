@@ -169,6 +169,17 @@ describe("calendar_find_slots", () => {
     }
   });
 
+  it("refuses a calendar_id with whitespace or control characters as INVALID_INPUT", async () => {
+    for (const id of ["primary\n0 attendees", "my calendar", "primary\u001b[2J", ""]) {
+      const r = await call({ ...base, calendar_id: id });
+      expect(r.isError, JSON.stringify(id)).toBe(true);
+    }
+    await h.logging.whenIdle();
+    const rows = toolCallRows();
+    expect(rows).toHaveLength(4);
+    for (const row of rows) expect(row).toMatchObject({ outcome: "error", error_code: "INVALID_INPUT" });
+  });
+
   it("defaults time_zone to the configured zone", async () => {
     h.ctx.config.timeZone = "UTC";
     const { time_zone: _unused, ...noTz } = base;

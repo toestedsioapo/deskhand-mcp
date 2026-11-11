@@ -106,7 +106,7 @@ Input (strict):
 
 | Field | Type | Default | Notes |
 |---|---|---|---|
-| `calendar_id` | string, 1 to 256 characters | `"primary"` | |
+| `calendar_id` | string, 1 to 256 characters | `"primary"` | printable ASCII, no whitespace or control characters (`^[\x21-\x7e]+$`); anything else is `INVALID_INPUT` |
 | `time_min` | ISO-8601 datetime, offset allowed | required | normalised to UTC |
 | `time_max` | ISO-8601 datetime, offset allowed | required | normalised to UTC |
 | `limit` | integer 1..250 | 50 | out of range is `INVALID_INPUT` |
@@ -167,7 +167,7 @@ Input (strict):
 | `time_zone` | IANA zone name | `Config.timeZone` | `DESKHAND_TIMEZONE`, else the system zone. Offsets (`+01:00`), POSIX names (`EST5EDT`), unknown names and `""` are `INVALID_INPUT` |
 | `participants` | `PartyRules[]`, 1 to 49 | required | the counterparties |
 | `own_rules` | `PartyRules` | none | the caller's rules; overrides the rules file |
-| `calendar_id` | string, 1 to 256 characters | `"primary"` | calendar checked for busy time |
+| `calendar_id` | string, 1 to 256 characters | `"primary"` | calendar checked for busy time; printable ASCII, no whitespace or control characters (`^[\x21-\x7e]+$`); anything else is `INVALID_INPUT` |
 | `max_suggestions` | integer 1..10 | 3 | most slots returned |
 | `min_notice_minutes` | integer 0..525600 | 0 | |
 | `search_horizon_days` | integer 1..90 | 14 | how far Tempo looks for alternatives |
@@ -212,8 +212,8 @@ Input (strict):
 | `end` | ISO-8601 datetime, offset allowed | required | stored as UTC; must be after `start` |
 | `attendees` | email[], at most 50, each at most 254 characters | `[]` | the diff never truncates an address |
 | `send_updates` | `"none"` \| `"all"` \| `"externalOnly"` | `"none"` | whether attendees are emailed when the event is created |
-| `calendar_id` | string, 1 to 256 characters | `"primary"` | |
-| `time_zone` | IANA zone name | none | the event's own zone, stored in the plan and shown on an `event zone:` diff line when it differs from `Config.timeZone`. Offsets (`+01:00`), POSIX names and unknown names are `INVALID_INPUT` |
+| `calendar_id` | string, 1 to 256 characters | `"primary"` | printable ASCII, no whitespace or control characters (`^[\x21-\x7e]+$`); anything else is `INVALID_INPUT` |
+| `time_zone` | IANA zone name | `Config.timeZone` | the event's own zone, always stored in the plan as `event.timeZone` (resolved at plan time: this input, else `Config.timeZone`) and shown on an `event zone:` diff line when it differs from the viewer's `Config.timeZone`. Offsets (`+01:00`), POSIX names and unknown names are `INVALID_INPUT` |
 | `rationale` | string, at most 500 characters | none | why the agent proposes it; stored in the plan |
 
 Output:
@@ -230,18 +230,18 @@ Output:
 
 The result sets `_meta.deskhand.action_id`, so the `tool_call` row carries the action id. Ledger rows on success: `plan_created`, then `tool_call`, both with the action id.
 
-Refused as `INVALID_INPUT` (no plan row): `end <= start`; `start` not after the server clock; a `time_zone` that is not an IANA name; an unknown extra field; a slot that overlaps a busy block in the calendar (`The slot is busy in calendar <id>; use calendar_find_slots.`, checked with `provider.freeBusy`; all-day events are not busy time). A provider failure while checking is `PROVIDER_ERROR`.
+Refused as `INVALID_INPUT` (no plan row): `end <= start`; `start` not after the server clock; a `time_zone` that is not an IANA name; a `calendar_id` with whitespace or control characters; an unknown extra field; a slot that overlaps a busy block in the calendar (`The slot is busy in calendar <id>; use calendar_find_slots.`, checked with `provider.freeBusy`; all-day events are not busy time). A provider failure while checking is `PROVIDER_ERROR`.
 
 The plan it stores (`plan_json`, hashed with the canonical JSON):
 
 ```
 { kind: "calendar.create_event", rationale?,
-  event: { title, start, end, attendees, sendUpdates, calendarId, timeZone? },
+  event: { title, start, end, attendees, sendUpdates, calendarId, timeZone },
   observed: { slotFree: true, etags: {} } }
 ```
 
 `timeZone` is part of the plan hash (two plans differing only in zone have different hashes); the viewer zone is not. `action_apply` re-checks that the slot is still free and, if not, fails with `STALE_PLAN` without writing.
 
-Diff lines, in order: `create event: <title flattened to one line, at most 200 characters>`, `when: <range in Config.timeZone>`, `event zone: <range in the event zone>` (only when it differs), `utc: <start> to <end>`, `calendar: <id>`, `<N> attendees`, one `  <address>` line per attendee, then `will email <N> attendees` or `no attendee notifications (sendUpdates=none)`.
+Diff lines, in order: `create event: <title flattened to one line, at most 200 characters>`, `when: <range in Config.timeZone>`, `event zone: <range in the event zone>` (only when it differs), `utc: <start> to <end>`, `calendar: <id flattened to one line>`, `<N> attendees`, one `  <address>` line per attendee, then `will email <N> attendees` or `no attendee notifications (sendUpdates=none)`.
 
 The output schemas are snapshot-tested in `tests/tools.calendar-propose-event.test.ts`.

@@ -3,6 +3,7 @@ import type { AppContext } from "../app-context.js";
 import { renderDiff, type CalendarCreateEventPlan } from "../approval/plan-kinds.js";
 import { createPlan } from "../approval/plans.js";
 import { isIanaTimeZone } from "../util/local-time.js";
+import { calendarIdSchema } from "./calendar-id.js";
 import { requireProvider } from "./provider-guard.js";
 import { toolError, toolOk, type ToolErrorResult, type ToolOkResult } from "./result.js";
 
@@ -13,7 +14,7 @@ export const calendarProposeEventInputSchema = z
     end: z.iso.datetime({ offset: true }),
     attendees: z.array(z.email().max(254)).max(50).default([]),
     send_updates: z.enum(["none", "all", "externalOnly"]).default("none"),
-    calendar_id: z.string().min(1).max(256).default("primary"),
+    calendar_id: calendarIdSchema.default("primary"),
     time_zone: z.string().max(64).optional(),
     rationale: z.string().max(500).optional(),
   })
@@ -68,7 +69,8 @@ export async function calendarProposeEventHandler(
       attendees: input.attendees,
       sendUpdates: input.send_updates,
       calendarId: input.calendar_id,
-      ...(input.time_zone !== undefined ? { timeZone: input.time_zone } : {}),
+      // Resolved at plan time (hashed): the input, else the server's zone. The Google request needs it.
+      timeZone: input.time_zone ?? ctx.config.timeZone,
     },
     observed: { slotFree: true, etags: {} },
   };

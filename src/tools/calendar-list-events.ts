@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { AppContext } from "../app-context.js";
+import { calendarIdSchema } from "./calendar-id.js";
 import { requireProvider } from "./provider-guard.js";
 import { toolError, toolOk, type ToolErrorResult, type ToolOkResult } from "./result.js";
 import { untrusted, untrustedTextSchema } from "./untrusted.js";
@@ -8,7 +9,7 @@ const MAX_SPAN_MS = 62 * 24 * 60 * 60 * 1000;
 
 export const calendarListEventsInputSchema = z
   .object({
-    calendar_id: z.string().min(1).max(256).default("primary"),
+    calendar_id: calendarIdSchema.default("primary"),
     time_min: z.iso.datetime({ offset: true }),
     time_max: z.iso.datetime({ offset: true }),
     limit: z.number().int().min(1).max(250).default(50),

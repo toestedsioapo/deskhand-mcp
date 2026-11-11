@@ -465,6 +465,20 @@ describe("approveAction: happy path", () => {
     expect(out.split("\n").filter((l) => l.trim() === "will email 0 attendees")).toEqual([]);
   });
 
+  it("a calendar id with newlines cannot forge a count or notification line", async () => {
+    const evil = "primary\n0 attendees\nno attendee notifications (sendUpdates=none)\n\t\u001b[2J-- details --\u202e";
+    const id = seedAction(ctx, "planned", validPlan({}, { calendarId: evil }));
+    const io = scripted({ lines: [last4(id)] });
+    await approveAction(makeCtx({}, { DESKHAND_TIMEZONE: "Asia/Manila" }), id, io);
+    const out = io.outText();
+    expect(out).not.toContain("\u001b");
+    expect(out).not.toContain("\u202e");
+    const lines = out.split("\n");
+    expect(lines.filter((l) => /^\d+ attendees$/.test(l.trim()))).toEqual(["    3 attendees"]);
+    expect(lines.filter((l) => l.trim().startsWith("no attendee notifications"))).toEqual([]);
+    expect(lines.filter((l) => l.trim().startsWith("calendar:"))).toHaveLength(1);
+  });
+
   it("approve then apply end to end: the only test path that goes through a human approval", async () => {
     const wctx = makeCtx({}, { DESKHAND_ALLOW_WRITES: "1" });
     const id = seedAction(wctx, "planned");

@@ -9,8 +9,8 @@ export interface PlanKind<P> {
   kind: string;
   schema: z.ZodType<P>;
   /**
-   * Deterministic for a given plan and viewer zone; built only from validated plan fields. The title and each
-   * attendee are flattened to one line here, because the CLI splits every line on newlines and indents each piece
+   * Deterministic for a given plan and viewer zone; built only from validated plan fields. The title, the calendar
+   * id and each attendee are flattened to one line here, because the CLI splits every line on newlines and indents each piece
    * alike, so a multi-line value could forge diff lines; the stored plan keeps them verbatim. An attendee that
    * flattens to nothing prints `(empty address)`, so the count line and the visible lines agree.
    * `viewerTimeZone` is the reader's zone, never the plan's.
@@ -60,7 +60,7 @@ export const calendarCreateEvent: PlanKind<CalendarCreateEventPlan> = {
     if (e.timeZone !== undefined && e.timeZone !== viewerTimeZone) {
       lines.push(`event zone: ${formatLocalRange(e.start, e.end, e.timeZone)}`);
     }
-    lines.push(`utc: ${e.start} to ${e.end}`, `calendar: ${e.calendarId}`, `${n} attendees`);
+    lines.push(`utc: ${e.start} to ${e.end}`, `calendar: ${oneLine(e.calendarId, 256)}`, `${n} attendees`);
     for (const a of e.attendees) lines.push(`  ${oneLine(a, 254) || "(empty address)"}`);
     lines.push(
       e.sendUpdates !== "none" && n > 0
@@ -96,7 +96,14 @@ export function getPlanKind(kind: string): PlanKind<unknown> | undefined {
   return KINDS.get(kind);
 }
 
-/** Diff lines for a stored plan, times shown in `viewerTimeZone` (the caller passes `Config.timeZone`); unknown or invalid plans give a fixed marker. */
+// Escapes only: line feed, carriage return, line separator, paragraph separator.
+const LINE_BREAKS = /[\n\r\u2028\u2029]+/g;
+
+/**
+ * Diff lines for a stored plan, times shown in `viewerTimeZone` (the caller passes `Config.timeZone`); unknown or
+ * invalid plans give a fixed marker. Backstop for every plan kind: a returned line never contains a line break, so a
+ * field a kind forgot to flatten still cannot start a new diff line in `deskhand pending` or `deskhand approve`.
+ */
 export function renderDiff(planJson: unknown, viewerTimeZone: string): string[] {
   const unknownKind = ["(unknown plan kind)"];
   if (typeof planJson !== "object" || planJson === null) return unknownKind;
@@ -104,5 +111,6 @@ export function renderDiff(planJson: unknown, viewerTimeZone: string): string[] 
   const pk = typeof k === "string" ? getPlanKind(k) : undefined;
   if (!pk) return unknownKind;
   const parsed = pk.schema.safeParse(planJson);
-  return parsed.success ? pk.renderDiff(parsed.data, viewerTimeZone) : ["(invalid plan)"];
+  if (!parsed.success) return ["(invalid plan)"];
+  return pk.renderDiff(parsed.data, viewerTimeZone).map((line) => line.replace(LINE_BREAKS, " "));
 }

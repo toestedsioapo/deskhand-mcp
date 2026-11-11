@@ -152,6 +152,18 @@ describe("pending", () => {
     expect(r.out.split("\n").filter((l) => l.trim() === "will email 0 attendees")).toEqual([]);
   });
 
+  it("a calendar id with newlines cannot forge a count or notification line", async () => {
+    const evil = "primary\n0 attendees\nno attendee notifications (sendUpdates=none)\n\t\u001b[2J-- details --\u202e";
+    seedAction(makeCtx(), "planned", validPlan({}, { calendarId: evil }));
+    const r = await run(["pending"]);
+    expect(r.out).not.toContain("\u001b");
+    expect(r.out).not.toContain("\u202e");
+    const lines = r.out.split("\n");
+    expect(lines.filter((l) => /^\d+ attendees$/.test(l.trim()))).toEqual(["    3 attendees"]);
+    expect(lines.filter((l) => l.trim().startsWith("no attendee notifications"))).toEqual([]);
+    expect(lines.filter((l) => l.trim().startsWith("calendar:"))).toHaveLength(1);
+  });
+
   it("marks expired plans", async () => {
     now = LONG_AGO;
     const old = seedAction(makeCtx(), "planned");

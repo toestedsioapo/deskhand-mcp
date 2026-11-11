@@ -25,7 +25,7 @@ The SQLite ledger is `ledger.db` in the data dir: `%LOCALAPPDATA%\deskhand` on W
 | `DESKHAND_PLAN_TTL_HOURS` | plan lifetime, integer 1-168, default 24; out of range is a startup error |
 | `DESKHAND_PROVIDER` | `fixture` selects the fixture provider (M3b adds `google`). Unset means no provider: the server starts, but `action_apply` refuses with `PROVIDER_NOT_CONFIGURED`. Any other value is a startup error (ADR 0008) |
 | `DESKHAND_FIXTURE` | path to a fixture world JSON (`docs/fixture-format.md`) for the fixture provider, with its fixed `now` as the clock. Requires `DESKHAND_PROVIDER=fixture` (set without it is a startup error). With `DESKHAND_PROVIDER=fixture` and this unset, the world is empty and the clock is real |
-| `DESKHAND_TIMEZONE` | IANA zone name (for example `Europe/Berlin`) for the `when:` line of every diff and the default zone of calendar tools. Default: the system zone. An offset such as `+01:00` or an abbreviation is a startup error |
+| `DESKHAND_TIMEZONE` | IANA zone name (for example `Europe/Berlin`) for the `when:` line of every diff and the default zone of calendar tools. Default: the system zone. An offset such as `+01:00` or an abbreviation is a startup error, and so is a system zone that is not an IANA name (set this variable then) |
 | `DESKHAND_RULES` | path to your own working-hours rules for `calendar_find_slots`. Default: `rules.json` in the config dir (see below) |
 | `DESKHAND_SHUTDOWN_TIMEOUT_MS` | how long the server waits for in-flight tool calls after the client closes stdin, integer 1000-120000, default 30000; anything else is a startup error. At the cap it logs one line and exits 1 |
 

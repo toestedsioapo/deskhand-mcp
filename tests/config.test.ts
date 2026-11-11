@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { resolveActor } from "../src/config/actor.js";
-import { loadConfig, ConfigError } from "../src/config/env.js";
+import { loadConfig, ConfigError, resolveTimeZone } from "../src/config/env.js";
 import { ensureDirs, resolvePaths } from "../src/config/paths.js";
 
 describe("resolveActor", () => {
@@ -212,6 +212,20 @@ describe("loadConfig timeZone and rulesPath", () => {
     for (const v of ["+01:00", "EST5EDT", "Mars/Olympus", ""]) {
       expect(() => loadConfig({ ...base, DESKHAND_TIMEZONE: v })).toThrow(ConfigError);
       expect(() => loadConfig({ ...base, DESKHAND_TIMEZONE: v })).toThrow(/DESKHAND_TIMEZONE/);
+    }
+  });
+
+  it("resolveTimeZone: DESKHAND_TIMEZONE wins; else the system zone when it is an IANA name", () => {
+    expect(resolveTimeZone("Europe/Berlin", "Asia/Manila")).toBe("Europe/Berlin");
+    expect(resolveTimeZone(undefined, "Asia/Manila")).toBe("Asia/Manila");
+    expect(resolveTimeZone(undefined, "UTC")).toBe("UTC");
+    expect(resolveTimeZone("Europe/Berlin", "EST5EDT")).toBe("Europe/Berlin");
+  });
+
+  it("resolveTimeZone: a system zone that is not an IANA name is a ConfigError telling you to set DESKHAND_TIMEZONE", () => {
+    for (const sys of ["EST5EDT", "+00:00", ""]) {
+      expect(() => resolveTimeZone(undefined, sys), sys).toThrow(ConfigError);
+      expect(() => resolveTimeZone(undefined, sys), sys).toThrow(/set DESKHAND_TIMEZONE/);
     }
   });
 

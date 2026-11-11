@@ -298,7 +298,7 @@ Every `tools/call` writes exactly one `tool_call` row, including calls rejected 
 
 ## Plan shape: `calendar.create_event`
 
-`actions.plan_json` for this kind (strict): `{ kind, rationale?, event, observed: { slotFree: true, etags } }`. `event` is `{ title, start, end, attendees: string[], sendUpdates, calendarId, timeZone? }`. `start` and `end` are UTC instants (ISO 8601, `Z`). `timeZone` is optional, an IANA name (`Europe/Berlin`, `UTC`; offsets and POSIX names are an invalid plan), and part of the plan hash; it is the zone the event was proposed in and is passed to the provider on create.
+`actions.plan_json` for this kind (strict): `{ kind, rationale?, event, observed: { slotFree: true, etags } }`. `event` is `{ title, start, end, attendees: string[], sendUpdates, calendarId, timeZone? }`. `start` and `end` are UTC instants (ISO 8601, `Z`). `timeZone` is optional, an IANA name (`Europe/Berlin`, `UTC`; offsets and POSIX names are an invalid plan), and part of the plan hash; it is the zone the event was proposed in and is passed to the provider on create. `calendar_propose_event` always sets it (its `time_zone` input, else the server's `Config.timeZone`); it stays optional in the schema so plans stored before M3a remain valid.
 
 The human diff (`deskhand pending`, `deskhand approve`, `action_explain.diff`) is rendered from the plan in the viewer's zone (`Config.timeZone`: `DESKHAND_TIMEZONE`, else the system zone), never one the plan chose. The viewer zone is not part of the plan and does not change `plan_hash`. Lines, in order:
 
@@ -306,10 +306,12 @@ The human diff (`deskhand pending`, `deskhand approve`, `action_explain.diff`) i
 2. `when: <start> to <end>` in the viewer's zone, e.g. `Thu 12 Nov 2026, 18:00 to 18:30 GMT+8 (Asia/Manila)`; a range across midnight or a zone change names both ends in full
 3. `event zone: <range in event.timeZone>`, only when `event.timeZone` is set and differs from the viewer zone
 4. `utc: <start> to <end>` (always)
-5. `calendar: <calendarId>`
+5. `calendar: <calendarId>`, flattened to one line (control characters removed, whitespace collapsed, capped at 256 characters)
 6. `<n> attendees`
 7. one line per attendee, in plan order: two spaces then the address flattened to one line (control characters removed, whitespace collapsed, capped at 254 characters)
 8. `will email <n> attendees` or `no attendee notifications (sendUpdates=none)`
+
+No diff line ever contains a line break: the title, the calendar id and every address are flattened by the plan kind, and `renderDiff` replaces any line break left in a line with a space as a backstop, so no plan field can start a new line in `deskhand pending` or `deskhand approve`.
 
 ## `preview_json`
 

@@ -156,7 +156,15 @@ describe("calendar_list_events", () => {
   });
 
   it("refuses out-of-range limits, empty calendar_id and unknown keys as INVALID_INPUT", async () => {
-    const extras = [{ limit: 0 }, { limit: 251 }, { bogus: 1 }, { calendar_id: "" }];
+    const extras = [
+      { limit: 0 },
+      { limit: 251 },
+      { bogus: 1 },
+      { calendar_id: "" },
+      { calendar_id: "primary\n0 attendees" },
+      { calendar_id: "my calendar" },
+      { calendar_id: "primary\u001b[2J" },
+    ];
     for (const extra of extras) expect((await call({ ...DAY, ...extra })).isError).toBe(true);
     await h.logging.whenIdle();
     const rows = toolCallRows();
