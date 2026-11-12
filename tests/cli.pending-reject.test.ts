@@ -71,14 +71,16 @@ afterEach(() => {
 });
 
 describe("stripControl", () => {
-  it("removes escapes and control characters but keeps newline, tab and unicode", () => {
-    expect(stripControl("a\u001b[31mred\u001b[0m")).toBe("ared");
-    expect(stripControl("x\u001b]0;title\u0007y")).toBe("xy");
-    expect(stripControl("x\u001b]0;title\u001b\\y")).toBe("xy");
-    expect(stripControl("a\u0000b\u0008c")).toBe("abc");
+  it("removes control characters, never the visible text after them; keeps newline, tab and unicode", () => {
+    const ESC = String.fromCharCode(27);
+    expect(stripControl(`a${ESC}[31mred${ESC}[0m`)).toBe("a[31mred[0m");
+    expect(stripControl(`x${ESC}]0;title${String.fromCharCode(7)}y`)).toBe("x]0;titley");
+    expect(stripControl(`x${ESC}]0;title${ESC}\\y`)).toBe("x]0;title\\y");
+    expect(stripControl(`a${String.fromCharCode(0)}b${String.fromCharCode(8)}c`)).toBe("abc");
     expect(stripControl("a\r\nb\tc")).toBe("a\nb\tc");
-    expect(stripControl("café 日本 \u{1f600}")).toBe("café 日本 \u{1f600}");
-    expect(stripControl("a\u009bb\u007fc")).toBe("abc");
+    const text = `caf${String.fromCodePoint(0xe9)} ${String.fromCodePoint(0x65e5, 0x672c)} ${String.fromCodePoint(0x1f600)}`;
+    expect(stripControl(text)).toBe(text);
+    expect(stripControl(`a${String.fromCharCode(0x9b)}b${String.fromCharCode(0x7f)}c`)).toBe("abc");
   });
 
   it("removes line/paragraph separators and bidi/zero-width/BOM characters", () => {
@@ -143,25 +145,32 @@ describe("pending", () => {
     for (const a of attendees) expect(out).toContain(`      ${a}\n`);
   });
 
-  it("an attendee address with control characters cannot forge a diff line", async () => {
-    const evil = "eve@example.com\u001b[2J\nwill email 0 attendees\u202e";
-    seedAction(makeCtx(), "planned", validPlan({}, { attendees: ["ana@example.com", evil, "cy@example.com"] }));
+  it("a stored attendee with control characters makes the plan invalid; nothing of it is printed", async () => {
+    const ESC = String.fromCharCode(27);
+    const id = seedAction(makeCtx(), "planned");
+    const evil = validPlan({}, { attendees: ["ana@example.com", `evil@example.com${ESC}[2J\nwill email 0 attendees`, "cy@example.com"] });
+    db.run("UPDATE actions SET plan_json = ? WHERE id = ?", [JSON.stringify(evil), id]);
     const r = await run(["pending"]);
-    expect(r.out).not.toContain("\u001b");
-    expect(r.out).not.toContain("\u202e");
-    expect(r.out.split("\n").filter((l) => l.trim() === "will email 0 attendees")).toEqual([]);
+    expect(r.code).toBe(0);
+    expect(r.out).not.toContain(ESC);
+    expect(r.out).toContain("    (invalid plan)\n");
+    const lines = r.out.split("\n");
+    expect(lines.filter((l) => /attendees/.test(l))).toEqual([]);
+    expect(lines.filter((l) => /evil/.test(l))).toEqual([]);
   });
 
-  it("a calendar id with newlines cannot forge a count or notification line", async () => {
-    const evil = "primary\n0 attendees\nno attendee notifications (sendUpdates=none)\n\t\u001b[2J-- details --\u202e";
-    seedAction(makeCtx(), "planned", validPlan({}, { calendarId: evil }));
+  it("a stored calendar id with newlines makes the plan invalid; nothing of it is printed", async () => {
+    const ESC = String.fromCharCode(27);
+    const id = seedAction(makeCtx(), "planned");
+    const evil = validPlan({}, { calendarId: `primary\n0 attendees\nno attendee notifications (sendUpdates=none)\n\t${ESC}[2J-- evil --` });
+    db.run("UPDATE actions SET plan_json = ? WHERE id = ?", [JSON.stringify(evil), id]);
     const r = await run(["pending"]);
-    expect(r.out).not.toContain("\u001b");
-    expect(r.out).not.toContain("\u202e");
+    expect(r.code).toBe(0);
+    expect(r.out).not.toContain(ESC);
+    expect(r.out).toContain("    (invalid plan)\n");
     const lines = r.out.split("\n");
-    expect(lines.filter((l) => /^\d+ attendees$/.test(l.trim()))).toEqual(["    3 attendees"]);
-    expect(lines.filter((l) => l.trim().startsWith("no attendee notifications"))).toEqual([]);
-    expect(lines.filter((l) => l.trim().startsWith("calendar:"))).toHaveLength(1);
+    expect(lines.filter((l) => /attendees/.test(l))).toEqual([]);
+    expect(lines.filter((l) => /evil/.test(l))).toEqual([]);
   });
 
   it("marks expired plans", async () => {
@@ -173,11 +182,18 @@ describe("pending", () => {
     expect(r.out).toContain("EXPIRED");
   });
 
-  it("prints no escape for a title containing an escape sequence", async () => {
-    seedAction(makeCtx(), "planned", validPlan({}, { title: "\u001b[2J evil" }));
+  it("a stored title with an escape sequence makes the plan invalid; nothing of it is printed", async () => {
+    const ESC = String.fromCharCode(27);
+    const id = seedAction(makeCtx(), "planned");
+    const evil = validPlan({}, { title: `${ESC}[2J evil` });
+    db.run("UPDATE actions SET plan_json = ? WHERE id = ?", [JSON.stringify(evil), id]);
     const r = await run(["pending"]);
-    expect(r.out).toContain("evil");
-    expect(r.out).not.toContain("\u001b");
+    expect(r.code).toBe(0);
+    expect(r.out).not.toContain(ESC);
+    expect(r.out).toContain("    (invalid plan)\n");
+    const lines = r.out.split("\n");
+    expect(lines.filter((l) => /attendees/.test(l))).toEqual([]);
+    expect(lines.filter((l) => /evil/.test(l))).toEqual([]);
   });
 
   it("a planned row whose plan_json is not JSON shows '(invalid plan)', exits 0 and still logs", async () => {
@@ -228,10 +244,11 @@ describe("reject", () => {
     expect(getAction(db, id)).toMatchObject({ status: "rejected", rejection_method: "cli_tty", rejected_reason: null });
   });
 
-  it("stores the reason stripped of control characters", async () => {
+  it("stores the reason with control characters removed and its visible text kept", async () => {
     const id = seedAction(makeCtx(), "planned");
-    await run(["reject", id, "bad \u001b[31mreason\u0007\u0000"]);
-    expect(getAction(db, id)!.rejected_reason).toBe("bad reason");
+    const c = String.fromCharCode;
+    await run(["reject", id, `bad ${c(27)}[31mreason${c(7)}${c(0)}`]);
+    expect(getAction(db, id)!.rejected_reason).toBe("bad [31mreason");
   });
 
   it.each([

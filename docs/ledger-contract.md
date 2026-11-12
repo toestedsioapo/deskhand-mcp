@@ -300,18 +300,22 @@ Every `tools/call` writes exactly one `tool_call` row, including calls rejected 
 
 `actions.plan_json` for this kind (strict): `{ kind, rationale?, event, observed: { slotFree: true, etags } }`. `event` is `{ title, start, end, attendees: string[], sendUpdates, calendarId, timeZone? }`. `start` and `end` are UTC instants (ISO 8601, `Z`). `timeZone` is optional, an IANA name (`Europe/Berlin`, `UTC`; offsets and POSIX names are an invalid plan), and part of the plan hash; it is the zone the event was proposed in and is passed to the provider on create. `calendar_propose_event` always sets it (its `time_zone` input, else the server's `Config.timeZone`); it stays optional in the schema so plans stored before M3a remain valid.
 
+**Display equals write.** The plan schema only accepts values the diff can print verbatim, so the text a human approves is exactly the text that is stored and written: `title` is 1 to 200 characters, one line of visible text (no control, format, bidirectional, zero-width or blank filler characters, no line breaks or tabs, single ASCII spaces between words only, none at either end); `calendarId` is 1 to 256 printable ASCII characters with no space; `attendees` is at most 50 addresses, each 1 to 254 printable ASCII characters with no space. A stored row that breaks any of these is an invalid plan: `pending` shows `(invalid plan)`, `approve` refuses it with `INTERNAL` before the prompt (check 5b) and `action_apply` does not write it.
+
 The human diff (`deskhand pending`, `deskhand approve`, `action_explain.diff`) is rendered from the plan in the viewer's zone (`Config.timeZone`: `DESKHAND_TIMEZONE`, else the system zone), never one the plan chose. The viewer zone is not part of the plan and does not change `plan_hash`. Lines, in order:
 
-1. `create event: <title>`
+1. `create event: <title>`, verbatim
 2. `when: <start> to <end>` in the viewer's zone, e.g. `Thu 12 Nov 2026, 18:00 to 18:30 GMT+8 (Asia/Manila)`; a range across midnight or a zone change names both ends in full
 3. `event zone: <range in event.timeZone>`, only when `event.timeZone` is set and differs from the viewer zone
 4. `utc: <start> to <end>` (always)
-5. `calendar: <calendarId>`, flattened to one line (control characters removed, whitespace collapsed, capped at 256 characters)
+5. `calendar: <calendarId>`, verbatim
 6. `<n> attendees`
-7. one line per attendee, in plan order: two spaces then the address flattened to one line (control characters removed, whitespace collapsed, capped at 254 characters)
-8. `will email <n> attendees` or `no attendee notifications (sendUpdates=none)`
+7. one line per attendee, in plan order: two spaces then the address, verbatim
+8. the notification line: `no attendee notifications (sendUpdates=none)`; `will email <n> attendees` (`all`); `will email the attendees outside your organisation, up to <n> (sendUpdates=externalOnly)`; or, for `all` / `externalOnly` with no attendees, `no attendee notifications (sendUpdates=<value>, no attendees)`. The stored `sendUpdates` value is always the one named.
 
-No diff line ever contains a line break: the title, the calendar id and every address are flattened by the plan kind, and `renderDiff` replaces any line break left in a line with a space as a backstop, so no plan field can start a new line in `deskhand pending` or `deskhand approve`.
+No diff line ever contains a line break or a hidden character: the schema above refuses them, and `renderDiff` replaces any line break left in a line with a space as a backstop for future plan kinds. The CLI header (`id`, `tool`, `expires`, `hash`) is built from row columns, each flattened to one line; the hash prefix is printed only when `plan_hash` is 64 lowercase hex characters, else `(invalid)`.
+
+**Terminal sanitising (`stripControl`, `oneLine`).** Untrusted text printed by the CLI has every hidden character removed: control characters (C0, DEL, C1, so ESC too), format characters (bidirectional marks, embeddings, overrides and isolates, zero-width characters, soft hyphen, tag characters, BOM), line and paragraph separators, lone surrogates, private-use characters, default-ignorable code points (Hangul and Khmer fillers, variation selectors) and the braille blank. Only those characters are removed, never the visible text after them: an escape sequence is not interpreted, so `ESC[31m` is printed as `[31m`.
 
 ## `preview_json`
 

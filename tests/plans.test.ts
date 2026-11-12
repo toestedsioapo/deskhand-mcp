@@ -180,45 +180,22 @@ describe("renderDiff", () => {
       "will email 3 attendees",
     ]);
   });
-  it("says no notifications for sendUpdates=none or zero attendees", () => {
+  it("says no notifications for sendUpdates=none or zero attendees, naming the stored value", () => {
     expect(renderDiff(validPlan({}, { sendUpdates: "none" }), MANILA)).toContain(
       "no attendee notifications (sendUpdates=none)",
     );
     const none = renderDiff(validPlan({}, { attendees: [] }), MANILA);
-    expect(none).toContain("no attendee notifications (sendUpdates=none)");
+    expect(none).toContain("no attendee notifications (sendUpdates=all, no attendees)");
     expect(none).toContain("0 attendees");
     expect(none.filter((l) => l.startsWith("  "))).toEqual([]);
   });
-  it("flattens the title to one clean line and is deterministic", () => {
-    const p = validPlan({}, { title: "\u001b[31mred" });
-    expect(renderDiff(p, MANILA)[0]).toBe("create event: red");
+  it("prints the title verbatim and is deterministic", () => {
+    const p = validPlan({}, { title: "Q4 review: budget & hiring" });
+    expect(renderDiff(p, MANILA)[0]).toBe("create event: Q4 review: budget & hiring");
     expect(renderDiff(p, MANILA)).toEqual(renderDiff(p, MANILA));
   });
-  it("a multi-line title cannot forge diff lines: one create event line, the real count line in place", () => {
-    const title = "Sync\n0 attendees\nno attendee notifications (sendUpdates=none)";
-    expect(renderDiff(validPlan({}, { title }), MANILA)).toEqual([
-      "create event: Sync 0 attendees no attendee notifications (sendUpdates=none)",
-      "when: Thu 12 Nov 2026, 18:00 to 18:30 GMT+8 (Asia/Manila)",
-      UTC_LINE,
-      "calendar: primary",
-      "3 attendees",
-      "  a@example.com",
-      "  b@example.com",
-      "  c@example.com",
-      "will email 3 attendees",
-    ]);
-  });
-  it("a title over 200 characters is cut in the diff line", () => {
-    const d = renderDiff(validPlan({}, { title: "x".repeat(300) }), MANILA);
-    expect(d[0]).toBe(`create event: ${"x".repeat(197)}...`);
-  });
-  it("an attendee that is empty after flattening prints (empty address), so the count and the lines agree", () => {
-    const d = renderDiff(validPlan({}, { attendees: ["", "   ", "a@example.com"], sendUpdates: "none" }), MANILA);
-    const i = d.indexOf("3 attendees");
-    expect(i).toBeGreaterThan(0);
-    expect(d.slice(i + 1, i + 4)).toEqual(["  (empty address)", "  (empty address)", "  a@example.com"]);
-    expect(d.filter((l) => l.startsWith("  "))).toHaveLength(3);
-  });
+  // A title, calendar id or attendee that the sanitiser would alter is an invalid plan, not a flattened line:
+  // see tests/diff-forgery.test.ts ("a plan row written around the tool cannot be shown as something else").
   it("unknown kind", () => {
     expect(renderDiff({ kind: "nope" }, MANILA)).toEqual(["(unknown plan kind)"]);
     expect(renderDiff("x", MANILA)).toEqual(["(unknown plan kind)"]);
@@ -255,33 +232,11 @@ describe("renderDiff", () => {
     const d = renderDiff(validPlan({}, { attendees }), MANILA);
     expect(d.filter((l) => l.startsWith("  "))).toHaveLength(50);
   });
-  it("an address with escapes, a newline and a bidi override stays one clean line", () => {
-    const evil = "eve@example.com\u001b[2J\nwill email 0 attendees\u202e";
-    const d = renderDiff(validPlan({}, { attendees: ["ana@example.com", evil, "cy@example.com"] }), MANILA);
-    expect(d.filter((l) => l.startsWith("  "))).toHaveLength(3);
-    for (const l of d) {
-      expect(l).not.toMatch(/[\u001b\n\u202e]/);
-      expect(l.trim()).not.toBe("will email 0 attendees");
-    }
-  });
 
-  it("a calendar id with newlines, a tab, escapes and a bidi override stays one clean line", () => {
-    const evil = "primary\n0 attendees\nno attendee notifications (sendUpdates=none)\n\t\u001b[2J-- details --\u202e";
-    const d = renderDiff(validPlan({}, { calendarId: evil }), MANILA);
-    expect(d.filter((l) => l.startsWith("calendar:"))).toEqual([
-      "calendar: primary 0 attendees no attendee notifications (sendUpdates=none) -- details --",
-    ]);
-    expect(d.filter((l) => /^\d+ attendees$/.test(l.trim()))).toEqual(["3 attendees"]);
-    expect(d.filter((l) => l.trim().startsWith("no attendee notifications"))).toEqual([]);
-    for (const l of d) expect(l).not.toMatch(/[\u001b\n\r\t\u202e]/);
-  });
-  it("no diff line of any valid plan contains a line break", () => {
-    const nasty = "a\nb\r\nc\u2028d\u2029e";
-    const d = renderDiff(
-      validPlan({ rationale: nasty }, { title: nasty, calendarId: nasty, attendees: [nasty, "ok@example.com"] }),
-      MANILA,
-    );
-    for (const l of d) expect(l).not.toMatch(/[\n\r\u2028\u2029]/);
+  it("a rationale with line breaks never reaches the diff", () => {
+    const d = renderDiff(validPlan({ rationale: "a\nb\r\nc" }), MANILA);
+    expect(d).toHaveLength(9);
+    for (const l of d) expect(l).not.toMatch(/[\n\r]/);
   });
 
   it("a timeZone that is not an IANA name is an invalid plan", () => {

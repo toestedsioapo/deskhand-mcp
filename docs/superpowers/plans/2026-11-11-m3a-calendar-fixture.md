@@ -236,7 +236,7 @@
 - [x] **Step 2: Run** `pnpm test tests/config.test.ts tests/shutdown.test.ts` — Expected: FAIL.
 - [x] **Step 3: Implement** and update the docs.
 - [x] **Step 4: Run** `pnpm typecheck && pnpm build && pnpm test` — Expected: all PASS, stderr pristine. Then the Inspector CLI check with `DESKHAND_PROVIDER=fixture` and the sandbox fixture: `tools/list` shows `ping`, `ledger_query`, `action_explain`, `action_apply`, `calendar_list_events`, `calendar_find_slots`, `calendar_propose_event`; a `calendar_propose_event` call returns a diff with a local `when:` line and the attendee lines. Record the output for the PR.
-- [ ] **Step 5: Manual check (owner's step; the implementer does not wait for it):** `deskhand pending` then `deskhand approve <id>` in a real terminal on a plan made by `calendar_propose_event` with a different `time_zone` and 3 attendees: the diff shows your local time with the zone name, the `event zone:` line, the `utc:` line and all 3 addresses. The PR description gives the exact PowerShell commands and leaves the result for the owner to fill in.
+- [x] **Step 5: Manual check (owner's step; the implementer does not wait for it; passed by the owner on Windows PowerShell, 2026-11-12):** `deskhand pending` then `deskhand approve <id>` in a real terminal on a plan made by `calendar_propose_event` with a different `time_zone` and 3 attendees: the diff shows your local time with the zone name, the `event zone:` line, the `utc:` line and all 3 addresses. The PR description gives the exact PowerShell commands and leaves the result for the owner to fill in.
 - [x] **Step 6: Commit** `feat: configurable shutdown drain cap (default 30 s); docs: M3a status`.
 
 ---

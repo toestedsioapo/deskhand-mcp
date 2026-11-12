@@ -207,7 +207,7 @@ Input (strict):
 
 | Field | Type | Default | Notes |
 |---|---|---|---|
-| `title` | string, 1 to 200 characters | required | stored verbatim; the diff shows it flattened to one line |
+| `title` | string, 1 to 200 characters | required | one line of visible text: no control, format, bidirectional, zero-width or blank filler characters, no line breaks or tabs, single ASCII spaces between words only and none at either end; anything else is `INVALID_INPUT`. Stored verbatim and shown verbatim in the diff, so the approver reads exactly what is written. Letters of any script are accepted; an emoji that needs a variation selector or a zero-width joiner is not |
 | `start` | ISO-8601 datetime, offset allowed | required | stored as UTC with milliseconds and `Z`; must be after the server clock |
 | `end` | ISO-8601 datetime, offset allowed | required | stored as UTC; must be after `start` |
 | `attendees` | email[], at most 50, each at most 254 characters | `[]` | the diff never truncates an address |
@@ -230,7 +230,7 @@ Output:
 
 The result sets `_meta.deskhand.action_id`, so the `tool_call` row carries the action id. Ledger rows on success: `plan_created`, then `tool_call`, both with the action id.
 
-Refused as `INVALID_INPUT` (no plan row): `end <= start`; `start` not after the server clock; a `time_zone` that is not an IANA name; a `calendar_id` with whitespace or control characters; an unknown extra field; a slot that overlaps a busy block in the calendar (`The slot is busy in calendar <id>; use calendar_find_slots.`, checked with `provider.freeBusy`; all-day events are not busy time). A provider failure while checking is `PROVIDER_ERROR`.
+Refused as `INVALID_INPUT` (no plan row): `end <= start`; `start` not after the server clock; a `time_zone` that is not an IANA name; a `calendar_id` with whitespace or control characters; a `title` that is not one line of visible text; an unknown extra field; a slot that overlaps a busy block in the calendar (`The slot is busy in calendar <id>; use calendar_find_slots.`, checked with `provider.freeBusy`; all-day events are not busy time). A provider failure while checking is `PROVIDER_ERROR`.
 
 The plan it stores (`plan_json`, hashed with the canonical JSON):
 
@@ -242,6 +242,6 @@ The plan it stores (`plan_json`, hashed with the canonical JSON):
 
 `timeZone` is part of the plan hash (two plans differing only in zone have different hashes); the viewer zone is not. `action_apply` re-checks that the slot is still free and, if not, fails with `STALE_PLAN` without writing.
 
-Diff lines, in order: `create event: <title flattened to one line, at most 200 characters>`, `when: <range in Config.timeZone>`, `event zone: <range in the event zone>` (only when it differs), `utc: <start> to <end>`, `calendar: <id flattened to one line>`, `<N> attendees`, one `  <address>` line per attendee, then `will email <N> attendees` or `no attendee notifications (sendUpdates=none)`.
+Diff lines, in order: `create event: <title>`, `when: <range in Config.timeZone>`, `event zone: <range in the event zone>` (only when it differs), `utc: <start> to <end>`, `calendar: <id>`, `<N> attendees`, one `  <address>` line per attendee, then the notification line: `no attendee notifications (sendUpdates=none)`; `will email <n> attendees` (`all`); `will email the attendees outside your organisation, up to <n> (sendUpdates=externalOnly)`; or, for `all` / `externalOnly` with no attendees, `no attendee notifications (sendUpdates=<value>, no attendees)`. Title, calendar id and addresses are printed verbatim (the input rules above are what make that safe).
 
 The output schemas are snapshot-tested in `tests/tools.calendar-propose-event.test.ts`.

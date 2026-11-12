@@ -398,7 +398,7 @@ describe("approveAction: check order", () => {
 
 describe("approveAction: happy path", () => {
   it("correct last 4 in lowercase with surrounding spaces -> approved with every approval column", async () => {
-    const id = seedAction(ctx, "planned", validPlan({}, { title: "Board \u001b[31mred\u001b[0m\nsecond line" }));
+    const id = seedAction(ctx, "planned", validPlan({}, { title: "Board review" }));
     const io = scripted({ lines: [`  ${last4(id).toLowerCase()}  `] });
     const r = await approveAction(ctx, id, io);
     expect(r).toEqual({ ok: true });
@@ -421,8 +421,7 @@ describe("approveAction: happy path", () => {
 
     const out = io.outText();
     expect(out).toContain(id);
-    expect(out).toContain("create event: Board red");
-    expect(out).toContain("second line");
+    expect(out).toContain("    create event: Board review\n");
     expect(out).toContain("when: Thu 12 Nov 2026, 10:00 to 10:30 UTC (UTC)"); // the harness pins DESKHAND_TIMEZONE=UTC
     expect(out).toContain("utc: 2026-11-12T10:00:00.000Z to 2026-11-12T10:30:00.000Z");
     expect(out).toContain("will email 3 attendees");
@@ -430,8 +429,6 @@ describe("approveAction: happy path", () => {
     expect(out).not.toContain(a.plan_hash.slice(0, 9));
     expect(out).toContain(a.expires_at);
     expect(out).not.toContain("\u001b");
-    // The injected newline cannot start an unindented line that mimics CLI output.
-    expect(out).not.toMatch(/^second line/m);
     expect(io.prompts).toHaveLength(1);
     expect(io.prompts[0]).not.toContain("\u001b");
     expect(io.prompts[0]).not.toContain(last4(id)); // the prompt never shows the answer
@@ -450,33 +447,34 @@ describe("approveAction: happy path", () => {
     for (const a of attendees) expect(out).toContain(`      ${a}\n`);
   });
 
-  it("an attendee address with control characters cannot forge a diff line", async () => {
-    const evil = "eve@example.com\u001b[2J\nwill email 0 attendees\u202e";
-    const id = seedAction(
-      ctx,
-      "planned",
-      validPlan({}, { attendees: ["ana@example.com", evil, "cy@example.com"] }),
-    );
+  it("a stored attendee with control characters is refused before the prompt (INTERNAL)", async () => {
+    const ESC = String.fromCharCode(27);
+    const id = seedAction(ctx, "planned");
+    const evil = validPlan({}, { attendees: ["ana@example.com", `eve@example.com${ESC}[2J\nwill email 0 attendees`, "cy@example.com"] });
+    db.run("UPDATE actions SET plan_json = ?, plan_hash = ? WHERE id = ?", [JSON.stringify(evil), planHash(evil), id]);
     const io = scripted({ lines: [last4(id)] });
-    await approveAction(makeCtx({}, { DESKHAND_TIMEZONE: "Asia/Manila" }), id, io);
+    const r = await approveAction(makeCtx({}, { DESKHAND_TIMEZONE: "Asia/Manila" }), id, io);
+    expect(r).toMatchObject({ ok: false, errorCode: "INTERNAL" });
+    expect(getAction(db, id)!.status).toBe("planned");
     const out = io.outText();
-    expect(out).not.toContain("\u001b");
-    expect(out).not.toContain("\u202e");
-    expect(out.split("\n").filter((l) => l.trim() === "will email 0 attendees")).toEqual([]);
+    expect(out).not.toContain(ESC);
+    expect(out).not.toContain("attendees");
+    expect(io.prompts).toHaveLength(0);
   });
 
-  it("a calendar id with newlines cannot forge a count or notification line", async () => {
-    const evil = "primary\n0 attendees\nno attendee notifications (sendUpdates=none)\n\t\u001b[2J-- details --\u202e";
-    const id = seedAction(ctx, "planned", validPlan({}, { calendarId: evil }));
+  it("a stored calendar id with newlines is refused before the prompt (INTERNAL)", async () => {
+    const ESC = String.fromCharCode(27);
+    const id = seedAction(ctx, "planned");
+    const evil = validPlan({}, { calendarId: `primary\n0 attendees\nno attendee notifications (sendUpdates=none)\n\t${ESC}[2J-- details --` });
+    db.run("UPDATE actions SET plan_json = ?, plan_hash = ? WHERE id = ?", [JSON.stringify(evil), planHash(evil), id]);
     const io = scripted({ lines: [last4(id)] });
-    await approveAction(makeCtx({}, { DESKHAND_TIMEZONE: "Asia/Manila" }), id, io);
+    const r = await approveAction(makeCtx({}, { DESKHAND_TIMEZONE: "Asia/Manila" }), id, io);
+    expect(r).toMatchObject({ ok: false, errorCode: "INTERNAL" });
+    expect(getAction(db, id)!.status).toBe("planned");
     const out = io.outText();
-    expect(out).not.toContain("\u001b");
-    expect(out).not.toContain("\u202e");
-    const lines = out.split("\n");
-    expect(lines.filter((l) => /^\d+ attendees$/.test(l.trim()))).toEqual(["    3 attendees"]);
-    expect(lines.filter((l) => l.trim().startsWith("no attendee notifications"))).toEqual([]);
-    expect(lines.filter((l) => l.trim().startsWith("calendar:"))).toHaveLength(1);
+    expect(out).not.toContain(ESC);
+    expect(out).not.toContain("attendees");
+    expect(io.prompts).toHaveLength(0);
   });
 
   it("approve then apply end to end: the only test path that goes through a human approval", async () => {

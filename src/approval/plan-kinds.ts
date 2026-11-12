@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { CalendarProvider, EventRef } from "../providers/types.js";
 import { formatLocalRange, isIanaTimeZone } from "../util/local-time.js";
-import { oneLine } from "../util/sanitize.js";
+import { isPlainLine, VISIBLE_ASCII } from "../util/sanitize.js";
 
 export type RecheckResult = { ok: true } | { ok: false; reason: string };
 
@@ -9,10 +9,9 @@ export interface PlanKind<P> {
   kind: string;
   schema: z.ZodType<P>;
   /**
-   * Deterministic for a given plan and viewer zone; built only from validated plan fields. The title, the calendar
-   * id and each attendee are flattened to one line here, because the CLI splits every line on newlines and indents each piece
-   * alike, so a multi-line value could forge diff lines; the stored plan keeps them verbatim. An attendee that
-   * flattens to nothing prints `(empty address)`, so the count line and the visible lines agree.
+   * Deterministic for a given plan and viewer zone; built only from validated plan fields, printed verbatim. The
+   * schema is what makes that safe: the title, the calendar id and every attendee are single lines of visible
+   * text with no hidden character, so what the approver reads is exactly what is stored and written.
    * `viewerTimeZone` is the reader's zone, never the plan's.
    */
   renderDiff(plan: P, viewerTimeZone: string): string[];
@@ -25,12 +24,14 @@ const instant = z.iso.datetime();
 
 const newEventSchema = z
   .object({
-    title: z.string().min(1),
+    // Display equals write: a title the sanitiser would alter (control or invisible characters, odd whitespace)
+    // or cut (over 200) is not a valid plan, so approve and apply refuse it instead of showing something else.
+    title: z.string().min(1).max(200).refine(isPlainLine, { message: "must be one line of visible text" }),
     start: instant,
     end: instant,
-    attendees: z.array(z.string()),
+    attendees: z.array(z.string().max(254).regex(VISIBLE_ASCII)).max(50),
     sendUpdates: z.enum(["none", "all", "externalOnly"]),
-    calendarId: z.string().min(1),
+    calendarId: z.string().max(256).regex(VISIBLE_ASCII),
     timeZone: z.string().refine(isIanaTimeZone, { message: "must be an IANA time zone name" }).optional(),
   })
   .strict()
@@ -49,6 +50,14 @@ export const calendarCreateEventPlanSchema = z
 
 export type CalendarCreateEventPlan = z.infer<typeof calendarCreateEventPlanSchema>;
 
+/** Always names the stored `sendUpdates` value when it is not the plain case, so the line never says `none` for a plan that stores `all`. */
+function notificationLine(sendUpdates: "none" | "all" | "externalOnly", n: number): string {
+  if (sendUpdates === "none") return "no attendee notifications (sendUpdates=none)";
+  if (n === 0) return `no attendee notifications (sendUpdates=${sendUpdates}, no attendees)`;
+  if (sendUpdates === "all") return `will email ${n} attendees`;
+  return `will email the attendees outside your organisation, up to ${n} (sendUpdates=externalOnly)`;
+}
+
 export const calendarCreateEvent: PlanKind<CalendarCreateEventPlan> = {
   kind: "calendar.create_event",
   schema: calendarCreateEventPlanSchema,
@@ -56,17 +65,13 @@ export const calendarCreateEvent: PlanKind<CalendarCreateEventPlan> = {
   renderDiff(plan, viewerTimeZone) {
     const e = plan.event;
     const n = e.attendees.length;
-    const lines = [`create event: ${oneLine(e.title, 200)}`, `when: ${formatLocalRange(e.start, e.end, viewerTimeZone)}`];
+    const lines = [`create event: ${e.title}`, `when: ${formatLocalRange(e.start, e.end, viewerTimeZone)}`];
     if (e.timeZone !== undefined && e.timeZone !== viewerTimeZone) {
       lines.push(`event zone: ${formatLocalRange(e.start, e.end, e.timeZone)}`);
     }
-    lines.push(`utc: ${e.start} to ${e.end}`, `calendar: ${oneLine(e.calendarId, 256)}`, `${n} attendees`);
-    for (const a of e.attendees) lines.push(`  ${oneLine(a, 254) || "(empty address)"}`);
-    lines.push(
-      e.sendUpdates !== "none" && n > 0
-        ? `will email ${n} attendees`
-        : "no attendee notifications (sendUpdates=none)",
-    );
+    lines.push(`utc: ${e.start} to ${e.end}`, `calendar: ${e.calendarId}`, `${n} attendees`);
+    for (const a of e.attendees) lines.push(`  ${a}`);
+    lines.push(notificationLine(e.sendUpdates, n));
     return lines;
   },
 

@@ -22,6 +22,22 @@
 6. **Recorded responses are written by hand from the API reference**, with made-up ids and no personal data, because nothing may call Google from tests. Task 7's live check is what proves they match reality; any mismatch found there is fixed in the recording and the adapter together.
 7. **Per-request HTTP timeout is 10 s**, no automatic retry on `429` or `5xx`. Apply is already retryable and idempotent; a hidden retry loop would only make the drain cap harder to reason about.
 
+## Carried over from the M3a review (owner, 2026-11-12): do these first, each test first
+
+They touch M3a code, not Google code, and the second one must be in place before any zone is sent to Google (Task 6). Commit them before Task 1.
+
+1. **`calendar_find_slots`: a different note when Tempo returns no candidates.**
+   - Files: `src/tools/calendar-find-slots.ts`, `docs/tools-contract.md`; test `tests/tools.calendar-find-slots.test.ts`.
+   - Today zero candidates from Tempo gives `decision: "none"`, `busy_dropped: 0`, `note: "All suggested slots are busy in calendar <id>."`, although nothing was busy.
+   - Required: when Tempo returned no candidate, `note` is `No slot fits the given rules.` (still `decision: "none"`, `busy_dropped: 0`, Tempo's `reasons` passed through). The existing note is kept only when there were candidates and every one was dropped as busy. The output schema does not change.
+   - Failing tests first: a counterparty with no working hours gives the new note and `busy_dropped: 0`; all candidates busy still gives the old note and `busy_dropped >= 1`.
+2. **Time zones are canonicalised before being stored or sent to Google.**
+   - Files: `src/util/local-time.ts` (new `canonicalTimeZone(tz: string): string | null`, null when `isIanaTimeZone` is false), `src/config/env.ts`, `src/tools/calendar-propose-event.ts`, `src/tools/calendar-find-slots.ts`, `docs/tools-contract.md`, `docs/ledger-contract.md`; tests `tests/local-time.test.ts`, `tests/config.test.ts`, `tests/tools.calendar-propose-event.test.ts`.
+   - Today `europe/berlin` passes `isIanaTimeZone`, is stored verbatim in the hashed plan, gets a redundant `event zone:` line under a `Europe/Berlin` viewer, and would go to Google in that spelling.
+   - Required: every accepted zone is replaced by its canonical spelling where it is accepted: the `time_zone` inputs, `DESKHAND_TIMEZONE`, the system zone. `event.timeZone` in a new plan is always canonical, so the hash covers the canonical name and Task 6 sends it unchanged. A stored plan with a non-canonical zone stays valid (it was hashed that way); the diff compares canonical forms, so no redundant `event zone:` line.
+   - Failing tests first: `canonicalTimeZone("europe/berlin")` is `Europe/Berlin`, `"UTC"` stays `UTC`, `"+01:00"` and `"EST5EDT"` are null; a propose with `time_zone: "europe/berlin"` stores `Europe/Berlin` and has the same hash as one sent with `Europe/Berlin`; `DESKHAND_TIMEZONE=asia/manila` gives `Config.timeZone` `Asia/Manila`.
+   - Open point: `Intl` also resolves aliases (`Asia/Calcutta`), and the answer can differ between ICU versions. The function must return the same string on Node 24.15 and 26 for the same input; if `resolvedOptions().timeZone` does not, canonicalise the spelling only and leave aliases alone. The CI matrix is the check.
+
 ## Global Constraints
 
 - Scope sets are exactly: read `["https://www.googleapis.com/auth/calendar.readonly"]`; write adds `"https://www.googleapis.com/auth/calendar.events"` and only when `DESKHAND_ALLOW_WRITES=1`. The strings `gmail.send` and `gmail.modify` never appear in `src/`.
@@ -205,7 +221,7 @@
 - Test: `tests/google.calendar.write.test.ts`, `tests/apply.google.test.ts`
 
 **Interfaces:**
-- `createEvent(event, idempotencyKey)`: `POST /calendars/{id}/events?sendUpdates=<event.sendUpdates>` with body `{ id: idempotencyKey, summary: title, start: { dateTime: start, timeZone? }, end: { dateTime: end, timeZone? }, attendees: [{ email }] }`, `requiredScope: SCOPE_CALENDAR_WRITE`.
+- `createEvent(event, idempotencyKey)`: `POST /calendars/{id}/events?sendUpdates=<event.sendUpdates>` with body `{ id: idempotencyKey, summary: title, start: { dateTime: start, timeZone? }, end: { dateTime: end, timeZone? }, attendees: [{ email }] }`, `requiredScope: SCOPE_CALENDAR_WRITE`. `timeZone` is `event.timeZone` as stored, which is canonical for every plan made after carry-over 2 above.
   - `200`: map the response to `EventRef` (`allDay: false`).
   - `409`: the id exists. `GET` that event. Found and not cancelled: return it (no second insert, never a new id). Cancelled: `ProviderError` with phrase `an event with this action's id was created and later deleted`. `404` on that `GET`: `ProviderError` with phrase `id conflict but the event is not readable`.
   - Before sending, the key must match `/^[a-v0-9]{5,1024}$/`, else `ProviderError` with phrase `invalid event id` (guards a future change to the key derivation).

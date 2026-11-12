@@ -16,20 +16,22 @@ export interface CliIo {
   readLine(prompt: string): Promise<string>;
 }
 
-// OSC (terminated by BEL or ST), CSI, and other two-character escapes.
-const OSC = /\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)?/g;
-const CSI = /\u001b\[[0-?]*[ -/]*[@-~]?/g;
-const ESC_OTHER = /\u001b[@-Z\\-_]?/g;
-// C0 except tab and newline, DEL, C1, zero-width and bidi marks (U+200B-U+200F),
-// line/paragraph separators (U+2028, U+2029), bidi embeddings/overrides
-// (U+202A-U+202E), bidi isolates (U+2066-U+2069) and the BOM (U+FEFF).
+// Characters that are invisible, blank-looking, or that move the cursor or change the text direction:
+// Cc (C0, DEL and C1 controls, so ESC and the one-byte CSI/OSC), Cf (bidi marks, embeddings, overrides and
+// isolates, zero-width characters, soft hyphen, tag characters, BOM), Zl and Zp (line and paragraph separator),
+// Cs and Co (lone surrogates, private use), every default-ignorable code point (Hangul and Khmer fillers,
+// variation selectors, combining grapheme joiner) and the braille blank U+2800.
 // Escapes only: this file must stay pure ASCII (a test enforces it).
-// eslint-disable-next-line no-control-regex
-const CONTROL = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u200b-\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069\ufeff]/g;
+const HIDDEN = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Cs}\p{Co}\p{Default_Ignorable_Code_Point}\u2800]/gu;
 
-/** Untrusted text made safe for a terminal: no escapes, no control characters except newline and tab. */
+/**
+ * Untrusted text made safe for a terminal: every hidden character (see HIDDEN) is removed except newline and tab.
+ * Only those characters are removed, never the visible text after them: an escape sequence is not interpreted, so
+ * `ESC [ 3 1 m` comes out as the visible text `[31m`. (Removing whole sequences let an unterminated `ESC ]` hide
+ * the rest of a title from the person approving it.)
+ */
 export function stripControl(s: string): string {
-  return s.replace(OSC, "").replace(CSI, "").replace(ESC_OTHER, "").replace(CONTROL, "");
+  return s.replace(HIDDEN, (c) => (c === "\n" || c === "\t" ? c : ""));
 }
 
 /**
@@ -41,3 +43,15 @@ export function oneLine(s: string, max = 200): string {
   const flat = stripControl(s).replace(/\s+/g, " ").trim();
   return flat.length > max ? `${flat.slice(0, max - 3)}...` : flat;
 }
+
+/**
+ * True when `s` is non-empty and the sanitiser would print it unchanged: no hidden character, and no whitespace
+ * other than single ASCII spaces between words. Text that passes is shown to the approver exactly as it is stored
+ * and written, which is why titles must pass it.
+ */
+export function isPlainLine(s: string): boolean {
+  return s.length > 0 && oneLine(s, Number.POSITIVE_INFINITY) === s;
+}
+
+/** One or more printable ASCII characters, no space: calendar ids and attendee addresses. */
+export const VISIBLE_ASCII = /^[\x21-\x7e]+$/;

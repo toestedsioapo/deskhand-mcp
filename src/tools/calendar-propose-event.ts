@@ -3,13 +3,17 @@ import type { AppContext } from "../app-context.js";
 import { renderDiff, type CalendarCreateEventPlan } from "../approval/plan-kinds.js";
 import { createPlan } from "../approval/plans.js";
 import { isIanaTimeZone } from "../util/local-time.js";
+import { isPlainLine } from "../util/sanitize.js";
 import { calendarIdSchema } from "./calendar-id.js";
 import { requireProvider } from "./provider-guard.js";
 import { toolError, toolOk, type ToolErrorResult, type ToolOkResult } from "./result.js";
 
 export const calendarProposeEventInputSchema = z
   .object({
-    title: z.string().min(1).max(200),
+    title: z.string().min(1).max(200).refine(isPlainLine, {
+      message:
+        "title must be one line of visible text: no control, invisible or blank filler characters, no line breaks or tabs, and single spaces only between words",
+    }),
     start: z.iso.datetime({ offset: true }),
     end: z.iso.datetime({ offset: true }),
     attendees: z.array(z.email().max(254)).max(50).default([]),
