@@ -392,6 +392,38 @@ describe("apply with the Google provider", () => {
     expect(inserts()).toHaveLength(1);
   });
 
+  for (const [insert, failedLookup] of [
+    ["events-insert-503", "events-get-key-503"],
+    ["events-insert-200-unreadable", "events-get-key-500"],
+  ] as const) {
+    it(`${insert}, then the lookup after it fails too (${failedLookup}): the attempt is still recorded, a busy retry stays approved`, async () => {
+      const { ctx, id } = setup([
+        "events-get-key-404",
+        "freebusy-empty",
+        insert,
+        failedLookup,
+        // retry: free/busy sees our landed event, events.get does not yet
+        "events-get-key-404",
+        "freebusy",
+        "events-get-key-404",
+        // third call: readable
+        "events-get-key-200",
+      ]);
+      const first = await applyAction(ctx, id);
+      expect(first).toMatchObject({ ok: false, errorCode: "PROVIDER_ERROR" });
+      expect(first.ok ? "" : first.message).toMatch(/^Provider write failed: /);
+      expect(getAction(db, id)!.status).toBe("approved");
+      expect(await applyAction(ctx, id)).toEqual({
+        ok: false,
+        errorCode: "PROVIDER_ERROR",
+        message: "an earlier write attempt may still be landing; retry later",
+      });
+      expect(getAction(db, id)!.status).toBe("approved");
+      expect(await applyAction(ctx, id)).toMatchObject({ ok: true, replayed: true });
+      expect(inserts()).toHaveLength(1);
+    });
+  }
+
   it("without an earlier write attempt, a busy re-check is still terminal STALE_PLAN", async () => {
     const { ctx, id } = setup(["events-get-key-404", "freebusy", "events-get-key-404"]);
     expect(await applyAction(ctx, id)).toMatchObject({ ok: false, errorCode: "STALE_PLAN" });

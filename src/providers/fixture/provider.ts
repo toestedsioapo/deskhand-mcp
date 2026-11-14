@@ -41,9 +41,15 @@ export function createFixtureProvider(
     calendars.set(
       calId,
       new Map(
-        cal.events.map(({ all_day, ...e }) => [
+        cal.events.map(({ all_day, organizer_self, ...e }) => [
           e.id,
-          { ...e, attendees: [...e.attendees], allDay: all_day === true } satisfies EventRef,
+          {
+            ...e,
+            attendees: [...e.attendees],
+            allDay: all_day === true,
+            // World events are on the owner's calendar and organised by the owner unless the file says otherwise.
+            ...(organizer_self === false ? {} : { organizerSelf: true }),
+          } satisfies EventRef,
         ]),
       ),
     );

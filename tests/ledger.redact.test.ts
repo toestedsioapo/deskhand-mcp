@@ -193,6 +193,11 @@ describe("scrubSecrets", () => {
     ["URL-encoded JSON separator", "q access_token%22%3A%22opaqueVALUE%22 end", ["opaqueVALUE"]],
     ["URL-encoded underscore in the key", "q client%5Fsecret=SECRETVAL end", ["SECRETVAL"]],
     ["quoted value with a space", 'q client_secret = "abc def" end', ["abc", "def"]],
+    ["JSON inside a JSON string", 'body {\\"access_token\\":\\"opaqueSECRET1\\"} end', ["opaqueSECRET1"]],
+    ["JSON inside a JSON string, camelCase, spaced", 'body \\"refreshToken\\": \\"opaqueSECRET2\\" end', ["opaqueSECRET2"]],
+    ["a quoted value containing an escaped quote", 'body {"refresh_token":"ab\\"opaqueSECRET8"} end', ["opaqueSECRET8", "ab\\"]],
+    ["double URL-encoded = separator", "q refresh_token%253DopaqueSECRET5 end", ["opaqueSECRET5"]],
+    ["double URL-encoded JSON separator", "q access_token%2522%253A%2522opaqueSECRET6%2522 end", ["opaqueSECRET6"]],
   ])("scrubs a %s and keeps the surrounding words", (_name, text, gone) => {
     const out = scrubSecrets(text);
     for (const g of gone) expect(out).not.toContain(g);

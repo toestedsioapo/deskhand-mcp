@@ -97,6 +97,6 @@ Follow `docs/google-oauth-setup.md`, then in a real terminal with `DESKHAND_PROV
 | 3 | `calendar_propose_event` for a free 30-minute slot tomorrow with no attendees | a plan; your calendar is unchanged | |
 | 4 | `deskhand approve <id>`, then `action_apply` without `DESKHAND_ALLOW_WRITES`; then with `DESKHAND_ALLOW_WRITES=1` but before `upgrade` | `WRITES_DISABLED`; then `AUTH_REQUIRED` naming `deskhand auth upgrade` | |
 | 5 | `deskhand auth upgrade`, then `action_apply`; then `action_apply` again | the event appears once at the right local time; second call `replayed: true`, still one event | |
-| 6 | Delete the test event in Google Calendar. Check `ledger.db` rows and `token.json`'s directory | no token text in the ledger | |
-| 7 | Organiser is you: read the event from check 5 with the API Explorer (`events.get`, calendar `primary`, the event id from the `action_apply` result) | `organizer.self` is `true`; if you are listed among the attendees, that entry has `self: true` | |
-| 8 | Owner as attendee: `calendar_propose_event` with attendees = your own address and one other you control, `sendUpdates: none`; approve; `action_apply` | `applied` (not `STALE_PLAN` "differs"); the event lists both; a second `action_apply` is `replayed: true` | |
+| 6 | Organiser is you: read the event from check 5 with the API Explorer (`events.get`, calendar `primary`, the event id from the `action_apply` result) | `organizer.self` is `true`; if you are listed among the attendees, that entry has `self: true` | |
+| 7 | Owner as attendee: `calendar_propose_event` with attendees = your own address and one other you control, `sendUpdates: none`; approve; `action_apply` | `applied` (not `STALE_PLAN` "differs"); the event lists both; a second `action_apply` is `replayed: true` | |
+| 8 | Delete the test events (from checks 5 and 7) in Google Calendar. Check `ledger.db` rows and `token.json`'s directory | no token text in the ledger | |

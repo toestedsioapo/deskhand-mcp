@@ -102,13 +102,15 @@ const WRITE_FAILED = "Provider write failed: ";
 const STILL_LANDING = "an earlier write attempt may still be landing; retry later";
 
 /**
- * True when this action's own ledger rows show an earlier write attempt whose outcome was unknown: an
- * `apply_refused` PROVIDER_ERROR whose note is the write-failure note (gate 9, ambiguous). Read from the ledger,
- * so it holds across processes and restarts.
+ * True when this action's own ledger rows show an earlier write attempt whose outcome was unknown. Gate 9 writes
+ * every ambiguous attempt as an `apply_refused` row (PROVIDER_ERROR, or AUTH_REQUIRED when the lookup after it
+ * needed a sign-in) whose note starts with the fixed WRITE_FAILED prefix, whatever the follow-up lookup did; no
+ * other row carries that prefix, and the preview redactor always keeps the note's start. Read from the ledger, so
+ * it holds across processes and restarts.
  */
 function hadAmbiguousWrite(ctx: AppContext, actionId: string): boolean {
   const rows = ctx.db.all<{ preview_json: string }>(
-    "SELECT preview_json FROM events WHERE action_id = ? AND kind = 'apply_refused' AND error_code = 'PROVIDER_ERROR'",
+    "SELECT preview_json FROM events WHERE action_id = ? AND kind = 'apply_refused' AND error_code IN ('PROVIDER_ERROR', 'AUTH_REQUIRED')",
     [actionId],
   );
   return rows.some((r) => {
@@ -248,12 +250,12 @@ export async function applyAction(ctx: AppContext, actionId: string): Promise<Ap
   const calendarId = calendarIdOf(row);
 
   // What the provider holds under the idempotency key. A read error is retryable: refuse, status unchanged.
-  type Lookup = { found: EventLookup } | { refused: ApplyResult };
-  const lookup = async (when: string): Promise<Lookup> => {
+  type Lookup = { found: EventLookup } | { failed: unknown };
+  const lookup = async (): Promise<Lookup> => {
     try {
       return { found: await kind.lookupExisting(validPlan, key, provider) };
     } catch (e) {
-      return { refused: refuseProvider(ctx, actionId, e, `Provider lookup ${when} failed`) };
+      return { failed: e };
     }
   };
   /**
@@ -273,8 +275,8 @@ export async function applyAction(ctx: AppContext, actionId: string): Promise<Ap
   };
 
   // 6. Recovery: our own earlier write that crashed before the ledger commit.
-  const first = await lookup("for recovery");
-  if ("refused" in first) return first.refused;
+  const first = await lookup();
+  if ("failed" in first) return refuseProvider(ctx, actionId, first.failed, "Provider lookup for recovery failed");
   const recovered = settle(first.found);
   if (recovered) return recovered;
 
@@ -292,8 +294,8 @@ export async function applyAction(ctx: AppContext, actionId: string): Promise<Ap
   if (!check.ok) {
     // The slot may be taken by OUR event (a concurrent apply of this action
     // wrote it after our recovery lookup): look again before failing.
-    const again = await lookup("after a failed re-check");
-    if ("refused" in again) return again.refused;
+    const again = await lookup();
+    if ("failed" in again) return refuseProvider(ctx, actionId, again.failed, "Provider lookup after a failed re-check failed");
     const settled = settle(again.found);
     if (settled) return settled;
     // An earlier attempt of this action may have written the event that now makes the slot busy, while the
@@ -307,8 +309,15 @@ export async function applyAction(ctx: AppContext, actionId: string): Promise<Ap
     result = await kind.execute(validPlan, key, provider);
   } catch (e) {
     // The write may have happened anyway (e.g. a timeout after the provider accepted it): look for our event.
-    const after = await lookup("after a failed write");
-    if ("refused" in after) return after.refused;
+    const ambiguous = e instanceof ProviderError && e.retryable;
+    const after = await lookup();
+    if ("failed" in after) {
+      if (!ambiguous) return refuseProvider(ctx, actionId, after.failed, "Provider lookup after a failed write failed");
+      // Record the ambiguous attempt even though the lookup failed (the note starts with WRITE_FAILED), so a later
+      // busy re-check is not terminal. Status unchanged either way.
+      const code = after.failed instanceof AuthRequiredError ? "AUTH_REQUIRED" : "PROVIDER_ERROR";
+      return refuse(ctx, actionId, true, code, `${WRITE_FAILED}${errText(e)}; the lookup after it failed: ${errText(after.failed)}`);
+    }
     const settled = settle(after.found);
     if (settled) return settled;
     // Nothing there. An auth failure means the write was not attempted or not authorised: never terminal.
@@ -316,7 +325,7 @@ export async function applyAction(ctx: AppContext, actionId: string): Promise<Ap
     const msg = `${WRITE_FAILED}${errText(e)}`;
     // Ambiguous (timeout, network, 429, 5xx): it may still land, and a retry with the same key cannot duplicate
     // it (recovery or the provider's existing-id path finds it). Stay approved. Only a definite rejection fails.
-    if (e instanceof ProviderError && e.retryable) return refuse(ctx, actionId, true, "PROVIDER_ERROR", msg);
+    if (ambiguous) return refuse(ctx, actionId, true, "PROVIDER_ERROR", msg);
     return fail(ctx, actionId, "PROVIDER_ERROR", msg);
   }
   // `execute` may return an event that already existed under our key (a concurrent apply, or the provider's

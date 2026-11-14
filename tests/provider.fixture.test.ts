@@ -252,6 +252,7 @@ describe("fixture provider", () => {
         attendees: [],
         etag: "a1",
         allDay: true,
+        organizerSelf: true, // world events are the owner's by default
       });
       expect((await p.getEvent("primary", "evt_timed"))?.allDay).toBe(false);
     });

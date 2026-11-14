@@ -54,10 +54,19 @@ function methodBody(text: string, name: string): { start: number; end: number } 
   return { start, end };
 }
 
-/** "POST" string literals (any quote), not counting the `"GET" | "POST"` method type. */
+/** "POST" string literals in any case and quote (fetch upper-cases `"post"`), not counting the `"GET" | "POST"` type. */
 function postLiterals(text: string): number {
-  return (text.replace(/"GET"\s*\|\s*"POST"/g, "").match(/["'`]POST["'`]/g) ?? []).length;
+  return (text.replace(/"GET"\s*\|\s*"POST"/gi, "").match(/["'`]post["'`]/gi) ?? []).length;
 }
+
+/** Every line that names `<word>` at all (a call, a declaration, an alias, `.call`/`.bind`), trimmed. */
+function linesNaming(text: string, word: string): string[] {
+  const re = new RegExp(`\\b${word}\\b`);
+  return text.split("\n").map((l) => l.trim()).filter((l) => re.test(l));
+}
+
+/** An indirect call (`.call(`/`.apply(`/`.bind(`) or an alias (`= fetch`, `= deps.fetch`, `= googleRequest`). */
+const INDIRECT = /\b(?:fetch|googleRequest)\s*\.\s*(?:call|apply|bind)\b|=\s*(?:[\w.]+\.)?(?:fetch|googleRequest)\s*(?:[;,)]|$)/m;
 
 /** Each `fetch(` call with its callee and first argument, e.g. `deps.fetch(req.url,`. */
 function fetchCalls(text: string): string[] {
@@ -144,6 +153,21 @@ describe("safety structure", () => {
       '"GET" | "POST"',
       "req.method",
     ]);
+    // Every line naming fetch at all, pinned: no `.call`/`.bind`, alias or extra reference can slip in.
+    expect(Object.fromEntries(google.map((f) => [name(f.path), linesNaming(f.text, "fetch")]).filter(([, l]) => l.length > 0))).toEqual({
+      "http.ts": [
+        "fetch: typeof fetch;",
+        "refreshAccessToken(client, current, { ...deps.oauth, fetch: (u, init) => deps.oauth.fetch(u, { ...init, signal }) }),",
+        "const res = await deps.fetch(req.url, init);",
+      ],
+      "oauth.ts": ["fetch: typeof fetch;", "res = await deps.fetch(deps.endpoints.tokenUrl, {"],
+    });
+    // Every line naming googleRequest in src/: its definition, calendar.ts's import and its three calls.
+    expect(Object.fromEntries(FILES.map((f) => [f.path, linesNaming(f.text, "googleRequest").length]).filter(([, n]) => n !== 0))).toEqual({
+      "src/providers/google/calendar.ts": 4,
+      "src/providers/google/http.ts": 1,
+    });
+    expect(FILES.filter((f) => INDIRECT.test(f.text)).map((f) => f.path)).toEqual([]);
     // googleRequest is called from calendar.ts only, from exactly three places (get, freeBusy, createEvent).
     const calls = FILES.flatMap((f) =>
       [...f.text.matchAll(/(?<!function )\bgoogleRequest\s*\(/g)].map(() => f.path),
@@ -161,6 +185,17 @@ describe("safety structure", () => {
     expect(postLiterals('req: { method: "GET" | "POST"; url: string }')).toBe(0);
     expect(postLiterals("method: 'POST'")).toBe(1);
     expect(/[{,]\s*method\s*[,}]/.test("googleRequest(deps, op, { method, url })")).toBe(true);
+    // Round-3 shapes: lowercase method, an indirect call and an alias.
+    const sneaky =
+      'await deps.fetch.call(undefined, insertUrl, { method: "post", body });\nconst g = googleRequest; await g(deps, op, { method: "post" as never, url });';
+    expect(postLiterals(sneaky)).toBe(2);
+    expect(INDIRECT.test("await deps.fetch.call(undefined, u)")).toBe(true);
+    expect(INDIRECT.test("const g = googleRequest;")).toBe(true);
+    expect(INDIRECT.test("const f = deps.fetch")).toBe(true);
+    expect(INDIRECT.test("googleRequest.bind(null)")).toBe(true);
+    expect(INDIRECT.test("const res = await deps.fetch(req.url, init);")).toBe(false);
+    expect(linesNaming(sneaky, "fetch")).toHaveLength(1);
+    expect(linesNaming(sneaky, "googleRequest")).toHaveLength(1);
   });
 
   it("createPlan is imported and mentioned only by the plan tools listed in PLAN_TOOLS (outside src/approval)", () => {

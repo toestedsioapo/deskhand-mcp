@@ -20,7 +20,7 @@ export interface EventRef {
   /**
    * Plan-match fields, never shown by the read tools; each is present only when it holds. `ownerEmail`: the calendar
    * owner Google lists among the attendees (`self: true`), kept apart from `attendees`. `organizerSelf`: the calendar
-   * owner organises the event (Google `organizer.self`; the fixture sets it on its own writes). `recurring`: a series
+   * owner organises the event (Google `organizer.self`; the fixture sets it on its writes and world events). `recurring`: a series
    * or an instance of one.
    */
   ownerEmail?: string;
