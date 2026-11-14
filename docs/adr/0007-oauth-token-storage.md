@@ -9,3 +9,7 @@ Status: Accepted (owner review, 2026-11-09)
 **`gmail.compose` caveat.** Google describes `gmail.compose` as "Manage drafts and send emails", so the scope alone does not make Deskhand drafts-only. "Drafts only" is enforced in our code: the `MailProvider` interface has no send method (ADR 0001), and a test asserts no send endpoint is ever called (fixture provider and recorded responses). Narrower scopes are not an option for draft creation.
 
 **Open.** OS keychain would need a native module or a CLI shell-out; deferred, needs its own ADR. Testing-mode refresh tokens expire after ~7 days; README must document re-auth.
+
+## Addendum (2026-11-11, owner-approved): M3 requests calendar scopes only
+
+M3 requests Calendar scopes only. `deskhand auth login` asks for `calendar.readonly` alone; `deskhand auth upgrade` adds `calendar.events` (write scopes only when `DESKHAND_ALLOW_WRITES=1`). `gmail.readonly` and `gmail.compose` wait for M4. M3 therefore uses no restricted scope.
