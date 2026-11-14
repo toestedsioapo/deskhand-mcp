@@ -106,6 +106,15 @@ describe("safety structure", () => {
     expect(offenders).toEqual([]);
   });
 
+  it("only src/composition.ts and src/cli/auth.ts import from src/providers/google/ (files inside it import each other)", () => {
+    const importers = FILES.filter(
+      (f) => !f.path.startsWith("src/providers/google/") && importSpecifiers(f.text).some((s) => /(^|\/)providers\/google(\/|$)/.test(s)),
+    )
+      .map((f) => f.path)
+      .sort();
+    expect(importers).toEqual(["src/cli/auth.ts", "src/composition.ts"]);
+  });
+
   it(`status 'approved' is SET only in ${APPROVE_ALLOWED.join(", ")}`, () => {
     expect(matching(SETS_APPROVED)).toEqual(APPROVE_ALLOWED);
   });

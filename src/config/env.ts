@@ -6,8 +6,8 @@ export interface Config {
   writesEnabled: boolean;
   planTtlHours: number;
   busyTimeoutMs: number;
-  /** Explicit provider choice (ADR 0008). null: none configured. M3b widens this to add "google". */
-  provider: "fixture" | null;
+  /** Explicit provider choice (ADR 0008). null: none configured. "google" is the Google Calendar adapter (M3b). */
+  provider: "fixture" | "google" | null;
   fixturePath: string | undefined;
   /** IANA zone used when a tool call names none: `DESKHAND_TIMEZONE`, else the system zone. */
   timeZone: string;
@@ -51,10 +51,10 @@ function parseShutdownTimeout(raw: string | undefined): number {
   return n;
 }
 
-function parseProvider(raw: string | undefined): "fixture" | null {
+function parseProvider(raw: string | undefined): "fixture" | "google" | null {
   if (raw === undefined) return null;
-  if (raw === "fixture") return "fixture";
-  throw new ConfigError(`DESKHAND_PROVIDER must be "fixture" (or unset for no provider), got "${raw}"`);
+  if (raw === "fixture" || raw === "google") return raw;
+  throw new ConfigError(`DESKHAND_PROVIDER must be "fixture" or "google" (or unset for no provider), got "${raw}"`);
 }
 
 /**

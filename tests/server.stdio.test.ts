@@ -110,6 +110,89 @@ describe("stdio server with no provider configured", () => {
   });
 });
 
+describe("stdio server with DESKHAND_PROVIDER=google and no token", () => {
+  it("starts clean, answers ping, and answers AUTH_REQUIRED (rejected row) with no network attempted", async () => {
+    const home = makeTempHome();
+    try {
+      // No network is possible here: with no token.json the adapter must fail before any request,
+      // so the spawned server (real fetch) never touches the network.
+      const { client, stderr, close } = await spawnBin({ ...home.env, DESKHAND_PROVIDER: "google" });
+      try {
+        const ok = await client.callTool({ name: "ping" });
+        expect(ok.structuredContent).toEqual(expected);
+        const r = await client.callTool({
+          name: "calendar_list_events",
+          arguments: { time_min: "2026-11-09T00:00:00Z", time_max: "2026-11-16T00:00:00Z" },
+        });
+        expect(r.isError).toBe(true);
+        const meta = r._meta as { deskhand?: { error_code?: string } } | undefined;
+        expect(meta?.deskhand?.error_code).toBe("AUTH_REQUIRED");
+        expect(JSON.stringify(r.content)).toContain("deskhand auth login");
+      } finally {
+        await close();
+      }
+      expect(stderr()).toBe("");
+      expect(existsSync(join(home.home, "token.json"))).toBe(false);
+      const db = LedgerDb.open(join(home.home, "ledger.db"));
+      try {
+        const rows = db.all<{ tool: string; kind: string; outcome: string; error_code: string | null }>(
+          "SELECT tool, kind, outcome, error_code FROM events ORDER BY id",
+        );
+        expect(rows).toEqual([
+          { tool: "ping", kind: "tool_call", outcome: "ok", error_code: null },
+          { tool: "calendar_list_events", kind: "tool_call", outcome: "rejected", error_code: "AUTH_REQUIRED" },
+        ]);
+      } finally {
+        db.close();
+      }
+    } finally {
+      home.cleanup();
+    }
+  });
+
+  it("action_apply on an approved plan answers AUTH_REQUIRED and leaves the plan approved", async () => {
+    const home = makeTempHome();
+    try {
+      const env = { ...home.env, DESKHAND_PROVIDER: "google", DESKHAND_ALLOW_WRITES: "1" };
+      const db = LedgerDb.open(join(home.home, "ledger.db"));
+      let id: string;
+      try {
+        id = seedAction(
+          {
+            config: loadConfig(env),
+            db,
+            clock: () => new Date(),
+            ids: createIdGenerator(),
+            provider: createFixtureProvider(makeWorld()),
+            actor: "seeder",
+          },
+          "approved",
+        );
+      } finally {
+        db.close();
+      }
+      const { client, stderr, close } = await spawnBin(env);
+      try {
+        const r = await client.callTool({ name: "action_apply", arguments: { action_id: id } });
+        expect(r.isError).toBe(true);
+        const meta = r._meta as { deskhand?: { error_code?: string } } | undefined;
+        expect(meta?.deskhand?.error_code).toBe("AUTH_REQUIRED");
+      } finally {
+        await close();
+      }
+      expect(stderr()).toBe("");
+      const check = LedgerDb.open(join(home.home, "ledger.db"));
+      try {
+        expect(getAction(check, id)?.status).toBe("approved");
+      } finally {
+        check.close();
+      }
+    } finally {
+      home.cleanup();
+    }
+  });
+});
+
 describe("stdio server ledger", () => {
   it("writes one tool_call row for a ping, with empty stderr", async () => {
     const home = makeTempHome();

@@ -136,15 +136,22 @@ describe("loadConfig", () => {
     expect(loadConfig({ ...fx, DESKHAND_FIXTURE: "" }).fixturePath).toBeUndefined();
   });
 
-  it("DESKHAND_PROVIDER unset is no provider; fixture is the only accepted value", () => {
+  it("DESKHAND_PROVIDER unset is no provider; fixture and google are the accepted values", () => {
     expect(loadConfig(base).provider).toBeNull();
     expect(loadConfig({ ...base, DESKHAND_PROVIDER: "fixture" }).provider).toBe("fixture");
+    expect(loadConfig({ ...base, DESKHAND_PROVIDER: "google" }).provider).toBe("google");
+  });
+
+  it("DESKHAND_PROVIDER=google with DESKHAND_FIXTURE set is a ConfigError", () => {
+    const env = { ...base, DESKHAND_PROVIDER: "google", DESKHAND_FIXTURE: "/x.json" };
+    expect(() => loadConfig(env)).toThrow(ConfigError);
+    expect(() => loadConfig(env)).toThrow(/DESKHAND_FIXTURE/);
   });
 
   it('DESKHAND_PROVIDER rejects every other value, naming the variable', () => {
-    for (const v of ["Fixture", "google", "", "none"]) {
+    for (const v of ["Fixture", "Google", "", "none"]) {
       expect(() => loadConfig({ ...base, DESKHAND_PROVIDER: v })).toThrow(ConfigError);
-      expect(() => loadConfig({ ...base, DESKHAND_PROVIDER: v })).toThrow(/DESKHAND_PROVIDER must be "fixture"/);
+      expect(() => loadConfig({ ...base, DESKHAND_PROVIDER: v })).toThrow(/DESKHAND_PROVIDER must be "fixture" or "google"/);
     }
   });
 

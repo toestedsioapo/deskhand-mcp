@@ -49,7 +49,7 @@ Calls I made after the builder check (reversible; please skim): ledger `kind`/`e
 
 Still open or unverified:
 
-1. **Calendar idempotency:** I rely on Google Calendar accepting a client-supplied event id for apply idempotency. To be verified against the API when the adapter is built (M3).
+1. **Calendar idempotency:** I rely on Google Calendar accepting a client-supplied event id for apply idempotency. The adapter is built (M3b) and the recorded tests assume it; **still open, to be closed by the owner's live check (M3b Task 7 Step 5)**, which must confirm the client-supplied id and the `409` mapping against the real API.
 2. **npx bin rule for scoped packages** is inferred from npm-exec docs wording; the M6 smoke test is the real proof.
 3. **Export columns / date semantics** are left to the plan (owner's instruction).
 4. **macOS data dir** (`~/Library/Application Support/deskhand`) is my choice, not specified.
@@ -115,3 +115,12 @@ Still open or unverified:
 Contract gaps, all now scheduled as M2 deliverables (write `docs/ledger-contract.md`, `docs/fixture-format.md`, `docs/tools-contract.md` first): fixture world format (JSON only, `DESKHAND_FIXTURE`, deterministic clock/id seed); full ledger DDL, id formats, `preview_json` shape; diff rendered from `plan_json` by one deterministic function, never agent text; status transition table + CLI error codes + apply gate order vs idempotent replay; per-column redaction and fixed truncation for `input/plan/result_json`; `amount_minor` currency exponent.
 
 Safety items now covered in SECURITY.md / TEST_PLAN: logging around SDK input validation and unknown tools, fail closed if the ledger cannot open; CLI strips control/ANSI characters; deny-rule variants; `sendUpdates=none`; `deskhand auth` test rows.
+
+**M3b decisions (recorded 2026-11-14; numbers refer to `docs/superpowers/plans/2026-11-11-m3b-google-auth.md`):**
+- **Scopes (decision 2).** Stay with ADR 0007's `calendar.readonly` and `calendar.events`. The narrower `calendar.events.readonly` + `calendar.freebusy` and `calendar.events.owned` are not used: `calendar.events.owned` cannot touch events on calendars the user does not own, and free/busy under the narrower pair was not verified. Switching later changes two constants and needs a re-login.
+- **No browser launch (decision 4).** `deskhand auth login` prints the consent URL; the user opens it.
+- **Recordings are hand-written (decision 6)** from the API reference with made-up ids and no personal data; the owner's live check is what proves they match reality. A recording's file name must not match the `.gitignore` secret patterns (`token*.json`, `client_secret*.json`, `credentials*.json`).
+- **HTTP timeout 10 s, no automatic retry (decision 7)** on `429` or `5xx`; apply is already retryable and idempotent, and a hidden retry loop would make the drain cap harder to reason about.
+- **Missing scope wording (controller ruling).** A token missing the read scope gets the login sentence (`Run: deskhand auth login`); the upgrade sentence is used only for a missing write scope.
+- **Apply with a read-only token (controller ruling).** `action_apply` makes only side-effect-free reads (recovery lookup, free/busy, post-failure lookup) before refusing `AUTH_REQUIRED`, and sends zero insert requests; the plan stays `approved`.
+- **Login fails closed (controller ruling).** A token response without `scope`, or a partial grant, fails `deskhand auth login` and stores nothing.
