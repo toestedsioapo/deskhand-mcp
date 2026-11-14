@@ -9,7 +9,8 @@ export interface AppContext {
   db: LedgerDb;
   clock: Clock;
   ids: { newActionId(): string };
-  provider: CalendarProvider;
+  /** null when `DESKHAND_PROVIDER` is unset (ADR 0008): nothing can be applied. */
+  provider: CalendarProvider | null;
   actor: string;
   /** Test seam, used only by the crash-retry test. */
   hooks?: { beforeCommit?: () => void };

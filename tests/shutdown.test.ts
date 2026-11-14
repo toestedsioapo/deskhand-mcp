@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import { loadConfig } from "../src/config/env.js";
 import { LedgerDb } from "../src/ledger/db.js";
 import { createServer, type HandlerTracker } from "../src/server.js";
-import { createClientStdout, installStdinShutdown, type ClientStdoutTarget } from "../src/shutdown.js";
+import { createClientStdout, DEFAULT_TIMEOUT_MS, installStdinShutdown, type ClientStdoutTarget } from "../src/shutdown.js";
 import { makeTempHome } from "./helpers/home.js";
 import { makeProviderDeps } from "./helpers/seed.js";
 
@@ -80,6 +80,26 @@ describe("installStdinShutdown", () => {
     expect(s.logs).toHaveLength(1);
     expect(s.logs[0]).toMatch(/^deskhand-mcp: .*timed out.*\n$/);
     expect(s.logs[0]?.trimEnd().split("\n")).toHaveLength(1);
+  });
+
+  it("has a 30 s default cap", () => {
+    expect(DEFAULT_TIMEOUT_MS).toBe(30_000);
+  });
+
+  it("a drain that needs 200 ms exits 1 with the timeout line under a 100 ms cap", async () => {
+    const s = setup({ whenIdle: () => sleep(200), timeoutMs: 100 });
+    s.stdin.emit("end");
+    await sleep(300);
+    expect(s.calls).toEqual(["whenIdle", "exit:1"]);
+    expect(s.logs).toEqual(["deskhand-mcp: shutdown timed out after 100 ms waiting for in-flight tool calls\n"]);
+  });
+
+  it("a drain that needs 200 ms exits 0 under a 1000 ms cap", async () => {
+    const s = setup({ whenIdle: () => sleep(200), timeoutMs: 1000 });
+    s.stdin.emit("end");
+    await sleep(300);
+    expect(s.calls).toEqual(["whenIdle", "closeDb", "exit:0"]);
+    expect(s.logs).toEqual([]);
   });
 
   it("logs and exits 1 when closeDb throws", async () => {
@@ -198,6 +218,16 @@ describe("createServer tracks every tool handler", () => {
     ledger_query: {},
     action_explain: { action_id: "act_missing" },
     action_apply: { action_id: "act_missing" },
+    calendar_list_events: { time_min: "2026-11-10T00:00:00Z", time_max: "2026-11-11T00:00:00Z" },
+    calendar_propose_event: { title: "Sync", start: "2099-01-01T10:00:00Z", end: "2099-01-01T10:30:00Z" },
+    calendar_find_slots: {
+      date: "2026-11-10",
+      start: "10:00",
+      end: "10:30",
+      time_zone: "UTC",
+      participants: [{ partyId: "them", timeZone: "UTC", weeklyRules: { tuesday: [{ start: "09:00", end: "17:00" }] } }],
+      own_rules: { partyId: "me", timeZone: "UTC", weeklyRules: { tuesday: [{ start: "09:00", end: "17:00" }] } },
+    },
   };
 
   it("runs each registered tool's handler under track", async () => {

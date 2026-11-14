@@ -1,13 +1,13 @@
-# Ledger contract (v2)
+# Ledger contract (v3)
 
-Status: written in M2a before migration 1. This is the contract Deskbench scores against and Deskflow renders (ADR 0003). Changing a table, a column, or any value set below is a breaking change and bumps the package major. `PRAGMA user_version` is the only schema version; this document is `user_version = 2`. v2 (2026-11-10, M2b red-team follow-up) only adds the error code `UNTRUSTED_RUNTIME`; migration 2 rebuilds `events` so its `error_code` CHECK allows it. Tests parse the "Value sets" block and the "DDL v1" block of this file, so keep their format exact.
+Status: written in M2a before migration 1. This is the contract Deskbench scores against and Deskflow renders (ADR 0003). Changing a table, a column, or any value set below is a breaking change and bumps the package major. `PRAGMA user_version` is the only schema version; this document is `user_version = 3`. v2 (2026-11-10, M2b red-team follow-up) only adds the error code `UNTRUSTED_RUNTIME`; migration 2 rebuilds `events` so its `error_code` CHECK allows it. v3 (2026-11-11, M3a) only adds the error codes `PROVIDER_NOT_CONFIGURED` and `NOT_FOUND` (ADR 0008); migration 3 rebuilds `events` the same way. Tests parse the "Value sets" block and the "DDL v1", "DDL v2" and "DDL v3" blocks of this file, so keep their format exact.
 
 Sources: ARCHITECTURE.md (Ledger, vocabulary and row sequences, Expenses), SPEC section 5, ADR 0002, ADR 0003.
 
 ## Conventions
 
 - **Timestamps:** `TEXT`, ISO-8601 UTC with milliseconds and a trailing `Z` (`2026-11-10T09:30:00.123Z`).
-- **JSON columns:** `TEXT` holding canonical-or-plain JSON text; `plan_json` is stored exactly as hashed.
+- **JSON columns:** `TEXT` holding canonical-or-plain JSON text; `plan_json` is stored exactly as hashed (its canonical JSON). `pending`, `approve` and `action_apply` treat a `plan_json` that is not exactly the canonical form of itself as an invalid plan.
 - **Action id:** `act_` followed by a 26-character ULID in Crockford base32 (alphabet `0123456789ABCDEFGHJKMNPQRSTVWXYZ`, uppercase). Example: `act_01JC3Z8K4V7Q2W9X5R6T1N0BHM`. The first 10 ULID characters are a timestamp, the last 16 are random.
 - **Confirmation string:** the last 4 characters of the whole id (always in the random part). Compared after trimming whitespace and uppercasing ASCII `a-z` only (no Unicode case mapping, so input such as `ß` or `ſ`, which `toUpperCase` turns into `S`, never matches). Collisions among pending plans are regenerated at plan time (ADR 0002 item 7).
 - **`expenses.id`:** same format as the action id (`act_` + 26-character ULID). It is a separate id space from `actions.id` and is never typed by a human.
@@ -24,7 +24,7 @@ Sources: ARCHITECTURE.md (Ledger, vocabulary and row sequences, Expenses), SPEC 
 action_statuses: planned, approved, applied, rejected, failed
 event_kinds: tool_call, cli_command, plan_created, approved, approve_refused, rejected, applied, apply_refused, apply_failed
 event_outcomes: ok, error, rejected
-error_codes: INVALID_INPUT, WRITES_DISABLED, UNKNOWN_ACTION, UNKNOWN_TOOL, PLAN_EXPIRED, NOT_APPROVED, ALREADY_APPROVED, NOT_PENDING, NOT_A_TTY, CONFIRMATION_MISMATCH, ID_COLLISION, PLAN_MODIFIED, STALE_PLAN, PROVIDER_ERROR, AUTH_REQUIRED, INTERNAL, UNTRUSTED_RUNTIME
+error_codes: INVALID_INPUT, WRITES_DISABLED, UNKNOWN_ACTION, UNKNOWN_TOOL, PLAN_EXPIRED, NOT_APPROVED, ALREADY_APPROVED, NOT_PENDING, NOT_A_TTY, CONFIRMATION_MISMATCH, ID_COLLISION, PLAN_MODIFIED, STALE_PLAN, PROVIDER_ERROR, AUTH_REQUIRED, INTERNAL, UNTRUSTED_RUNTIME, PROVIDER_NOT_CONFIGURED, NOT_FOUND
 approval_methods: cli_tty
 rejection_methods: cli_tty, cli_no_tty
 ```
@@ -50,6 +50,8 @@ Meaning of the codes:
 | `AUTH_REQUIRED` | a Google-backed tool without a token (M3) |
 | `INTERNAL` | anything else, including a failed ledger write while answering |
 | `UNTRUSTED_RUNTIME` | approve while the process runs with `--import`, `--require`/`-r`, `--loader`, `--experimental-loader` or `--inspect*` (in `process.execArgv` or `NODE_OPTIONS`); a speed bump against the trivial fake-TTY preload, not a boundary (SECURITY.md) |
+| `PROVIDER_NOT_CONFIGURED` | `action_apply` (and, from M3a, the calendar tools) while `DESKHAND_PROVIDER` is unset, so no provider is wired (ADR 0008); a gate refusal, outcome `rejected` |
+| `NOT_FOUND` | a thread, message or event id that does not exist at the provider; first used in M4 (reserved: no M3 code emits it) |
 
 ## DDL v1
 
@@ -177,6 +179,47 @@ BEGIN
 END;
 ```
 
+## DDL v3
+
+Migration 3 (`src/ledger/migrations/0003-error-codes.ts`) rebuilds `events` so the `error_code` CHECK allows `PROVIDER_NOT_CONFIGURED` and `NOT_FOUND`, the same technique as migration 2. Rows keep their ids; the indexes and append-only triggers are recreated. The `CHECK` lists must equal the value sets above. The runner sets `PRAGMA user_version = 3` after the block succeeds. A test compares this block to the migration.
+
+```sql
+CREATE TABLE events_v3 (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts           TEXT NOT NULL,
+  action_id    TEXT REFERENCES actions(id),
+  tool         TEXT NOT NULL,
+  kind         TEXT NOT NULL
+    CHECK (kind IN ('tool_call','cli_command','plan_created','approved','approve_refused','rejected','applied','apply_refused','apply_failed')),
+  outcome      TEXT NOT NULL
+    CHECK (outcome IN ('ok','error','rejected')),
+  error_code   TEXT
+    CHECK (error_code IS NULL OR error_code IN ('INVALID_INPUT','WRITES_DISABLED','UNKNOWN_ACTION','UNKNOWN_TOOL','PLAN_EXPIRED','NOT_APPROVED','ALREADY_APPROVED','NOT_PENDING','NOT_A_TTY','CONFIRMATION_MISMATCH','ID_COLLISION','PLAN_MODIFIED','STALE_PLAN','PROVIDER_ERROR','AUTH_REQUIRED','INTERNAL','UNTRUSTED_RUNTIME','PROVIDER_NOT_CONFIGURED','NOT_FOUND')),
+  preview_json TEXT NOT NULL
+);
+
+INSERT INTO events_v3 (id, ts, action_id, tool, kind, outcome, error_code, preview_json)
+  SELECT id, ts, action_id, tool, kind, outcome, error_code, preview_json FROM events ORDER BY id;
+
+DROP TABLE events;
+ALTER TABLE events_v3 RENAME TO events;
+
+CREATE INDEX events_action_id ON events(action_id);
+CREATE INDEX events_ts ON events(ts);
+
+CREATE TRIGGER events_no_update
+BEFORE UPDATE ON events
+BEGIN
+  SELECT RAISE(ABORT, 'events is append-only');
+END;
+
+CREATE TRIGGER events_no_delete
+BEFORE DELETE ON events
+BEGIN
+  SELECT RAISE(ABORT, 'events is append-only');
+END;
+```
+
 ## Status transitions
 
 `actions.status` changes only by compare-and-set inside `BEGIN IMMEDIATE` (`UPDATE ... WHERE id=? AND status=?`); zero rows changed means the transition is refused and logged.
@@ -198,6 +241,7 @@ END;
 `action_apply(action_id)` evaluates these in order and stops at the first that applies:
 
 1. `WRITES_DISABLED`: `DESKHAND_ALLOW_WRITES` is not `1`. Refusal.
+1b. `PROVIDER_NOT_CONFIGURED`: no provider is wired (`DESKHAND_PROVIDER` unset, ADR 0008). Refusal, status unchanged. It sits after the writes flag so "writes off" keeps answering first, and before the action lookup because nothing can be applied without a provider.
 2. `UNKNOWN_ACTION`: no such action. Refusal (`action_id` NULL on the rows).
 3. Replay: `status = applied`. Returns the stored `result_json`; `tool_call` row `ok`; no lifecycle row; no provider call.
 4. `NOT_APPROVED`: `status` is anything other than `approved` (`planned`, `rejected`, `failed`). Refusal.
@@ -207,7 +251,7 @@ END;
 8. Re-check (ADR 0002 item 4): slot still free and referenced etags unchanged. If not, the idempotency key is looked up again first: if our event exists (a concurrent apply of the same action wrote it after this call's recovery lookup), finalise as in gate 6 (`recovered`). Otherwise `STALE_PLAN`, status becomes `failed`, no write. A provider error while reading (re-check or the second lookup) is a refusal: `apply_refused` (error, `PROVIDER_ERROR`), status unchanged, retryable.
 9. Provider write with the idempotency key. On a write failure the key is looked up again (the failure may be ambiguous, for example a timeout after the provider accepted the event): if our event exists, finalise as in gate 6 (`recovered`); if the lookup finds nothing, `PROVIDER_ERROR`, status becomes `failed` (best-effort: a provider that commits the write after the lookup leaves an event behind a `failed` row, a residual risk); if the lookup itself errors, a `PROVIDER_ERROR` refusal with status unchanged. Success sets `applied`, `applied_at`, `result_json`. The provider's `createEvent` with an existing key must return the existing event (never throw, never duplicate).
 
-Gate refusals (1, 2, 4, 7), provider read errors and the stored-plan `INTERNAL` refusal leave `status` unchanged. Only `PLAN_MODIFIED`, `STALE_PLAN` and a provider write failure whose follow-up lookup finds nothing move the plan to `failed`; `actions.error` then holds `<CODE>: <message>`, with provider text passed through the preview redactor.
+Gate refusals (1, 1b, 2, 4, 7), provider read errors and the stored-plan `INTERNAL` refusal leave `status` unchanged. Only `PLAN_MODIFIED`, `STALE_PLAN` and a provider write failure whose follow-up lookup finds nothing move the plan to `failed`; `actions.error` then holds `<CODE>: <message>`, with provider text passed through the preview redactor.
 
 After gate 5, a stored plan whose kind is unknown or that fails its kind's schema (unreachable through the plan tools, which validate) is refused with `INTERNAL`, status unchanged.
 
@@ -246,11 +290,34 @@ Cancellation: a client may cancel a `tools/call` with a valid `notifications/can
 | Invalid input / unknown tool | `tool_call` (error, `INVALID_INPUT` / `UNKNOWN_TOOL`) | n/a |
 | Other CLI command (`pending`, `export`, `auth`) | `cli_command` | n/a |
 
-`tool_call.outcome` mapping: gate refusals (`WRITES_DISABLED`, `UNKNOWN_ACTION`, `PLAN_EXPIRED`, `NOT_APPROVED`) are `rejected`; every other error code is `error`. For CLI rows, refusals with an approve or reject code (`NOT_A_TTY`, `UNTRUSTED_RUNTIME`, `CONFIRMATION_MISMATCH`, `ID_COLLISION`, `ALREADY_APPROVED`, `NOT_PENDING`, `PLAN_EXPIRED`, `PLAN_MODIFIED`, `UNKNOWN_ACTION`) are `rejected`.
+`tool_call.outcome` mapping: gate refusals (`WRITES_DISABLED`, `PROVIDER_NOT_CONFIGURED`, `UNKNOWN_ACTION`, `PLAN_EXPIRED`, `NOT_APPROVED`) are `rejected`; every other error code is `error`. For CLI rows, refusals with an approve or reject code (`NOT_A_TTY`, `UNTRUSTED_RUNTIME`, `CONFIRMATION_MISMATCH`, `ID_COLLISION`, `ALREADY_APPROVED`, `NOT_PENDING`, `PLAN_EXPIRED`, `PLAN_MODIFIED`, `UNKNOWN_ACTION`) are `rejected`.
 
-`INVALID_INPUT` and `INTERNAL` `tool_call` rows are outcome `error` (only the four gate refusals above are `rejected`).
+`INVALID_INPUT` and `INTERNAL` `tool_call` rows are outcome `error` (only the five gate refusals above are `rejected`).
 
 Every `tools/call` writes exactly one `tool_call` row, including calls rejected by SDK input validation and calls to unknown tools. If the ledger cannot be written, the response is replaced by an `INTERNAL` error. If the ledger cannot be opened at startup, the process exits (fail closed); this is a startup error, not a tool error.
+
+## Plan shape: `calendar.create_event`
+
+`actions.plan_json` for this kind (strict): `{ kind, rationale?, event, observed: { slotFree: true, etags } }`. `event` is `{ title, start, end, attendees: string[], sendUpdates, calendarId, timeZone? }`. `start` and `end` are UTC instants (ISO 8601, `Z`). `timeZone` is optional, an IANA name (`Europe/Berlin`, `UTC`; offsets and POSIX names are an invalid plan), and part of the plan hash; it is the zone the event was proposed in and is passed to the provider on create. `calendar_propose_event` always sets it (its `time_zone` input, else the server's `Config.timeZone`); it stays optional in the schema so plans stored before M3a remain valid.
+
+**Display equals write.** The plan schema only accepts values the diff can print verbatim, so the text a human approves is exactly the text that is stored and written: `title` is 1 to 200 characters, one line of visible text (no control, format, bidirectional, zero-width or blank filler characters, no line breaks or tabs, single ASCII spaces between words only, none at either end); `calendarId` is 1 to 256 printable ASCII characters with no space; `attendees` is at most 50 email addresses, each 1 to 254 printable ASCII characters with no space; `start` and `end` are in the stored form `YYYY-MM-DDTHH:mm:ss.sssZ`; `timeZone` is at most 64 characters. A stored row that breaks any of these is an invalid plan: `pending` shows `(invalid plan)`, `approve` refuses it with `INTERNAL` before the prompt (check 5b) and `action_apply` does not write it.
+
+The human diff (`deskhand pending`, `deskhand approve`, `action_explain.diff`) is rendered from the plan in the viewer's zone (`Config.timeZone`: `DESKHAND_TIMEZONE`, else the system zone), never one the plan chose. The viewer zone is not part of the plan and does not change `plan_hash`. Lines, in order:
+
+1. `create event: <title>`, verbatim
+2. `when: <start> to <end>` in the viewer's zone, e.g. `Thu 12 Nov 2026, 18:00 to 18:30 GMT+8 (Asia/Manila)`; a range across midnight or a zone change names both ends in full
+3. `event zone: <range in event.timeZone>`, only when `event.timeZone` is set and differs from the viewer zone
+4. `utc: <start> to <end>` (always)
+5. `calendar: <calendarId>`, verbatim
+6. `<n> attendees` (`1 attendee` when there is one)
+7. one line per attendee, in plan order: two spaces then the address, verbatim
+8. the notification line: `no attendee notifications (sendUpdates=none)`; `will email <n> attendees` (`all`; `will email 1 attendee` for one); `will email the attendees outside your organisation, up to <n> (sendUpdates=externalOnly)`; or, for `all` / `externalOnly` with no attendees, `no attendee notifications (sendUpdates=<value>, no attendees)`. The stored `sendUpdates` value is always the one named.
+
+No diff line ever contains a line break or a hidden character: the schema above refuses them, and `renderDiff` replaces any line break left in a line with a space as a backstop for future plan kinds. The CLI header (`id`, `tool`, `expires`, `hash`) is built from row columns, each flattened to one line; the hash prefix is printed only when `plan_hash` is 64 lowercase hex characters, else `(invalid)`.
+
+**Terminal layout.** The CLI wraps every diff line (indented 4) and header line itself to the terminal width (`process.stdout.columns` on a TTY, else 80, at least 20), counting any non-ASCII character as two columns. Each row after the first starts with `    | ` (4 spaces, a bar, a space). A row breaks after its last double space, else its last space (never one in a leading indent), else between two characters; a character too wide for a row is split into code points, so every row fits. The width is stdout's when it is a terminal, else stderr's when that is one, else 80. `approve` refuses with `CONFIRMATION_MISMATCH` when the terminal got narrower between showing the plan and the answer. Lines that fit are printed unchanged.
+
+**Terminal sanitising (`stripControl`, `oneLine`).** Untrusted text printed by the CLI has every hidden character removed: control characters (C0, DEL, C1, so ESC too), format characters (bidirectional marks, embeddings, overrides and isolates, zero-width characters, soft hyphen, tag characters, BOM), line and paragraph separators, lone surrogates, private-use characters, unassigned code points and noncharacters, default-ignorable code points (Hangul and Khmer fillers, variation selectors) and the characters designed to render blank (braille blank U+2800, U+303F, U+A8F9, U+13441, U+13442, U+16FE4, U+1D159). A title also may not stack more than four combining marks on one character, have a character of more than 8 code points, or start with a combining mark or other extender. Only those characters are removed, never the visible text after them: an escape sequence is not interpreted, so `ESC[31m` is printed as `[31m`.
 
 ## `preview_json`
 

@@ -1,7 +1,7 @@
 import type { AppContext } from "../app-context.js";
-import { oneLine, stripControl, type CliIo } from "../util/sanitize.js";
+import { DEFAULT_COLUMNS, oneLine, writeRows, type CliIo } from "../util/sanitize.js";
 import { getAction } from "../ledger/actions.js";
-import { hashPrefix, planHash } from "../ledger/canonical.js";
+import { canonicalJson, hashPrefix, planHash } from "../ledger/canonical.js";
 import type { ActionStatus, ErrorCode, RejectionMethod } from "../ledger/contract.js";
 import { appendEvent } from "../ledger/events.js";
 import { isoNow, last4 } from "../ledger/ids.js";
@@ -64,7 +64,9 @@ function storedPlanValid(planJson: string): boolean {
   }
   const k = typeof plan === "object" && plan !== null ? (plan as { kind?: unknown }).kind : undefined;
   const pk = typeof k === "string" ? getPlanKind(k) : undefined;
-  return pk !== undefined && pk.schema.safeParse(plan).success;
+  // plan_json must be exactly the canonical form that was hashed: duplicate keys or other spellings would let the
+  // ledger's readers (SQLite json_extract) see a different plan from the one shown and applied.
+  return pk !== undefined && pk.schema.safeParse(plan).success && canonicalJson(plan) === planJson;
 }
 
 /** INTERNAL is outcome `error`; every approve-specific refusal code is `rejected` (ledger-contract.md). */
@@ -185,17 +187,30 @@ export async function approveAction(ctx: AppContext, actionId: string, io: CliIo
 
   // 7. Show exactly what is being approved (sanitised), then read the typed last 4.
   const hash = recomputeHash(initial.plan_json)!; // equals plan_hash: checked in step 5
-  io.out(`Approve ${stripControl(initial.id)} (${oneLine(initial.tool, 80)})\n`);
-  for (const line of renderDiff(JSON.parse(initial.plan_json) as unknown)) {
-    for (const part of stripControl(line).split("\n")) io.out(`    ${part}\n`);
-  }
-  io.out(`plan hash ${hashPrefix(hash)}\n`);
-  io.out(`expires   ${oneLine(initial.expires_at, 40)}\n`);
+  // The width the plan is laid out for is watched until the answer: if the terminal gets narrower meanwhile, it has
+  // re-wrapped the rows without the continuation marker, so the approval is refused.
+  const shownWidth = io.columns ?? DEFAULT_COLUMNS;
+  const watch = io.watchWidth?.();
+  writeRows(io, "", `Approve ${oneLine(initial.id, 64)} (${oneLine(initial.tool, 80)})`);
+  // The CLI wraps long values itself (continuation marker), so terminal wrapping cannot forge a line.
+  for (const line of renderDiff(JSON.parse(initial.plan_json) as unknown, ctx.config.timeZone)) writeRows(io, "    ", line);
+  writeRows(io, "", `plan hash ${hashPrefix(hash)}`);
+  writeRows(io, "", `expires   ${oneLine(initial.expires_at, 40)}`);
   let typed: string;
+  let narrowest: number | undefined;
   try {
     typed = await io.readLine("Type the last 4 characters of the action id to approve: ");
   } catch {
     typed = "";
+  } finally {
+    narrowest = watch?.narrowest();
+    watch?.stop();
+  }
+  if (narrowest !== undefined && narrowest < shownWidth) {
+    return refuseApprove(ctx, shown, initial.id, {
+      code: "CONFIRMATION_MISMATCH",
+      message: `The terminal got narrower (${shownWidth} to ${narrowest} columns) while the plan for ${shown} was shown, so it may have been re-wrapped; nothing was approved. Run deskhand approve again.`,
+    });
   }
   if (asciiUpper(typed.trim()) !== confirm) {
     return refuseApprove(ctx, shown, initial.id, {

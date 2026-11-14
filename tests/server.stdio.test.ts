@@ -24,11 +24,11 @@ function expectOneLineStartupError(stderr: string): void {
 }
 
 describe("stdio server (built bin)", () => {
-  it("lists ping, ledger_query, action_explain and action_apply, calls ping, survives bad input, stays silent on stderr", async () => {
+  it("lists ping, ledger_query, action_explain, the calendar tools and action_apply, calls ping, survives bad input, stays silent on stderr", async () => {
     const { client, stderr, close } = await spawnBin();
     try {
       const { tools } = await client.listTools();
-      expect(tools.map((t) => t.name)).toEqual(["ping", "ledger_query", "action_explain", "action_apply"]);
+      expect(tools.map((t) => t.name)).toEqual(["ping", "ledger_query", "action_explain", "calendar_list_events", "calendar_find_slots", "calendar_propose_event", "action_apply"]);
 
       const ok = await client.callTool({ name: "ping" });
       expect(ok.isError).toBeFalsy();
@@ -59,6 +59,54 @@ describe("stdio server (built bin)", () => {
     const [code] = (await once(child, "close")) as [number | null];
     expect(code).toBe(0);
     expect(stderr).toBe("");
+  });
+});
+
+describe("stdio server with no provider configured", () => {
+  it("starts, answers ping, and refuses action_apply with PROVIDER_NOT_CONFIGURED (rejected row)", async () => {
+    const home = makeTempHome();
+    try {
+      const { client, stderr, close } = await spawnBin({ ...home.env, DESKHAND_ALLOW_WRITES: "1" });
+      try {
+        const ok = await client.callTool({ name: "ping" });
+        expect(ok.structuredContent).toEqual(expected);
+        const r = await client.callTool({ name: "action_apply", arguments: { action_id: "act_01JC3Z8K4V7Q2W9X5R6T1N0BHM" } });
+        expect(r.isError).toBe(true);
+        const meta = r._meta as { deskhand?: { error_code?: string } } | undefined;
+        expect(meta?.deskhand?.error_code).toBe("PROVIDER_NOT_CONFIGURED");
+      } finally {
+        await close();
+      }
+      expect(stderr()).toBe("");
+      const db = LedgerDb.open(join(home.home, "ledger.db"));
+      try {
+        const rows = db.all<{ tool: string; kind: string; outcome: string; error_code: string | null }>(
+          "SELECT tool, kind, outcome, error_code FROM events ORDER BY id",
+        );
+        expect(rows).toEqual([
+          { tool: "ping", kind: "tool_call", outcome: "ok", error_code: null },
+          { tool: "action_apply", kind: "apply_refused", outcome: "rejected", error_code: "PROVIDER_NOT_CONFIGURED" },
+          { tool: "action_apply", kind: "tool_call", outcome: "rejected", error_code: "PROVIDER_NOT_CONFIGURED" },
+        ]);
+      } finally {
+        db.close();
+      }
+    } finally {
+      home.cleanup();
+    }
+  });
+
+  it("exits 1 with one line when DESKHAND_FIXTURE is set without DESKHAND_PROVIDER=fixture", () => {
+    const home = makeTempHome();
+    try {
+      const r = runServerBin({ ...home.env, DESKHAND_FIXTURE: join(home.home, "world.json") });
+      expect(r.status).toBe(1);
+      expect(r.stdout).toBe("");
+      expect(r.stderr).toContain("set DESKHAND_PROVIDER=fixture");
+      expectOneLineStartupError(r.stderr);
+    } finally {
+      home.cleanup();
+    }
   });
 });
 
@@ -205,9 +253,9 @@ const applyRequest = (id: number, actionId: string) => ({
  * call waits 300 ms; writes go to writes.jsonl). The DB is closed before the
  * bin is spawned.
  */
-function seedSlowApproved(home: ReturnType<typeof makeTempHome>) {
+function seedSlowApproved(home: ReturnType<typeof makeTempHome>, latencyMs = 300) {
   const fixture = join(home.home, "world.json");
-  writeFileSync(fixture, JSON.stringify(makeWorld({ settings: { latency_ms: 300, write_log: "writes.jsonl" } })));
+  writeFileSync(fixture, JSON.stringify(makeWorld({ settings: { latency_ms: latencyMs, write_log: "writes.jsonl" } })));
   const db = LedgerDb.open(join(home.home, "ledger.db"));
   let id: string;
   try {
@@ -225,7 +273,7 @@ function seedSlowApproved(home: ReturnType<typeof makeTempHome>) {
   }
   return {
     id,
-    env: { ...home.env, DESKHAND_FIXTURE: fixture, DESKHAND_ALLOW_WRITES: "1" },
+    env: { ...home.env, DESKHAND_PROVIDER: "fixture", DESKHAND_FIXTURE: fixture, DESKHAND_ALLOW_WRITES: "1" },
     writeLines: (): string[] => {
       const path = join(home.home, "writes.jsonl");
       return existsSync(path) ? readFileSync(path, "utf8").split("\n").filter((l) => l !== "") : [];
@@ -330,6 +378,42 @@ describe("stdio server shuts down gracefully on stdin close", () => {
           .map((e) => `${e.kind}:${e.outcome}`);
         expect(rows).toEqual(["plan_created:ok", "applied:ok", "tool_call:ok"]);
       });
+    } finally {
+      home.cleanup();
+    }
+  });
+
+  it("DESKHAND_SHUTDOWN_TIMEOUT_MS caps the drain: a 1500 ms provider call under a 1000 ms cap exits 1 with one line", async () => {
+    const home = makeTempHome();
+    try {
+      const seed = seedSlowApproved(home, 1500);
+      const s = rawSession({ ...seed.env, DESKHAND_SHUTDOWN_TIMEOUT_MS: "1000" });
+      s.send(INITIALIZE);
+      await s.waitFor(1);
+      s.send(INITIALIZED);
+      s.send(applyRequest(2, seed.id));
+      await new Promise((r) => setTimeout(r, 100)); // the handler is now inside the first slow provider call
+      const t0 = Date.now();
+      s.child.stdin.end();
+      const [code] = await s.closed;
+
+      expect(code).toBe(1);
+      expect(s.stderr()).toBe("deskhand-mcp: shutdown timed out after 1000 ms waiting for in-flight tool calls\n");
+      expect(Date.now() - t0).toBeLessThan(5000);
+      expect(seed.writeLines()).toHaveLength(0);
+    } finally {
+      home.cleanup();
+    }
+  });
+
+  it("exits 1 with one line when DESKHAND_SHUTDOWN_TIMEOUT_MS is invalid", () => {
+    const home = makeTempHome();
+    try {
+      const r = runServerBin({ ...home.env, DESKHAND_SHUTDOWN_TIMEOUT_MS: "10s" });
+      expect(r.status).toBe(1);
+      expect(r.stdout).toBe("");
+      expect(r.stderr).toMatch(/^deskhand-mcp: DESKHAND_SHUTDOWN_TIMEOUT_MS must be/);
+      expect(r.stderr.trimEnd().split("\n")).toHaveLength(1);
     } finally {
       home.cleanup();
     }

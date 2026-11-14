@@ -5,7 +5,7 @@ Status: written in M2a. The fixture world is the fake calendar/mail universe loa
 ## Loading
 
 - JSON only. UTF-8, no comments.
-- `DESKHAND_FIXTURE` is the path to the file. Unset means an empty world (no calendars, clock at the real current time).
+- `DESKHAND_FIXTURE` is the path to the file. Requires `DESKHAND_PROVIDER=fixture` (ADR 0008). Unset (with the provider set to `fixture`) means an empty world (no calendars, clock at the real current time).
 - The loader rejects: a missing or non-`1` `fixture_version`, unknown top-level keys, unknown keys inside `settings`, duplicate event ids within a calendar. Extra keys are errors in v1 so that later additions (mail threads, per-person rule sets) force a `fixture_version` bump.
 
 ## Shape
@@ -40,9 +40,27 @@ Status: written in M2a. The fixture world is the fake calendar/mail universe loa
 | `fixture_version` | number, must be `1` | yes | format version |
 | `now` | ISO-8601 UTC instant | yes | where the fake clock starts. The fixture provider and the server's clock (when a fixture is loaded) read this; time does not advance unless a test advances it |
 | `calendars` | object, calendar id to `{ events }` | yes (may be `{}`) | calendar ids are free strings; `primary` is the default |
-| `calendars.<id>.events[]` | object | yes (may be `[]`) | `id` string unique per calendar; `title` string; `start` and `end` ISO-8601 UTC instants with `start < end`; `attendees` array of email strings (may be empty); `etag` non-empty string, opaque, changes when the event changes |
+| `calendars.<id>.events[]` | object | yes (may be `[]`) | `id` string unique per calendar; `title` string; `start` and `end` ISO-8601 UTC instants with `start < end` (or dates, see All-day events); `attendees` array of email strings (may be empty); `etag` non-empty string, opaque, changes when the event changes; `all_day` optional boolean |
 | `settings.latency_ms` | non-negative integer | no, default `0` | artificial delay added to every provider call (for timeout and concurrency tests) |
 | `settings.write_log` | string path | no | file the fixture provider appends to on every provider write; relative paths resolve against the fixture file's directory. Absent means no log |
+
+## All-day events
+
+An event may carry `"all_day": true`. Its `start` and `end` must then be `YYYY-MM-DD` real dates (so `2026-02-30` is a load error) with `start < end`; `end` is exclusive, as in Google (a one-day event on 12 Nov is `2026-11-12` to `2026-11-13`). No time zone is attached.
+
+```json
+{ "id": "evt_offsite", "title": "Offsite", "start": "2026-11-12", "end": "2026-11-13", "attendees": [], "etag": "a1", "all_day": true }
+```
+
+- Without the key (or with `false`) the instant rules above apply. A date without `all_day: true`, or an instant with `all_day: true`, or a non-boolean `all_day`, is a load error.
+- The key is additive: existing files stay valid and `fixture_version` stays 1.
+- For listing and sorting, an all-day event spans `<start>T00:00:00.000Z` to `<end>T00:00:00.000Z`.
+- An all-day event does not count as busy in `freeBusy` (fixture-only rule; the Google adapter takes free/busy from Google).
+- Provider results carry `allDay: true` and the dates as given; timed events carry `allDay: false`.
+
+## Listing
+
+`listEvents(calendarId, range, limit)` returns the events that overlap `range` (the same overlap rule as `freeBusy`: `event.start < range.end` and `range.start < event.end`), sorted by start (all-day as above) then by `id`, at most `limit`. `truncated` is true when more events matched than were returned. An unknown calendar gives `{ events: [], truncated: false }`. `addBusy` ranges are not events and are never listed.
 
 ## Write log
 

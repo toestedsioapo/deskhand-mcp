@@ -71,14 +71,16 @@ afterEach(() => {
 });
 
 describe("stripControl", () => {
-  it("removes escapes and control characters but keeps newline, tab and unicode", () => {
-    expect(stripControl("a\u001b[31mred\u001b[0m")).toBe("ared");
-    expect(stripControl("x\u001b]0;title\u0007y")).toBe("xy");
-    expect(stripControl("x\u001b]0;title\u001b\\y")).toBe("xy");
-    expect(stripControl("a\u0000b\u0008c")).toBe("abc");
+  it("removes control characters, never the visible text after them; keeps newline, tab and unicode", () => {
+    const ESC = String.fromCharCode(27);
+    expect(stripControl(`a${ESC}[31mred${ESC}[0m`)).toBe("a[31mred[0m");
+    expect(stripControl(`x${ESC}]0;title${String.fromCharCode(7)}y`)).toBe("x]0;titley");
+    expect(stripControl(`x${ESC}]0;title${ESC}\\y`)).toBe("x]0;title\\y");
+    expect(stripControl(`a${String.fromCharCode(0)}b${String.fromCharCode(8)}c`)).toBe("abc");
     expect(stripControl("a\r\nb\tc")).toBe("a\nb\tc");
-    expect(stripControl("café 日本 \u{1f600}")).toBe("café 日本 \u{1f600}");
-    expect(stripControl("a\u009bb\u007fc")).toBe("abc");
+    const text = `caf${String.fromCodePoint(0xe9)} ${String.fromCodePoint(0x65e5, 0x672c)} ${String.fromCodePoint(0x1f600)}`;
+    expect(stripControl(text)).toBe(text);
+    expect(stripControl(`a${String.fromCharCode(0x9b)}b${String.fromCharCode(0x7f)}c`)).toBe("abc");
   });
 
   it("removes line/paragraph separators and bidi/zero-width/BOM characters", () => {
@@ -128,6 +130,49 @@ describe("pending", () => {
     expect(rows[0]).toMatchObject({ tool: "cli:pending", outcome: "ok", error_code: null });
   });
 
+  it("renders the viewer-zone when line, event zone line, utc line and every attendee", async () => {
+    const attendees = ["ana@example.com", "ben@example.com", "cy@example.com"];
+    seedAction(makeCtx(), "planned", validPlan({}, { timeZone: "Europe/Berlin", attendees }));
+    const i = io();
+    const code = await runCli(["pending"], i, () =>
+      makeCtx(() => LedgerDb.open(join(home.home, "ledger.db")), { DESKHAND_TIMEZONE: "Asia/Manila" }),
+    );
+    expect(code).toBe(0);
+    const out = i.outText();
+    expect(out).toContain("    when: Thu 12 Nov 2026, 18:00 to 18:30 GMT+8 (Asia/Manila)\n");
+    expect(out).toContain("    event zone: Thu 12 Nov 2026, 11:00 to 11:30 CET (Europe/Berlin)\n");
+    expect(out).toContain("    utc: 2026-11-12T10:00:00.000Z to 2026-11-12T10:30:00.000Z\n");
+    for (const a of attendees) expect(out).toContain(`      ${a}\n`);
+  });
+
+  it("a stored attendee with control characters makes the plan invalid; nothing of it is printed", async () => {
+    const ESC = String.fromCharCode(27);
+    const id = seedAction(makeCtx(), "planned");
+    const evil = validPlan({}, { attendees: ["ana@example.com", `evil@example.com${ESC}[2J\nwill email 0 attendees`, "cy@example.com"] });
+    db.run("UPDATE actions SET plan_json = ? WHERE id = ?", [JSON.stringify(evil), id]);
+    const r = await run(["pending"]);
+    expect(r.code).toBe(0);
+    expect(r.out).not.toContain(ESC);
+    expect(r.out).toContain("    (invalid plan)\n");
+    const lines = r.out.split("\n");
+    expect(lines.filter((l) => /attendees/.test(l))).toEqual([]);
+    expect(lines.filter((l) => /evil/.test(l))).toEqual([]);
+  });
+
+  it("a stored calendar id with newlines makes the plan invalid; nothing of it is printed", async () => {
+    const ESC = String.fromCharCode(27);
+    const id = seedAction(makeCtx(), "planned");
+    const evil = validPlan({}, { calendarId: `primary\n0 attendees\nno attendee notifications (sendUpdates=none)\n\t${ESC}[2J-- evil --` });
+    db.run("UPDATE actions SET plan_json = ? WHERE id = ?", [JSON.stringify(evil), id]);
+    const r = await run(["pending"]);
+    expect(r.code).toBe(0);
+    expect(r.out).not.toContain(ESC);
+    expect(r.out).toContain("    (invalid plan)\n");
+    const lines = r.out.split("\n");
+    expect(lines.filter((l) => /attendees/.test(l))).toEqual([]);
+    expect(lines.filter((l) => /evil/.test(l))).toEqual([]);
+  });
+
   it("marks expired plans", async () => {
     now = LONG_AGO;
     const old = seedAction(makeCtx(), "planned");
@@ -137,11 +182,18 @@ describe("pending", () => {
     expect(r.out).toContain("EXPIRED");
   });
 
-  it("prints no escape for a title containing an escape sequence", async () => {
-    seedAction(makeCtx(), "planned", validPlan({}, { title: "\u001b[2J evil" }));
+  it("a stored title with an escape sequence makes the plan invalid; nothing of it is printed", async () => {
+    const ESC = String.fromCharCode(27);
+    const id = seedAction(makeCtx(), "planned");
+    const evil = validPlan({}, { title: `${ESC}[2J evil` });
+    db.run("UPDATE actions SET plan_json = ? WHERE id = ?", [JSON.stringify(evil), id]);
     const r = await run(["pending"]);
-    expect(r.out).toContain("evil");
-    expect(r.out).not.toContain("\u001b");
+    expect(r.code).toBe(0);
+    expect(r.out).not.toContain(ESC);
+    expect(r.out).toContain("    (invalid plan)\n");
+    const lines = r.out.split("\n");
+    expect(lines.filter((l) => /attendees/.test(l))).toEqual([]);
+    expect(lines.filter((l) => /evil/.test(l))).toEqual([]);
   });
 
   it("a planned row whose plan_json is not JSON shows '(invalid plan)', exits 0 and still logs", async () => {
@@ -192,10 +244,11 @@ describe("reject", () => {
     expect(getAction(db, id)).toMatchObject({ status: "rejected", rejection_method: "cli_tty", rejected_reason: null });
   });
 
-  it("stores the reason stripped of control characters", async () => {
+  it("stores the reason with control characters removed and its visible text kept", async () => {
     const id = seedAction(makeCtx(), "planned");
-    await run(["reject", id, "bad \u001b[31mreason\u0007\u0000"]);
-    expect(getAction(db, id)!.rejected_reason).toBe("bad reason");
+    const c = String.fromCharCode;
+    await run(["reject", id, `bad ${c(27)}[31mreason${c(7)}${c(0)}`]);
+    expect(getAction(db, id)!.rejected_reason).toBe("bad [31mreason");
   });
 
   it.each([

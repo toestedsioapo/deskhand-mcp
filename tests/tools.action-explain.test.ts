@@ -81,7 +81,38 @@ describe("action_explain", () => {
     });
     const r = await h.client.callTool({ name: "action_explain", arguments: { action_id: "act_CAL" } });
     const diff = (r.structuredContent as { diff: string[] }).diff;
-    expect(diff).toContain("will email 1 attendees");
+    expect(diff).toContain("1 attendee");
+    expect(diff).toContain("will email 1 attendee");
+  });
+
+  it("diff is rendered in the server's time zone, with the event zone and every attendee", async () => {
+    await h.close();
+    h = await setupHarness({ env: { DESKHAND_TIMEZONE: "Asia/Manila" } });
+    insertAction(h.db, "act_TZ", {
+      kind: "calendar.create_event",
+      event: {
+        title: "Sync",
+        start: "2026-11-12T10:00:00.000Z",
+        end: "2026-11-12T10:30:00.000Z",
+        attendees: ["a@example.com", "b@example.com"],
+        sendUpdates: "all",
+        calendarId: "primary",
+        timeZone: "Europe/Berlin",
+      },
+      observed: { slotFree: true, etags: {} },
+    });
+    const r = await h.client.callTool({ name: "action_explain", arguments: { action_id: "act_TZ" } });
+    expect((r.structuredContent as { diff: string[] }).diff).toEqual([
+      "create event: Sync",
+      "when: Thu 12 Nov 2026, 18:00 to 18:30 GMT+8 (Asia/Manila)",
+      "event zone: Thu 12 Nov 2026, 11:00 to 11:30 CET (Europe/Berlin)",
+      "utc: 2026-11-12T10:00:00.000Z to 2026-11-12T10:30:00.000Z",
+      "calendar: primary",
+      "2 attendees",
+      "  a@example.com",
+      "  b@example.com",
+      "will email 2 attendees",
+    ]);
   });
 
   it("rationale is null when the plan has no string rationale", async () => {

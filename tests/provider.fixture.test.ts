@@ -95,4 +95,137 @@ describe("fixture provider", () => {
     await p.getEvent("primary", "evt_standup");
     expect(performance.now() - t0).toBeGreaterThanOrEqual(45);
   });
+
+  describe("listEvents", () => {
+    const world = () =>
+      makeWorld({
+        calendars: {
+          primary: {
+            events: [
+              { id: "b", title: "B", start: "2026-11-10T11:00:00.000Z", end: "2026-11-10T12:00:00.000Z", attendees: [], etag: "e1" },
+              { id: "a", title: "A", start: "2026-11-10T09:30:00.000Z", end: "2026-11-10T09:45:00.000Z", attendees: ["x@example.com"], etag: "e1" },
+              { id: "c", title: "C", start: "2026-11-11T09:00:00.000Z", end: "2026-11-11T10:00:00.000Z", attendees: [], etag: "e1" },
+            ],
+          },
+        },
+      });
+    const day10 = { start: "2026-11-10T00:00:00.000Z", end: "2026-11-11T00:00:00.000Z" };
+
+    it("returns overlapping events in start order, allDay false", async () => {
+      const p = createFixtureProvider(world());
+      const r = await p.listEvents("primary", day10, 10);
+      expect(r.events.map((e) => e.id)).toEqual(["a", "b"]);
+      expect(r.events.every((e) => e.allDay === false)).toBe(true);
+      expect(r.truncated).toBe(false);
+    });
+
+    it("sorts ties by id", async () => {
+      const t = { start: "2026-11-10T09:00:00.000Z", end: "2026-11-10T10:00:00.000Z", attendees: [], etag: "e1" };
+      const p = createFixtureProvider(
+        makeWorld({ calendars: { primary: { events: [{ id: "z", title: "Z", ...t }, { id: "m", title: "M", ...t }] } } }),
+      );
+      const r = await p.listEvents("primary", day10, 10);
+      expect(r.events.map((e) => e.id)).toEqual(["m", "z"]);
+    });
+
+    it("caps at limit and sets truncated", async () => {
+      const p = createFixtureProvider(world());
+      const r = await p.listEvents("primary", day10, 1);
+      expect(r.events.map((e) => e.id)).toEqual(["a"]);
+      expect(r.truncated).toBe(true);
+      const exact = await p.listEvents("primary", day10, 2);
+      expect(exact.truncated).toBe(false);
+    });
+
+    it("returns an empty result for an unknown calendar", async () => {
+      const p = createFixtureProvider(world());
+      expect(await p.listEvents("nope", day10, 5)).toEqual({ events: [], truncated: false });
+    });
+
+    it("includes created events with allDay false", async () => {
+      const p = createFixtureProvider(makeWorld());
+      const created = await p.createEvent(newEvent, "key1");
+      expect(created.allDay).toBe(false);
+      const r = await p.listEvents("primary", { start: newEvent.start, end: newEvent.end }, 5);
+      expect(r.events).toEqual([created]);
+    });
+
+    it("returns copies", async () => {
+      const p = createFixtureProvider(world());
+      const r = await p.listEvents("primary", day10, 5);
+      r.events[0]!.title = "mutated";
+      r.events[0]!.attendees.push("evil@example.com");
+      const again = await p.listEvents("primary", day10, 5);
+      expect(again.events[0]?.title).toBe("A");
+      expect(again.events[0]?.attendees).toEqual(["x@example.com"]);
+    });
+
+    it("applies latency_ms", async () => {
+      const p = createFixtureProvider(makeWorld({ settings: { latency_ms: 50 } }));
+      const t0 = performance.now();
+      await p.listEvents("primary", day10, 5);
+      expect(performance.now() - t0).toBeGreaterThanOrEqual(45);
+    });
+  });
+
+  describe("all-day events", () => {
+    const offsite = {
+      id: "evt_offsite",
+      title: "Offsite",
+      start: "2026-11-12",
+      end: "2026-11-13",
+      attendees: [],
+      etag: "a1",
+      all_day: true,
+    };
+    const timed = {
+      id: "evt_timed",
+      title: "Timed",
+      start: "2026-11-12T09:30:00.000Z",
+      end: "2026-11-12T10:00:00.000Z",
+      attendees: [],
+      etag: "t1",
+    };
+    const world = () => makeWorld({ calendars: { primary: { events: [timed, offsite] } } });
+    const day12 = { start: "2026-11-12T00:00:00.000Z", end: "2026-11-13T00:00:00.000Z" };
+
+    it("listEvents returns dates, sorted before a later timed event", async () => {
+      const p = createFixtureProvider(world());
+      const r = await p.listEvents("primary", day12, 10);
+      expect(r.events.map((e) => e.id)).toEqual(["evt_offsite", "evt_timed"]);
+      expect(r.events[0]).toMatchObject({ allDay: true, start: "2026-11-12", end: "2026-11-13" });
+      expect(r.events[0]?.start).not.toContain("T");
+      expect(r.events[1]?.allDay).toBe(false);
+    });
+
+    it("is not returned for a range entirely on the end date", async () => {
+      const p = createFixtureProvider(world());
+      const r = await p.listEvents(
+        "primary",
+        { start: "2026-11-13T00:00:00.000Z", end: "2026-11-14T00:00:00.000Z" },
+        10,
+      );
+      expect(r.events).toEqual([]);
+    });
+
+    it("does not count as busy in freeBusy", async () => {
+      const p = createFixtureProvider(world());
+      const { busy } = await p.freeBusy("primary", day12);
+      expect(busy).toEqual([{ start: timed.start, end: timed.end }]);
+    });
+
+    it("getEvent returns the same shape", async () => {
+      const p = createFixtureProvider(world());
+      expect(await p.getEvent("primary", "evt_offsite")).toEqual({
+        id: "evt_offsite",
+        title: "Offsite",
+        start: "2026-11-12",
+        end: "2026-11-13",
+        attendees: [],
+        etag: "a1",
+        allDay: true,
+      });
+      expect((await p.getEvent("primary", "evt_timed"))?.allDay).toBe(false);
+    });
+  });
 });

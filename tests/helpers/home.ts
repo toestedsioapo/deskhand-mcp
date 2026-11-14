@@ -14,6 +14,8 @@ export function makeTempHome(): {
     if (k.startsWith("DESKHAND_")) delete env[k];
   }
   env["DESKHAND_HOME"] = home;
+  // Diffs render in the viewer's zone: pin it so results do not depend on the machine (or CI runner) zone.
+  env["DESKHAND_TIMEZONE"] = "UTC";
   return {
     home,
     env,

@@ -11,7 +11,7 @@ import { getPlanKind, type PlanKind } from "./plan-kinds.js";
 /**
  * The apply engine: the ONLY place a plan kind's write is executed (a
  * structural test enforces it). Gate order is fixed by docs/ledger-contract.md
- * ("Apply gate order"): writes flag, exists, applied-replay, approved, hash,
+ * ("Apply gate order"): writes flag, provider configured, exists, applied-replay, approved, hash,
  * recovery, expiry, re-check, write.
  */
 
@@ -43,7 +43,13 @@ function load(ctx: AppContext, id: string): RawAction | undefined {
   );
 }
 
-const GATE_REFUSALS: readonly ErrorCode[] = ["WRITES_DISABLED", "UNKNOWN_ACTION", "PLAN_EXPIRED", "NOT_APPROVED"];
+const GATE_REFUSALS: readonly ErrorCode[] = [
+  "WRITES_DISABLED",
+  "PROVIDER_NOT_CONFIGURED",
+  "UNKNOWN_ACTION",
+  "PLAN_EXPIRED",
+  "NOT_APPROVED",
+];
 const outcomeFor = (code: ErrorCode): EventOutcome => (GATE_REFUSALS.includes(code) ? "rejected" : "error");
 
 /** Provider error text, through the ledger redactor (long strings are cut and hashed). */
@@ -148,6 +154,17 @@ export async function applyAction(ctx: AppContext, actionId: string): Promise<Ap
   if (!ctx.config.writesEnabled) {
     return refuse(ctx, actionId, row !== undefined, "WRITES_DISABLED", "Writes are disabled (set DESKHAND_ALLOW_WRITES=1).");
   }
+  // 1b. A provider is configured (ADR 0008); without one nothing can be applied.
+  const provider = ctx.provider;
+  if (provider === null) {
+    return refuse(
+      ctx,
+      actionId,
+      row !== undefined,
+      "PROVIDER_NOT_CONFIGURED",
+      "No provider is configured (set DESKHAND_PROVIDER=fixture).",
+    );
+  }
   // 2. Exists.
   if (!row) return refuse(ctx, actionId, false, "UNKNOWN_ACTION", `No action with id ${actionId}.`);
   // 3. Applied replay: stored result, no lifecycle row, no provider call.
@@ -165,7 +182,13 @@ export async function applyAction(ctx: AppContext, actionId: string): Promise<Ap
   } catch {
     hash = undefined;
   }
-  if (hash === undefined || hash !== row.plan_hash || hash !== row.approved_plan_hash) {
+  // plan_json must also be exactly the canonical text that was hashed (no duplicate keys or other spellings).
+  if (
+    hash === undefined ||
+    hash !== row.plan_hash ||
+    hash !== row.approved_plan_hash ||
+    canonicalJson(plan) !== row.plan_json
+  ) {
     return fail(ctx, actionId, "PLAN_MODIFIED", "The plan changed after approval; re-plan and approve again.");
   }
   const kindName = (plan as { kind?: unknown }).kind;
@@ -183,7 +206,7 @@ export async function applyAction(ctx: AppContext, actionId: string): Promise<Ap
   type Lookup = { found: EventRef | null } | { refused: ApplyResult };
   const lookup = async (when: string): Promise<Lookup> => {
     try {
-      return { found: await kind.lookupExisting(validPlan, key, ctx.provider) };
+      return { found: await kind.lookupExisting(validPlan, key, provider) };
     } catch (e) {
       return { refused: refuse(ctx, actionId, true, "PROVIDER_ERROR", `Provider lookup ${when} failed: ${errText(e)}`) };
     }
@@ -203,7 +226,7 @@ export async function applyAction(ctx: AppContext, actionId: string): Promise<Ap
   // 8. Re-check against the real world. A read error is retryable (status unchanged).
   let check: Awaited<ReturnType<typeof kind.recheck>>;
   try {
-    check = await kind.recheck(validPlan, ctx.provider);
+    check = await kind.recheck(validPlan, provider);
   } catch (e) {
     return refuse(ctx, actionId, true, "PROVIDER_ERROR", `Provider re-check failed: ${errText(e)}`);
   }
@@ -218,7 +241,7 @@ export async function applyAction(ctx: AppContext, actionId: string): Promise<Ap
   // 9. Write with the idempotency key, then commit.
   let result: EventRef;
   try {
-    result = await kind.execute(validPlan, key, ctx.provider);
+    result = await kind.execute(validPlan, key, provider);
   } catch (e) {
     // Ambiguous failure (e.g. a timeout after the provider accepted the write):
     // if our event exists, the write happened. Only a confirmed absence is terminal.

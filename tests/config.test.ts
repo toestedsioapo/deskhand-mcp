@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { resolveActor } from "../src/config/actor.js";
-import { loadConfig, ConfigError } from "../src/config/env.js";
+import { loadConfig, ConfigError, resolveTimeZone } from "../src/config/env.js";
 import { ensureDirs, resolvePaths } from "../src/config/paths.js";
 
 describe("resolveActor", () => {
@@ -131,8 +131,53 @@ describe("loadConfig", () => {
   });
 
   it("fixture path maps from DESKHAND_FIXTURE, empty is undefined", () => {
-    expect(loadConfig({ ...base, DESKHAND_FIXTURE: "/f.json" }).fixturePath).toBe("/f.json");
-    expect(loadConfig({ ...base, DESKHAND_FIXTURE: "" }).fixturePath).toBeUndefined();
+    const fx = { ...base, DESKHAND_PROVIDER: "fixture" };
+    expect(loadConfig({ ...fx, DESKHAND_FIXTURE: "/f.json" }).fixturePath).toBe("/f.json");
+    expect(loadConfig({ ...fx, DESKHAND_FIXTURE: "" }).fixturePath).toBeUndefined();
+  });
+
+  it("DESKHAND_PROVIDER unset is no provider; fixture is the only accepted value", () => {
+    expect(loadConfig(base).provider).toBeNull();
+    expect(loadConfig({ ...base, DESKHAND_PROVIDER: "fixture" }).provider).toBe("fixture");
+  });
+
+  it('DESKHAND_PROVIDER rejects every other value, naming the variable', () => {
+    for (const v of ["Fixture", "google", "", "none"]) {
+      expect(() => loadConfig({ ...base, DESKHAND_PROVIDER: v })).toThrow(ConfigError);
+      expect(() => loadConfig({ ...base, DESKHAND_PROVIDER: v })).toThrow(/DESKHAND_PROVIDER must be "fixture"/);
+    }
+  });
+
+  it("DESKHAND_FIXTURE without DESKHAND_PROVIDER=fixture is a startup error", () => {
+    expect(() => loadConfig({ ...base, DESKHAND_FIXTURE: "/x.json" })).toThrow(ConfigError);
+    expect(() => loadConfig({ ...base, DESKHAND_FIXTURE: "/x.json" })).toThrow(/set DESKHAND_PROVIDER=fixture/);
+  });
+
+  it("DESKHAND_PROVIDER=fixture without DESKHAND_FIXTURE is allowed (empty world)", () => {
+    const c = loadConfig({ ...base, DESKHAND_PROVIDER: "fixture" });
+    expect(c.provider).toBe("fixture");
+    expect(c.fixturePath).toBeUndefined();
+  });
+});
+
+describe("loadConfig shutdownTimeoutMs", () => {
+  const base = { DESKHAND_HOME: "/x/h" };
+
+  it("defaults to 30000", () => {
+    expect(loadConfig(base).shutdownTimeoutMs).toBe(30000);
+  });
+
+  it("accepts integers from 1000 to 120000", () => {
+    for (const v of ["1000", "30000", "120000"]) {
+      expect(loadConfig({ ...base, DESKHAND_SHUTDOWN_TIMEOUT_MS: v }).shutdownTimeoutMs).toBe(Number(v));
+    }
+  });
+
+  it("rejects anything else, naming the variable", () => {
+    for (const v of ["999", "120001", "10s", "", "0", "1000.5", " 5000", "5000 ", "1e4", "+5000", "-5000", "05000", "5000\n"]) {
+      expect(() => loadConfig({ ...base, DESKHAND_SHUTDOWN_TIMEOUT_MS: v }), v).toThrow(ConfigError);
+      expect(() => loadConfig({ ...base, DESKHAND_SHUTDOWN_TIMEOUT_MS: v }), v).toThrow(/DESKHAND_SHUTDOWN_TIMEOUT_MS/);
+    }
   });
 });
 
@@ -152,5 +197,41 @@ describe("ensureDirs", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe("loadConfig timeZone and rulesPath", () => {
+  const base = { DESKHAND_HOME: "/x/h" };
+
+  it("timeZone defaults to the system zone, DESKHAND_TIMEZONE overrides it", () => {
+    expect(loadConfig(base).timeZone).toBe(Intl.DateTimeFormat().resolvedOptions().timeZone);
+    expect(loadConfig({ ...base, DESKHAND_TIMEZONE: "Europe/Berlin" }).timeZone).toBe("Europe/Berlin");
+  });
+
+  it("an invalid DESKHAND_TIMEZONE is a ConfigError naming the variable", () => {
+    for (const v of ["+01:00", "EST5EDT", "Mars/Olympus", ""]) {
+      expect(() => loadConfig({ ...base, DESKHAND_TIMEZONE: v })).toThrow(ConfigError);
+      expect(() => loadConfig({ ...base, DESKHAND_TIMEZONE: v })).toThrow(/DESKHAND_TIMEZONE/);
+    }
+  });
+
+  it("resolveTimeZone: DESKHAND_TIMEZONE wins; else the system zone when it is an IANA name", () => {
+    expect(resolveTimeZone("Europe/Berlin", "Asia/Manila")).toBe("Europe/Berlin");
+    expect(resolveTimeZone(undefined, "Asia/Manila")).toBe("Asia/Manila");
+    expect(resolveTimeZone(undefined, "UTC")).toBe("UTC");
+    expect(resolveTimeZone("Europe/Berlin", "EST5EDT")).toBe("Europe/Berlin");
+  });
+
+  it("resolveTimeZone: a system zone that is not an IANA name is a ConfigError telling you to set DESKHAND_TIMEZONE", () => {
+    for (const sys of ["EST5EDT", "+00:00", ""]) {
+      expect(() => resolveTimeZone(undefined, sys), sys).toThrow(ConfigError);
+      expect(() => resolveTimeZone(undefined, sys), sys).toThrow(/set DESKHAND_TIMEZONE/);
+    }
+  });
+
+  it("rulesPath defaults to <configDir>/rules.json, DESKHAND_RULES overrides it", () => {
+    const c = loadConfig(base);
+    expect(c.rulesPath).toBe(join(c.paths.configDir, "rules.json"));
+    expect(loadConfig({ ...base, DESKHAND_RULES: "/r/mine.json" }).rulesPath).toBe("/r/mine.json");
   });
 });

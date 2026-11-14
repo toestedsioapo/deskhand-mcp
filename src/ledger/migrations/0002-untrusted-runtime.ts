@@ -1,4 +1,4 @@
-import { ERROR_CODES, EVENT_KINDS, EVENT_OUTCOMES } from "../contract.js";
+import { ERROR_CODES_V2, EVENT_KINDS, EVENT_OUTCOMES } from "../contract.js";
 import type { LedgerDb } from "../db.js";
 
 const list = (values: readonly string[]): string => values.map((v) => `'${v}'`).join(",");
@@ -20,7 +20,7 @@ CREATE TABLE events_v2 (
   outcome      TEXT NOT NULL
     CHECK (outcome IN (${list(EVENT_OUTCOMES)})),
   error_code   TEXT
-    CHECK (error_code IS NULL OR error_code IN (${list(ERROR_CODES)})),
+    CHECK (error_code IS NULL OR error_code IN (${list(ERROR_CODES_V2)})),
   preview_json TEXT NOT NULL
 );
 

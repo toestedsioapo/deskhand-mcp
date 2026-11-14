@@ -82,7 +82,9 @@ export function listPending(ctx: AppContext): PendingRow[] {
   return rows.map(({ plan_json, ...r }) => {
     let plan: PendingRow["plan"];
     try {
-      plan = { value: JSON.parse(plan_json) as unknown };
+      const value = JSON.parse(plan_json) as unknown;
+      // Only the exact canonical text that was hashed is shown (duplicate keys would read differently elsewhere).
+      plan = canonicalJson(value) === plan_json ? { value } : undefined;
     } catch {
       plan = undefined;
     }

@@ -165,31 +165,100 @@ describe("listPending", () => {
 });
 
 describe("renderDiff", () => {
-  it("lists title, range, attendees and email count", () => {
-    const d = renderDiff(validPlan());
-    expect(d).toContain("will email 3 attendees");
-    const text = d.join("\n");
-    expect(text).toContain("Sync");
-    expect(text).toContain("2026-11-12T10:00:00.000Z");
-    expect(text).toContain("3 attendees");
+  const MANILA = "Asia/Manila";
+  const UTC_LINE = "utc: 2026-11-12T10:00:00.000Z to 2026-11-12T10:30:00.000Z";
+  it("lists title, local range, utc range, calendar, attendees and email count in order", () => {
+    expect(renderDiff(validPlan(), MANILA)).toEqual([
+      "create event: Sync",
+      "when: Thu 12 Nov 2026, 18:00 to 18:30 GMT+8 (Asia/Manila)",
+      UTC_LINE,
+      "calendar: primary",
+      "3 attendees",
+      "  a@example.com",
+      "  b@example.com",
+      "  c@example.com",
+      "will email 3 attendees",
+    ]);
   });
-  it("says no notifications for sendUpdates=none or zero attendees", () => {
-    expect(renderDiff(validPlan({}, { sendUpdates: "none" }))).toContain(
+  it("says no notifications for sendUpdates=none or zero attendees, naming the stored value", () => {
+    expect(renderDiff(validPlan({}, { sendUpdates: "none" }), MANILA)).toContain(
       "no attendee notifications (sendUpdates=none)",
     );
-    expect(renderDiff(validPlan({}, { attendees: [] }))).toContain(
-      "no attendee notifications (sendUpdates=none)",
-    );
+    const none = renderDiff(validPlan({}, { attendees: [] }), MANILA);
+    expect(none).toContain("no attendee notifications (sendUpdates=all, no attendees)");
+    expect(none).toContain("0 attendees");
+    expect(none.filter((l) => l.startsWith("  "))).toEqual([]);
   });
-  it("keeps raw control characters and is deterministic", () => {
-    const p = validPlan({}, { title: "\u001b[31mred" });
-    expect(renderDiff(p).join("\n")).toContain("\u001b[31mred");
-    expect(renderDiff(p)).toEqual(renderDiff(p));
+  it("prints the title verbatim and is deterministic", () => {
+    const p = validPlan({}, { title: "Q4 review: budget & hiring" });
+    expect(renderDiff(p, MANILA)[0]).toBe("create event: Q4 review: budget & hiring");
+    expect(renderDiff(p, MANILA)).toEqual(renderDiff(p, MANILA));
   });
+  // A title, calendar id or attendee that the sanitiser would alter is an invalid plan, not a flattened line:
+  // see tests/diff-forgery.test.ts ("a plan row written around the tool cannot be shown as something else").
   it("unknown kind", () => {
-    expect(renderDiff({ kind: "nope" })).toEqual(["(unknown plan kind)"]);
-    expect(renderDiff("x")).toEqual(["(unknown plan kind)"]);
+    expect(renderDiff({ kind: "nope" }, MANILA)).toEqual(["(unknown plan kind)"]);
+    expect(renderDiff("x", MANILA)).toEqual(["(unknown plan kind)"]);
     expect(getPlanKind("nope")).toBeUndefined();
+  });
+
+  it("viewer zone: when line in the viewer zone, then the event zone line, then utc", () => {
+    const d = renderDiff(validPlan({}, { timeZone: "Europe/Berlin" }), MANILA);
+    expect(d[1]).toBe("when: Thu 12 Nov 2026, 18:00 to 18:30 GMT+8 (Asia/Manila)");
+    expect(d[2]).toBe("event zone: Thu 12 Nov 2026, 11:00 to 11:30 CET (Europe/Berlin)");
+    expect(d[3]).toBe(UTC_LINE);
+  });
+  it("no event zone line when the event zone is the viewer zone", () => {
+    const d = renderDiff(validPlan({}, { timeZone: "Europe/Berlin" }), "Europe/Berlin");
+    expect(d[1]).toBe("when: Thu 12 Nov 2026, 11:00 to 11:30 CET (Europe/Berlin)");
+    expect(d.some((l) => l.startsWith("event zone:"))).toBe(false);
+    expect(d).toContain(UTC_LINE);
+  });
+  it("a plan without a time zone has no event zone line", () => {
+    const d = renderDiff(validPlan(), MANILA);
+    expect(d[1]).toBe("when: Thu 12 Nov 2026, 18:00 to 18:30 GMT+8 (Asia/Manila)");
+    expect(d.some((l) => l.startsWith("event zone:"))).toBe(false);
+  });
+
+  it("attendees: every address on its own line, in order, before the notification line", () => {
+    const attendees = ["ana@example.com", "ben@example.com", "cy@example.com"];
+    const d = renderDiff(validPlan({}, { attendees }), MANILA);
+    const i = d.indexOf("3 attendees");
+    expect(d.slice(i + 1, i + 4)).toEqual(attendees.map((a) => `  ${a}`));
+    expect(d[i + 4]).toBe("will email 3 attendees");
+  });
+  it("50 attendees render 50 lines", () => {
+    const attendees = Array.from({ length: 50 }, (_, k) => `p${k}@example.com`);
+    const d = renderDiff(validPlan({}, { attendees }), MANILA);
+    expect(d.filter((l) => l.startsWith("  "))).toHaveLength(50);
+  });
+
+  it("a rationale with line breaks never reaches the diff", () => {
+    const d = renderDiff(validPlan({ rationale: "a\nb\r\nc" }), MANILA);
+    expect(d).toHaveLength(9);
+    for (const l of d) expect(l).not.toMatch(/[\n\r]/);
+  });
+
+  it("a timeZone that is not an IANA name is an invalid plan", () => {
+    expect(renderDiff(validPlan({}, { timeZone: "+01:00" }), MANILA)).toEqual(["(invalid plan)"]);
+  });
+  it("plans differing only in event.timeZone have different hashes", () => {
+    expect(planHash(validPlan({}, { timeZone: "Europe/Berlin" }))).not.toBe(
+      planHash(validPlan({}, { timeZone: "Europe/Paris" })),
+    );
+  });
+  it("timeZone is part of the plan hash; the viewer zone is not", () => {
+    expect(planHash(validPlan())).not.toBe(planHash(validPlan({}, { timeZone: "Europe/Berlin" })));
+    const p = validPlan({}, { timeZone: "Europe/Berlin" });
+    const before = planHash(p);
+    const m = renderDiff(p, MANILA);
+    const u = renderDiff(p, "UTC");
+    expect(planHash(p)).toBe(before);
+    expect(m).toHaveLength(u.length);
+    expect(m).not.toEqual(u);
+    m.forEach((l, k) => {
+      if (l !== u[k]) expect(l.startsWith("when:") || l.startsWith("event zone:")).toBe(true);
+    });
   });
 });
 

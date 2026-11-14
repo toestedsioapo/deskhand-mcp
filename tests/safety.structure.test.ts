@@ -29,6 +29,9 @@ const importSpecifiers = (text: string): string[] =>
     (m) => (m[1] ?? m[2])!,
   );
 
+/** The tools that create plans (call createPlan). Explicit list; extend only with review. */
+const PLAN_TOOLS = ["src/tools/calendar-propose-event.ts"];
+
 /** Files allowed to SET actions.status to 'approved' or write the approval columns. Explicit list; extend only with review. */
 const APPROVE_ALLOWED = ["src/approval/approve.ts"];
 
@@ -50,6 +53,12 @@ describe("safety structure", () => {
 
   it("the provider write `createEvent` is referenced outside src/providers only by src/approval/plan-kinds.ts", () => {
     expect(matching(/\bcreateEvent\b/, (p) => !p.startsWith("src/providers/"))).toEqual(["src/approval/plan-kinds.ts"]);
+  });
+
+  it("createPlan is imported and mentioned only by the plan tools listed in PLAN_TOOLS (outside src/approval)", () => {
+    const outside = (p: string) => !p.startsWith("src/approval/");
+    expect(matching(/\bimport\s*\{[^}]*\bcreatePlan\b[^}]*\}\s*from/, outside)).toEqual(PLAN_TOOLS);
+    expect(matching(/\bcreatePlan\b/, outside)).toEqual(PLAN_TOOLS);
   });
 
   it("a plan kind's execute is called only from src/approval/apply.ts", () => {
@@ -113,6 +122,14 @@ describe("safety structure", () => {
         .map((s) => `${f.path}: ${s}`),
     );
     expect(offenders).toEqual([]);
+  });
+
+  it("only src/tempo/ imports @marvinliem/tempo-core (ADR 0006)", () => {
+    const importers = FILES.filter((f) => importSpecifiers(f.text).some((s) => s.includes("@marvinliem/tempo-core")))
+      .map((f) => f.path)
+      .sort();
+    expect(importers.length).toBeGreaterThan(0);
+    expect(importers.filter((p) => !p.startsWith("src/tempo/"))).toEqual([]);
   });
 
   it("os.userInfo is used only by src/config/actor.ts (resolveActor has the fallback)", () => {

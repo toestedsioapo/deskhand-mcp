@@ -39,6 +39,7 @@ type Output = z.infer<typeof actionExplainOutputSchema>;
 export function actionExplainHandler(
   db: LedgerDb,
   input: z.infer<typeof actionExplainInputSchema>,
+  viewerTimeZone: string,
 ): ToolOkResult<Output> | ToolErrorResult {
   const a = getAction(db, input.action_id);
   if (!a) return toolError("UNKNOWN_ACTION", `No action with id ${input.action_id}.`);
@@ -67,7 +68,7 @@ export function actionExplainHandler(
     },
     plan,
     rationale,
-    diff: renderDiff(plan),
+    diff: renderDiff(plan, viewerTimeZone),
     events,
   };
   return toolOk(output, { action_id: a.id });

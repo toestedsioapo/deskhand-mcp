@@ -10,7 +10,8 @@ import { assertSupportedNode } from "./config/node-check.js";
 import { ensureDirs } from "./config/paths.js";
 import { PACKAGE_VERSION } from "./config/version.js";
 import { LedgerDb } from "./ledger/db.js";
-import { createIdGenerator, type Clock } from "./ledger/ids.js";
+import { selectProvider } from "./composition.js";
+import { createIdGenerator } from "./ledger/ids.js";
 import { LoggingTransport } from "./ledger/logging-transport.js";
 import {
   ACTION_APPLY_DESCRIPTION,
@@ -25,6 +26,24 @@ import {
   actionExplainOutputSchema,
 } from "./tools/action-explain.js";
 import {
+  CALENDAR_FIND_SLOTS_DESCRIPTION,
+  calendarFindSlotsHandler,
+  calendarFindSlotsInputSchema,
+  calendarFindSlotsOutputSchema,
+} from "./tools/calendar-find-slots.js";
+import {
+  CALENDAR_LIST_EVENTS_DESCRIPTION,
+  calendarListEventsHandler,
+  calendarListEventsInputSchema,
+  calendarListEventsOutputSchema,
+} from "./tools/calendar-list-events.js";
+import {
+  CALENDAR_PROPOSE_EVENT_DESCRIPTION,
+  calendarProposeEventHandler,
+  calendarProposeEventInputSchema,
+  calendarProposeEventOutputSchema,
+} from "./tools/calendar-propose-event.js";
+import {
   LEDGER_QUERY_DESCRIPTION,
   ledgerQueryHandler,
   ledgerQueryInputSchema,
@@ -36,7 +55,6 @@ import {
   pingInputSchema,
   pingOutputSchema,
 } from "./tools/ping.js";
-import { createFixtureProvider, loadFixtureWorld } from "./providers/fixture/index.js";
 import { createClientStdout, installStdinShutdown } from "./shutdown.js";
 import { toolOk } from "./tools/result.js";
 
@@ -96,7 +114,41 @@ export function createServer(deps: ServerDeps, opts: CreateServerOptions = {}): 
       outputSchema: actionExplainOutputSchema,
       annotations: { readOnlyHint: true },
     },
-    (input) => track(() => actionExplainHandler(deps.db, input)),
+    (input) => track(() => actionExplainHandler(deps.db, input, deps.config.timeZone)),
+  );
+
+  server.registerTool(
+    "calendar_list_events",
+    {
+      description: CALENDAR_LIST_EVENTS_DESCRIPTION,
+      inputSchema: calendarListEventsInputSchema,
+      outputSchema: calendarListEventsOutputSchema,
+      annotations: { readOnlyHint: true },
+    },
+    (input) => track(() => calendarListEventsHandler(deps, input)),
+  );
+
+  server.registerTool(
+    "calendar_find_slots",
+    {
+      description: CALENDAR_FIND_SLOTS_DESCRIPTION,
+      inputSchema: calendarFindSlotsInputSchema,
+      outputSchema: calendarFindSlotsOutputSchema,
+      annotations: { readOnlyHint: true },
+    },
+    (input) => track(() => calendarFindSlotsHandler(deps, input)),
+  );
+
+  // A plan tool: writes a ledger plan row, nothing in the calendar.
+  server.registerTool(
+    "calendar_propose_event",
+    {
+      description: CALENDAR_PROPOSE_EVENT_DESCRIPTION,
+      inputSchema: calendarProposeEventInputSchema,
+      outputSchema: calendarProposeEventOutputSchema,
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+    },
+    (input) => track(() => calendarProposeEventHandler(deps, input)),
   );
 
   // The only MCP tool that can cause a provider write (through the apply engine).
@@ -120,12 +172,10 @@ export async function main(): Promise<void> {
   // below prints one line and exits 1); no tool ever runs without a ledger.
   const config = loadConfig(process.env);
   ensureDirs(config.paths);
-  // A bad fixture file is a startup config error too (loadFixtureWorld throws ConfigError).
-  const world = loadFixtureWorld(config.fixturePath);
+  // A bad fixture file is a startup config error too (selectProvider throws ConfigError).
+  // With no DESKHAND_PROVIDER there is no provider (ADR 0008): the server still starts.
+  const { provider, clock } = selectProvider(config);
   const db = LedgerDb.open(config.paths.ledgerPath, { busyTimeoutMs: config.busyTimeoutMs });
-  // With a fixture loaded, time is the fixture's fixed `now`; otherwise real time.
-  const clock: Clock = config.fixturePath ? () => new Date(world.now) : () => new Date();
-  const provider = createFixtureProvider(world);
   const ids = createIdGenerator();
   // The client usually closes both pipes when it exits, so a response can hit a
   // dead stdout (EPIPE): the guard drops it silently instead of crashing.
@@ -143,6 +193,7 @@ export async function main(): Promise<void> {
     transport,
     closeDb: () => db.close(),
     exit: (code) => stdout.flushThenExit(code),
+    timeoutMs: config.shutdownTimeoutMs,
   });
   await server.connect(transport);
 }

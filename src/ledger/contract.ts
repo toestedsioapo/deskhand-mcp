@@ -3,7 +3,7 @@
  * docs/ledger-contract.md ("Value sets"); a test parses the doc and compares,
  * so the two cannot drift. Changing any of them is a breaking change.
  */
-export const LEDGER_SCHEMA_VERSION = 2;
+export const LEDGER_SCHEMA_VERSION = 3;
 
 export const ACTION_STATUSES = ["planned", "approved", "applied", "rejected", "failed"] as const;
 
@@ -41,8 +41,11 @@ export const ERROR_CODES_V1 = [
   "INTERNAL",
 ] as const;
 
-/** Schema v2 adds UNTRUSTED_RUNTIME (approve refused under --import/--require/--loader/--inspect). */
-export const ERROR_CODES = [...ERROR_CODES_V1, "UNTRUSTED_RUNTIME"] as const;
+/** Schema v2 adds UNTRUSTED_RUNTIME (approve refused under --import/--require/--loader/--inspect). Frozen: migration 0002 builds its CHECK from this. */
+export const ERROR_CODES_V2 = [...ERROR_CODES_V1, "UNTRUSTED_RUNTIME"] as const;
+
+/** Schema v3 adds PROVIDER_NOT_CONFIGURED (no provider wired) and NOT_FOUND (reserved for M4), in that order. */
+export const ERROR_CODES = [...ERROR_CODES_V2, "PROVIDER_NOT_CONFIGURED", "NOT_FOUND"] as const;
 
 export const APPROVAL_METHODS = ["cli_tty"] as const;
 

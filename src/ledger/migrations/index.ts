@@ -1,6 +1,7 @@
 import type { LedgerDb } from "../db.js";
 import { up as up0001 } from "./0001-init.js";
 import { up as up0002 } from "./0002-untrusted-runtime.js";
+import { up as up0003 } from "./0003-error-codes.js";
 
 export interface Migration {
   version: number;
@@ -11,6 +12,7 @@ export interface Migration {
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, up: up0001 },
   { version: 2, up: up0002 },
+  { version: 3, up: up0003 },
 ];
 
 /**

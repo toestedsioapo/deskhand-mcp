@@ -8,19 +8,32 @@ export const DEFAULT_FIXTURE_NOW = "2026-11-10T09:00:00.000Z";
 
 const instant = z.iso.datetime();
 
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+/** A real calendar date: round-trips through Date, so 2026-02-30 is rejected. */
+const isRealDate = (s: string): boolean =>
+  DATE_RE.test(s) && new Date(`${s}T00:00:00.000Z`).toISOString().startsWith(s);
+
 const eventSchema = z
   .object({
     id: z.string().min(1),
     title: z.string(),
-    start: instant,
-    end: instant,
+    start: z.string(),
+    end: z.string(),
     attendees: z.array(z.string()),
     etag: z.string().min(1),
+    all_day: z.boolean().optional(),
   })
   .strict()
-  .refine((e) => Date.parse(e.start) < Date.parse(e.end), {
-    message: "event start must be before end",
-    path: ["end"],
+  .superRefine((e, ctx) => {
+    const ok = (s: string): boolean =>
+      e.all_day === true ? isRealDate(s) : instant.safeParse(s).success;
+    const what = e.all_day === true ? "a YYYY-MM-DD date (all_day is true)" : "an ISO-8601 UTC instant";
+    for (const key of ["start", "end"] as const) {
+      if (!ok(e[key])) ctx.addIssue({ code: "custom", message: `event ${key} must be ${what}`, path: [key] });
+    }
+    if (ok(e.start) && ok(e.end) && !(Date.parse(e.start) < Date.parse(e.end))) {
+      ctx.addIssue({ code: "custom", message: "event start must be before end", path: ["end"] });
+    }
   });
 
 const calendarSchema = z

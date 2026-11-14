@@ -1,0 +1,104 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`calendar_propose_event schemas > input schema is stable 1`] = `
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "attendees": {
+      "default": [],
+      "items": {
+        "format": "email",
+        "maxLength": 254,
+        "pattern": "^(?:[A-Za-z0-9_'+\\-]+\\.)*[A-Za-z0-9_'+\\-]*[A-Za-z0-9_+-]@(?:[A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$",
+        "type": "string",
+      },
+      "maxItems": 50,
+      "type": "array",
+    },
+    "calendar_id": {
+      "default": "primary",
+      "maxLength": 256,
+      "minLength": 1,
+      "pattern": "^[\\x21-\\x7e]+$",
+      "type": "string",
+    },
+    "end": {
+      "format": "date-time",
+      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+      "type": "string",
+    },
+    "rationale": {
+      "maxLength": 500,
+      "type": "string",
+    },
+    "send_updates": {
+      "default": "none",
+      "enum": [
+        "none",
+        "all",
+        "externalOnly",
+      ],
+      "type": "string",
+    },
+    "start": {
+      "format": "date-time",
+      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+      "type": "string",
+    },
+    "time_zone": {
+      "maxLength": 64,
+      "type": "string",
+    },
+    "title": {
+      "maxLength": 200,
+      "minLength": 1,
+      "type": "string",
+    },
+  },
+  "required": [
+    "title",
+    "start",
+    "end",
+    "attendees",
+    "send_updates",
+    "calendar_id",
+  ],
+  "type": "object",
+}
+`;
+
+exports[`calendar_propose_event schemas > output schema is stable 1`] = `
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "action_id": {
+      "type": "string",
+    },
+    "diff": {
+      "items": {
+        "type": "string",
+      },
+      "type": "array",
+    },
+    "expires_at": {
+      "type": "string",
+    },
+    "next_step": {
+      "type": "string",
+    },
+    "plan_hash": {
+      "type": "string",
+    },
+  },
+  "required": [
+    "action_id",
+    "plan_hash",
+    "expires_at",
+    "diff",
+    "next_step",
+  ],
+  "type": "object",
+}
+`;

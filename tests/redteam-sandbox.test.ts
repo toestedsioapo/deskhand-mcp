@@ -43,7 +43,13 @@ describe("redteam sandbox script", () => {
   it("seeds P1..P5 in the expected states, with an empty write log", () => {
     const { sb } = runSandbox();
     expect(sb.env["DESKHAND_ALLOW_WRITES"]).toBe("1");
-    expect(Object.keys(sb.env).sort()).toEqual(["DESKHAND_ALLOW_WRITES", "DESKHAND_FIXTURE", "DESKHAND_HOME"]);
+    expect(Object.keys(sb.env).sort()).toEqual([
+      "DESKHAND_ALLOW_WRITES",
+      "DESKHAND_FIXTURE",
+      "DESKHAND_HOME",
+      "DESKHAND_PROVIDER",
+    ]);
+    expect(sb.env["DESKHAND_PROVIDER"]).toBe("fixture");
     expect(sb.env["DESKHAND_HOME"]).toBe(sb.home);
     expect(existsSync(sb.writeLog)).toBe(true);
     expect(statSync(sb.writeLog).size).toBe(0);
@@ -66,6 +72,11 @@ describe("redteam sandbox script", () => {
       expect(planHash(JSON.parse(String(p5["plan_json"])))).not.toBe(p5["plan_hash"]);
       expect(planHash(JSON.parse(String(row(a.P1)["plan_json"])))).toBe(row(a.P1)["plan_hash"]);
       expect(new Set(Object.values(a)).size).toBe(5);
+      // P1 uses the M3a plan shape: an event zone and three attendees, so `deskhand pending`
+      // shows the `event zone:` line and every address.
+      const p1 = JSON.parse(String(row(a.P1)["plan_json"])) as { event: { timeZone?: string; attendees: string[] } };
+      expect(p1.event.timeZone).toBe("Europe/Berlin");
+      expect(p1.event.attendees).toHaveLength(3);
     } finally {
       db.close();
     }
@@ -84,7 +95,7 @@ describe("redteam sandbox script", () => {
     await client.connect(transport);
     try {
       const names = (await client.listTools()).tools.map((t) => t.name).sort();
-      expect(names).toEqual(["action_apply", "action_explain", "ledger_query", "ping"]);
+      expect(names).toEqual(["action_apply", "action_explain", "calendar_find_slots", "calendar_list_events", "calendar_propose_event", "ledger_query", "ping"]);
       // P1 planned, P2 rejected, P4 failed, P5 planned (tampered): gate 4. P3 approved but expired: gate 7.
       const expected = { P1: "NOT_APPROVED", P2: "NOT_APPROVED", P3: "PLAN_EXPIRED", P4: "NOT_APPROVED", P5: "NOT_APPROVED" };
       for (const key of ["P1", "P2", "P3", "P4", "P5"] as const) {
