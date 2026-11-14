@@ -231,8 +231,44 @@ describe("scrubSecrets", () => {
     });
   }
 
+  // URL-encoded JSON inside a JSON string (`%5C%22access_token%5C%22%3A%5C%22...`), at depths 2 and 3, also double-encoded.
+  const nest = (v: unknown, depth: number): string => {
+    let s = JSON.stringify(v);
+    for (let i = 1; i < depth; i++) s = JSON.stringify(s);
+    return s;
+  };
+  for (const [label, enc] of [
+    ["URL-encoded", (s: string) => encodeURIComponent(s)],
+    ["double URL-encoded", (s: string) => encodeURIComponent(encodeURIComponent(s))],
+  ] as const) {
+    for (const depth of [2, 3]) {
+      it(`scrubs ${label} nested JSON secrets at depth ${depth} and keeps the other values`, () => {
+        const cases: [unknown, string[], boolean][] = [
+          [{ access_token: "opaqueU1", x: "keep" }, ["opaqueU1"], true],
+          [{ refreshToken: "opaqueU3", x: "keep" }, ["opaqueU3"], true],
+          [{ client_secret: 'ab"opaqueU4', x: "keep" }, ["opaqueU4"], true],
+          [{ code: "4/0AeanU2", x: "keep" }, ["0AeanU2"], false],
+        ];
+        for (const [obj, gone, keyed] of cases) {
+          const text = `q=${enc(nest(obj, depth))} end`;
+          const out = scrubSecrets(text);
+          for (const g of gone) expect(out, text).not.toContain(g);
+          expect(out).toContain("[redacted]");
+          expect(out.startsWith("q=")).toBe(true);
+          expect(out.endsWith(" end")).toBe(true);
+          if (keyed) expect(out, text).toContain("keep");
+        }
+      });
+    }
+  }
+
   it("stays linear on long backslash and escape runs inside a quoted value", () => {
     const inputs = [
+      "access_token%3A" + "%5C".repeat(33_000),
+      "code%3A" + "%5C".repeat(33_000),
+      "access_token%253A" + "%255C".repeat(20_000),
+      "access_token%3A%5C%22" + "%5C".repeat(33_000),
+      "access_token%3A%5C%5C%5C%22" + "%5C%5C%22".repeat(10_000),
       'access_token\\\\\\":' + "\\".repeat(100_000),
       "access_token:" + "\\".repeat(100_000) + '"' + "x".repeat(100_000),
       "access_token:" + "\\".repeat(50_000) + '"' + ("\\".repeat(49_999) + "y").repeat(2),

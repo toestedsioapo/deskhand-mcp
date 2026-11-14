@@ -90,22 +90,23 @@ const SECRET_PATTERNS: readonly (readonly [RegExp, string])[] = [
   // before a quote; the closer must repeat the opener's run exactly). A quoted value is redacted up to its closing quote
   // (spaces and escaped quotes inside it included). A backslash run and the character after it are one unit, so
   // `\\\"` inside a `\"`-quoted value cannot end it (for a plain `"` closer, `\\"` then over-redacts to the end of the
-  // line, which is safe). In a `%22`-quoted value an encoded backslash `%5C` (or `%255C`) pairs with the encoded
-  // character after it (`%5C` or `%22`), as `\` does in JSON, so `%5C%22` stays inside. Every branch is one fixed
-  // unit, so the loop is linear.
+  // line, which is safe). The URL-encoded forms follow the same rules: an encoded quote may carry an encoded
+  // backslash run (`%5C%22`, `%255C%2522`: URL-encoded JSON inside a JSON string), and inside an encoded value an
+  // encoded backslash run plus an optional encoded quote is one unit, so `%5C%5C%5C%22` cannot end a `%5C%22` value.
+  // Every unit is consumed greedily and the loop can stop anywhere, so nothing backtracks: the scrub is linear.
   [
-    /(?<![A-Za-z])((?:access|refresh|id)(?:_|%(?:25)?5F)?token|client(?:_|%(?:25)?5F)?secret)((?:\\*["']|%(?:25)?22)?\s*(?:[=:]|%(?:25)?3D|%(?:25)?3A)\s*)(\\*"|\\*'|%(?:25)?22)(?:(?!\3)(?:\\+[^\n]|%(?:25)?5C(?:%(?:25)?5C|%(?:25)?22)?|[^\n\\]))*(?:\3)?/gi,
+    /(?<![A-Za-z])((?:access|refresh|id)(?:_|%(?:25)?5F)?token|client(?:_|%(?:25)?5F)?secret)((?:\\*["']|(?:%(?:25)?5C)*%(?:25)?22)?\s*(?:[=:]|%(?:25)?3D|%(?:25)?3A)\s*)(\\*"|\\*'|(?:%(?:25)?5C)*%(?:25)?22)(?:(?!\3)(?:\\+[^\n]|(?:%(?:25)?5C)+(?:%(?:25)?22)?|[^\n\\]))*(?:\3)?/gi,
     "$1$2$3[redacted]$3",
   ],
   [
-    /(?<![A-Za-z])((?:access|refresh|id)(?:_|%(?:25)?5F)?token|client(?:_|%(?:25)?5F)?secret)((?:\\*["']|%(?:25)?22)?\s*(?:[=:]|%(?:25)?3D|%(?:25)?3A)\s*)(?!\\*["']|%(?:25)?22)[^\s&"',;}]+/gi,
+    /(?<![A-Za-z])((?:access|refresh|id)(?:_|%(?:25)?5F)?token|client(?:_|%(?:25)?5F)?secret)((?:\\*["']|(?:%(?:25)?5C)*%(?:25)?22)?\s*(?:[=:]|%(?:25)?3D|%(?:25)?3A)\s*)(?!\\*["']|(?:%(?:25)?5C)*%(?:25)?22)[^\s&"',;}]+/gi,
     "$1$2[redacted]",
   ],
   // An OAuth authorization code (`code=4/0Aean...`, `"code":"4/0Aean..."`), plain, URL-encoded or JSON-escaped at any
   // depth. The match starts at the literal `code`: an optional quote prefix before it would be tried at every
   // position of a long backslash run (quadratic; the timing test covers it).
   [
-    /(?<![A-Za-z])(code(?:\\*["']|%(?:25)?22)?\s*(?:[=:]|%(?:25)?3D|%(?:25)?3A)\s*(?:\\*["']|%(?:25)?22)?)4(?:\/|%(?:25)?2F)[\w%.-]+/gi,
+    /(?<![A-Za-z])(code(?:\\*["']|(?:%(?:25)?5C)*%(?:25)?22)?\s*(?:[=:]|%(?:25)?3D|%(?:25)?3A)\s*(?:\\*["']|(?:%(?:25)?5C)*%(?:25)?22)?)4(?:\/|%(?:25)?2F)[\w%.-]+/gi,
     "$1[redacted]",
   ],
   [/Bearer\s+\S+/gi, "[redacted]"],
