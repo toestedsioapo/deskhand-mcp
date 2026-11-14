@@ -86,23 +86,26 @@ const SECRET_PATTERNS: readonly (readonly [RegExp, string])[] = [
   // `"access_token":"..."`, `client_secret: ...`. The value is anything up to a separator.
   // Keys in snake or camel case (`refresh_token`, `refreshToken`, `client%5Fsecret`); separators plain or URL-encoded
   // (`=`, `:`, `%3D`, `%3A`, quotes as `%22`), also double-encoded (`%253D`, `%2522`) and with JSON-escaped quotes
-  // (`\"access_token\":\"...\"`, JSON inside a JSON string). A quoted value is redacted up to its closing quote
+  // at any nesting depth (`\"access_token\":\"...\"`, `\\\"access_token\\\":...`: a backslash run of any length
+  // before a quote; the closer must repeat the opener's run exactly). A quoted value is redacted up to its closing quote
   // (spaces and escaped quotes inside it included). A backslash run and the character after it are one unit, so
   // `\\\"` inside a `\"`-quoted value cannot end it (for a plain `"` closer, `\\"` then over-redacts to the end of the
   // line, which is safe). In a `%22`-quoted value an encoded backslash `%5C` (or `%255C`) pairs with the encoded
   // character after it (`%5C` or `%22`), as `\` does in JSON, so `%5C%22` stays inside. Every branch is one fixed
   // unit, so the loop is linear.
   [
-    /(?<![A-Za-z])((?:access|refresh|id)(?:_|%(?:25)?5F)?token|client(?:_|%(?:25)?5F)?secret)((?:\\?["']|%(?:25)?22)?\s*(?:[=:]|%(?:25)?3D|%(?:25)?3A)\s*)(\\?"|\\?'|%(?:25)?22)(?:(?!\3)(?:\\+[^\n]|%(?:25)?5C(?:%(?:25)?5C|%(?:25)?22)?|[^\n\\]))*(?:\3)?/gi,
+    /(?<![A-Za-z])((?:access|refresh|id)(?:_|%(?:25)?5F)?token|client(?:_|%(?:25)?5F)?secret)((?:\\*["']|%(?:25)?22)?\s*(?:[=:]|%(?:25)?3D|%(?:25)?3A)\s*)(\\*"|\\*'|%(?:25)?22)(?:(?!\3)(?:\\+[^\n]|%(?:25)?5C(?:%(?:25)?5C|%(?:25)?22)?|[^\n\\]))*(?:\3)?/gi,
     "$1$2$3[redacted]$3",
   ],
   [
-    /(?<![A-Za-z])((?:access|refresh|id)(?:_|%(?:25)?5F)?token|client(?:_|%(?:25)?5F)?secret)((?:\\?["']|%(?:25)?22)?\s*(?:[=:]|%(?:25)?3D|%(?:25)?3A)\s*)(?!\\?["']|%(?:25)?22)[^\s&"',;}]+/gi,
+    /(?<![A-Za-z])((?:access|refresh|id)(?:_|%(?:25)?5F)?token|client(?:_|%(?:25)?5F)?secret)((?:\\*["']|%(?:25)?22)?\s*(?:[=:]|%(?:25)?3D|%(?:25)?3A)\s*)(?!\\*["']|%(?:25)?22)[^\s&"',;}]+/gi,
     "$1$2[redacted]",
   ],
-  // An OAuth authorization code (`code=4/0Aean...`, `"code":"4/0Aean..."`), plain, URL-encoded or JSON-escaped.
+  // An OAuth authorization code (`code=4/0Aean...`, `"code":"4/0Aean..."`), plain, URL-encoded or JSON-escaped at any
+  // depth. The match starts at the literal `code`: an optional quote prefix before it would be tried at every
+  // position of a long backslash run (quadratic; the timing test covers it).
   [
-    /(?<![A-Za-z])((?:\\?["']|%(?:25)?22)?code(?:\\?["']|%(?:25)?22)?\s*(?:[=:]|%(?:25)?3D|%(?:25)?3A)\s*(?:\\?["']|%(?:25)?22)?)4(?:\/|%(?:25)?2F)[\w%.-]+/gi,
+    /(?<![A-Za-z])(code(?:\\*["']|%(?:25)?22)?\s*(?:[=:]|%(?:25)?3D|%(?:25)?3A)\s*(?:\\*["']|%(?:25)?22)?)4(?:\/|%(?:25)?2F)[\w%.-]+/gi,
     "$1[redacted]",
   ],
   [/Bearer\s+\S+/gi, "[redacted]"],

@@ -68,6 +68,9 @@ function linesNaming(text: string, word: string): string[] {
 /** An indirect call (`.call(`/`.apply(`/`.bind(`) or an alias (`= fetch`, `= deps.fetch`, `= googleRequest`). */
 const INDIRECT = /\b(?:fetch|googleRequest)\s*\.\s*(?:call|apply|bind)\b|=\s*(?:[\w.]+\.)?(?:fetch|googleRequest)\s*(?:[;,)]|$)/m;
 
+/** googleRequest's arguments: `deps, op,` then an inline object literal whose first property is a literal method. */
+const INLINE_REQUEST = /^deps, op, \{\s*method: "(?:GET|POST)",/;
+
 /** An import that renames googleRequest (`googleRequest as x`). */
 const ALIASED_IMPORT = /\bimport\b[^;]*\bgoogleRequest\s+as\b/;
 
@@ -193,6 +196,15 @@ describe("safety structure", () => {
     const calArgs = callArgs(google.find((f) => f.path.endsWith("/calendar.ts"))!.text, "googleRequest");
     expect(calArgs).toHaveLength(3);
     expect(calArgs.filter((a) => a.includes("..."))).toEqual([]);
+    // Each call passes an inline object literal that opens with a literal method, and asks for one of the two scope
+    // constants by name: no request object built elsewhere, no scope from a variable.
+    expect(calArgs.filter((a) => !INLINE_REQUEST.test(a))).toEqual([]);
+    const calText = google.find((f) => f.path.endsWith("/calendar.ts"))!.text;
+    expect([...calText.matchAll(/\brequiredScope\s*:\s*([^,}\s]+)/g)].map((m) => m[1]).sort()).toEqual([
+      "SCOPE_CALENDAR_READ",
+      "SCOPE_CALENDAR_READ",
+      "SCOPE_CALENDAR_WRITE",
+    ]);
     // googleRequest is called from calendar.ts only, from exactly three places (get, freeBusy, createEvent).
     const calls = FILES.flatMap((f) =>
       [...f.text.matchAll(/(?<!function )\bgoogleRequest\s*\(/g)].map(() => f.path),
@@ -226,6 +238,17 @@ describe("safety structure", () => {
     expect(ALIASED_IMPORT.test('import { googleRequest, type GoogleHttpDeps } from "./http.js";')).toBe(false);
     const spread = "const res = await googleRequest(deps, op, fbReq);\nawait googleRequest(deps, op, { ...fbReq, url: `${BASE}/x(${id})` });";
     expect(callArgs(spread, "googleRequest")).toEqual(["deps, op, fbReq", "deps, op, { ...fbReq, url: `${BASE}/x(${id})` }"]);
+    // Round-5 shape: a request object declared before the call and a write scope from a variable.
+    const mutant = [
+      "const w = SCOPE_CALENDAR_WRITE;",
+      "const extra = { ...fbReq, url: `${cal(calendarId)}/events`, body: { summary: \"x\" }, requiredScope: w };",
+      "for (const r of [extra, fbReq]) {",
+      "  try { res = await googleRequest(deps, op, r); } catch (e) { if (r === fbReq) throw e; }",
+      "}",
+    ].join("\n");
+    expect(callArgs(mutant, "googleRequest").filter((a) => !INLINE_REQUEST.test(a))).toEqual(["deps, op, r"]);
+    expect(INLINE_REQUEST.test('deps, op, {\n        method: "POST",\n        url: `${BASE}/freeBusy`,')).toBe(true);
+    expect(INLINE_REQUEST.test('deps, op, { url, method: "GET" }')).toBe(false);
   });
 
   it("createPlan is imported and mentioned only by the plan tools listed in PLAN_TOOLS (outside src/approval)", () => {

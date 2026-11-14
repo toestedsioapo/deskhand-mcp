@@ -52,7 +52,8 @@ function recordingProvider(): { provider: CalendarProvider; seen: { method: stri
   const seen: { method: string; url: URL }[] = [];
   const f = (async (input: string | URL | Request, init?: RequestInit) => {
     const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
-    const method = (init?.method ?? "GET").toUpperCase();
+    // A Request carries its own method; init wins when both are given, as in fetch.
+    const method = (init?.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase();
     seen.push({ method, url });
     let body: unknown = {};
     if (url.pathname.endsWith("/freeBusy")) body = { calendars: { primary: { busy: [] } } };
@@ -73,20 +74,26 @@ function recordingProvider(): { provider: CalendarProvider; seen: { method: stri
 const isInsert = (r: { method: string; url: URL }) => r.method === "POST" && /\/events\/?$/.test(r.url.pathname);
 
 describe("Google write surface (behavioural)", () => {
-  it("every read method, with a read-only token: no POST but POST /freeBusy, never POST /events, never the write scope", async () => {
-    login([SCOPE_CALENDAR_READ]);
-    const { provider, seen } = recordingProvider();
-    // With a read-only token, any request asking for the write scope would throw AuthRequiredError here.
-    await provider.listEvents("primary", RANGE, 10);
-    await provider.freeBusy("primary", RANGE);
-    await provider.getEvent("primary", "evt1");
-    await provider.lookupEvent("primary", KEY);
-    expect(seen.length).toBeGreaterThanOrEqual(4);
-    const posts = seen.filter((r) => r.method !== "GET");
-    expect(posts.map((r) => `${r.method} ${r.url.pathname}`)).toEqual(["POST /calendar/v3/freeBusy"]);
-    expect(seen.filter(isInsert)).toEqual([]);
-    expect(seen.every((r) => r.url.hostname === "www.googleapis.com")).toBe(true);
-  });
+  // Both tokens: with a read-only token a write-scope request throws before fetch, so a read that tried one and
+  // swallowed the error would send nothing; with an upgraded token (the normal state at action_apply) it would send.
+  for (const [label, scopes] of [
+    ["a read-only token", [SCOPE_CALENDAR_READ]],
+    ["a read and write token", [SCOPE_CALENDAR_READ, SCOPE_CALENDAR_WRITE]],
+  ] as const) {
+    it(`every read method, with ${label}: no POST but POST /freeBusy, never POST /events`, async () => {
+      login([...scopes]);
+      const { provider, seen } = recordingProvider();
+      await provider.listEvents("primary", RANGE, 10);
+      await provider.freeBusy("primary", RANGE);
+      await provider.getEvent("primary", "evt1");
+      await provider.lookupEvent("primary", KEY);
+      expect(seen.length).toBeGreaterThanOrEqual(4);
+      const posts = seen.filter((r) => r.method !== "GET");
+      expect(posts.map((r) => `${r.method} ${r.url.pathname}`)).toEqual(["POST /calendar/v3/freeBusy"]);
+      expect(seen.filter(isInsert)).toEqual([]);
+      expect(seen.every((r) => r.url.hostname === "www.googleapis.com")).toBe(true);
+    });
+  }
 
   it("createEvent sends exactly one POST /events and nothing else", async () => {
     login([SCOPE_CALENDAR_READ, SCOPE_CALENDAR_WRITE]);

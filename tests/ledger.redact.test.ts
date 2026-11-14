@@ -209,8 +209,36 @@ describe("scrubSecrets", () => {
     expect(out.endsWith(" end")).toBe(true);
   });
 
+  // JSON nested `d` levels deep: a quote is written with 2^d - 1 backslashes before it.
+  for (const d of [1, 2, 3]) {
+    const q = "\\".repeat(2 ** d - 1) + '"';
+    const inner = "\\".repeat(2 ** (d + 1) - 1) + '"';
+    it(`scrubs keys and values in JSON nested ${d} level(s) deep, also a value holding an escaped quote`, () => {
+      for (const [key, value] of [
+        ["access_token", `opaqueD${d}`],
+        ["refreshToken", `opaqueR${d}`],
+        ["client_secret", `ab${inner}opaqueQ${d}`],
+      ] as const) {
+        const text = `body {${q}${key}${q}:${q}${value}${q},${q}x${q}:1} end`;
+        const out = scrubSecrets(text);
+        expect(out, text).not.toMatch(/opaque/);
+        expect(out).toContain(`${key}${q}:${q}[redacted]${q}`);
+        expect(out.startsWith("body {")).toBe(true);
+        expect(out.endsWith(":1} end")).toBe(true);
+      }
+      const code = scrubSecrets(`cb {${q}code${q}:${q}4/0AeanS0abcdef${q}} end`);
+      expect(code).not.toContain("0AeanS0abcdef");
+    });
+  }
+
   it("stays linear on long backslash and escape runs inside a quoted value", () => {
     const inputs = [
+      'access_token\\\\\\":' + "\\".repeat(100_000),
+      "access_token:" + "\\".repeat(100_000) + '"' + "x".repeat(100_000),
+      "access_token:" + "\\".repeat(50_000) + '"' + ("\\".repeat(49_999) + "y").repeat(2),
+      "code" + "\\".repeat(100_000),
+      "x" + "\\".repeat(100_000) + "code",
+      "access_token" + "\\".repeat(100_000),
       'access_token:\\"' + "\\".repeat(100_000),
       'access_token:"' + "\\".repeat(100_000),
       "access_token%22%3A%22" + "%5C".repeat(30_000),
