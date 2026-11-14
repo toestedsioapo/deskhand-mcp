@@ -195,7 +195,7 @@ Behaviour: Tempo is asked for 10 suggestions with `now` set to the server clock.
 - Tempo said `book` and the requested slot is free: `decision: "book"`, `slots` is the requested slot alone, `busy_dropped: 0`.
 - Tempo said `book` but the requested slot is busy: it is dropped and counted in `busy_dropped`; the surviving alternatives (first `max_suggestions`) give `counter_offer`.
 - Tempo said `counter_offer`: busy candidates are dropped, `slots` is the first `max_suggestions` survivors, `reasons` carries Tempo's reasons (for example `OUTSIDE_AVAILABILITY` with the `participant_id`).
-- `none` when no candidate survives, with `note: "All suggested slots are busy in calendar <calendar_id>."`. Otherwise `note` is null.
+- `none` when no candidate survives. If Tempo returned no candidate at all, `note: "No slot fits the given rules."`, `busy_dropped: 0` and Tempo's `reasons` are passed through. If there were candidates and every one was dropped as busy, `note: "All suggested slots are busy in calendar <calendar_id>."`. Otherwise `note` is null.
 
 Errors: `INVALID_INPUT` for a bad `time_zone`, no usable own rules, or a Tempo error (message carries Tempo's code and message, for example a duplicate party id or an impossible date); `PROVIDER_ERROR` when `freeBusy` fails; `PROVIDER_NOT_CONFIGURED` with no provider. The output schemas are snapshot-tested in `tests/tools.calendar-find-slots.test.ts`.
 

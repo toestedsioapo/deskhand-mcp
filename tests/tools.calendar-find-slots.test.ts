@@ -126,6 +126,15 @@ describe("calendar_find_slots", () => {
     expect(out.note).toBe("All suggested slots are busy in calendar primary.");
   });
 
+  it("says no slot fits the rules, not busy, when Tempo returns no candidates", async () => {
+    const out = await find({ ...base, participants: [{ partyId: "them", timeZone: "UTC", weeklyRules: {} }] });
+    expect(out.decision).toBe("none");
+    expect(out.slots).toEqual([]);
+    expect(out.busy_dropped).toBe(0);
+    expect(out.note).toBe("No slot fits the given rules.");
+    expect(out.reasons.length).toBeGreaterThan(0);
+  });
+
   it("reads own rules from rules.json, and own_rules overrides the file", async () => {
     writeFileSync(h.ctx.config.rulesPath, JSON.stringify(rules("me-file", "09:00", "17:00")));
     const { own_rules: _unused, ...noOwn } = base;

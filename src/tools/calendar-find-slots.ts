@@ -111,6 +111,11 @@ export async function calendarFindSlotsHandler(
     slots,
     busy_dropped: requestedFree ? 0 : candidates.length - survivors.length,
     reasons: found.reasons.map((r) => ({ code: r.code, participant_id: r.participantId ?? null, message: r.message })),
-    note: decision === "none" ? `All suggested slots are busy in calendar ${input.calendar_id}.` : null,
+    note:
+      decision !== "none"
+        ? null
+        : candidates.length === 0
+          ? "No slot fits the given rules."
+          : `All suggested slots are busy in calendar ${input.calendar_id}.`,
   });
 }
