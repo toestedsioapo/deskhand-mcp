@@ -340,15 +340,22 @@ Shape: `{"v":1,"input":<redacted>,"output":<redacted|null>,"note":<string|null>}
   5. Nesting deeper than 32 levels is replaced by the string `"[omitted: too deep]"` (depth counted from the preview root). Canonical JSON used for omitted non-string values refuses input deeper than 256 levels, in which case the omission is described as `[unserialisable]`.
 - Rule 1 takes precedence over rule 2 for a matching key.
 
-**Free-text secret scrubbing (`scrubSecrets`).** Provider and OAuth error text that reaches `actions.error`, a preview note or tool output passes through `scrubSecrets` before the redactor above.
-- **Pattern pass.** Secret shapes become `[redacted]`: `Bearer ...`, JWTs, `ya29.` access tokens, `1//` refresh tokens, `GOCSPX-` client secrets, the value of a key named `access_token`, `refresh_token`, `id_token` or `client_secret` (also camelCase), and an auth code `code=4/...`. These are matched plain, URL-encoded (also `%25`-doubled), JSON-escaped at any nesting depth, and with raw or encoded whitespace around the separator. Surrounding words are kept. An empty value is not a secret and stays as it is.
-- **Fail-closed check (Ruling 16, M3b fix wave 8).** The result is copied and normalised:
-  - percent-decoded repeatedly, at most 4 times, stopping when nothing changes (a malformed `%` stays);
-  - `+` read as a space;
-  - a backslash run before a quote collapsed to the quote, `\/` collapsed to `/`, and `\n`/`\r`/`\t` read as a space.
+**Free-text secret scrubbing (`scrubSecrets`, Ruling 17, M3b fix wave 9).** Provider and OAuth error text that reaches `actions.error`, a preview note or tool output passes through `scrubSecrets` before the redactor above. The function uses two pieces:
 
-  The same patterns then run on that copy. If they would redact anything there, so the copy still holds a token shape or a secret key with a non-empty value that is not `[redacted]`, the whole text is replaced by the fixed sentence `[redacted: text contained secret-like data]`. Otherwise the pattern pass's output is kept.
-- **Order and cost.** The copy is never stored. Every step is linear in the text length. A fixed prefix that apply puts before the scrubbed text (for example `Provider write failed: `) is outside the scrub and survives.
+- **The predicate `looksSecret`.** It is deliberately simple and broad, and case-insensitive. It matches:
+  - the token shapes `ya29.` followed by 10 or more of `[\w-]`, `1//` followed by 10 or more of `[\w-]`, `gocspx-` followed by 6 or more, a three-part JWT `eyJ…`, and the auth code `4/0` followed by 10 or more;
+  - a key word (`access_token`, `refresh_token`, `id_token`, `client_secret`, their spellings without the underscore, `authorization`, `bearer`) followed by up to 12 separator characters from whitespace, quotes, `:` and `=`, and then a value character that does not begin the literal `[redacted]`;
+  - `code` followed the same way by a value that starts with `4/`.
+- **The decoder `normaliseForCheck`.** It percent-decodes up to 4 times, stopping as soon as nothing changes (a malformed `%` is left in place, and it never throws). It then reads `+` as a space and deletes every backslash, interpreting no escape at all.
+
+The steps:
+1. If the decoded input differs from the input and the decoded input looks secret, the whole text becomes the fixed sentence `[redacted: text contained secret-like data]`. So any encoded or escaped secret fails closed. The check runs on the original input, not on the output of the pattern pass.
+2. Otherwise the pattern pass runs. It replaces plain secret shapes with `[redacted]` and keeps the surrounding words: `Bearer …`, a JWT, `ya29.`, `1//` (also as a URL path segment), `GOCSPX-`, the value of a secret key (quoted up to its closing quote, or unquoted up to a separator), and `code=4/…`.
+3. If the result still looks secret, which means a plain shape the pattern pass missed, the result is the fixed sentence. Otherwise the result is returned.
+
+**Accepted over-redaction.** Text whose decoded form looks secret is replaced whole. That covers prose with a key word followed by a word: "the bearer of good news" is redacted, and "missing access_token in the response" becomes the fixed sentence. It also covers `access_token=` followed by `&`, and `zip code + 4/5`.
+
+**Cost.** Every step is a single linear pass. A fixed prefix that apply places before the scrubbed text (for example `Provider write failed: `) sits outside the scrub and survives. Deskhand's own fixed error sentences pass through unchanged (a test lists them).
 
 `actions.input_json` follows the same redaction. `plan_json` and `result_json` are stored in full because the hash and the apply need them, but they never contain mailbox bodies (plans hold only what the write needs; the plan tools are responsible for not copying bodies into `plan_json`).
 

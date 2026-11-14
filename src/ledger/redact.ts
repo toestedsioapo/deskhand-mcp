@@ -80,108 +80,72 @@ export function redactInput(value: unknown): unknown {
   return redact(value, 0);
 }
 
-/** [pattern, replacement]. A replacement keeps a `key=` or `code=` prefix so the surrounding text still reads. */
-type Replacement = string | ((match: string, ...groups: string[]) => string);
-const SECRET_PATTERNS: readonly (readonly [RegExp, Replacement])[] = [
-  // A secret named by its parameter or JSON key, in any of its usual spellings: `refresh_token=...`,
-  // `"access_token":"..."`, `client_secret: ...`. The value is anything up to a separator.
-  // Keys in snake or camel case (`refresh_token`, `refreshToken`, `client%5Fsecret`); separators plain or URL-encoded
-  // (`=`, `:`, `%3D`, `%3A`, quotes as `%22`), also double-encoded (`%253D`, `%2522`) and with JSON-escaped quotes
-  // at any nesting depth (`\"access_token\":\"...\"`, `\\\"access_token\\\":...`: a backslash run of any length
-  // before a quote; the closer must repeat the opener's run exactly). A quoted value is redacted up to its closing quote
-  // (spaces and escaped quotes inside it included). A backslash run and the character after it are one unit, so
-  // `\\\"` inside a `\"`-quoted value cannot end it (for a plain `"` closer, `\\"` then over-redacts to the end of the
-  // line, which is safe). The URL-encoded forms follow the same rules: an encoded quote may carry an encoded
-  // backslash run (`%5C%22`, `%255C%2522`: URL-encoded JSON inside a JSON string), and inside an encoded value an
-  // encoded backslash run plus an optional encoded quote is one unit, so `%5C%5C%5C%22` cannot end a `%5C%22` value.
-  // Every unit is consumed greedily and the loop can stop anywhere, so nothing backtracks: the scrub is linear.
-  // Whitespace around a separator may be raw or URL-encoded (`%20`, `+`, `%09`, `%0A`, `%0D`, also `%25`-doubled), as
-  // in pretty-printed JSON that was URL-encoded; rule 2's value never starts on encoded whitespace, so it cannot
-  // re-scan rule 1's `%3A%20%22[redacted]` and eat the rest of the line.
-  [
-    /(?<![A-Za-z])((?:access|refresh|id)(?:_|%(?:25)?5F)?token|client(?:_|%(?:25)?5F)?secret)((?:\\*["']|(?:%(?:25)?5C)*%(?:25)?22)?(?:\s|%(?:25)?(?:20|09|0A|0D|2B)|\+)*(?:[=:]|%(?:25)?3D|%(?:25)?3A)(?:\s|%(?:25)?(?:20|09|0A|0D|2B)|\+)*)(\\*"|\\*'|(?:%(?:25)?5C)*%(?:25)?22)(?:(?!\3)(?:\\+[^\n]|(?:%(?:25)?5C)+(?:%(?:25)?22)?|[^\n\\]))*(?:\3)?/gi,
-    // An empty value (`"access_token":""`) is not a secret and stays as it is.
-    (m: string, key: string, sep: string, quote: string): string => {
-      const rest = m.slice(key.length + sep.length + quote.length);
-      const value = rest.endsWith(quote) ? rest.slice(0, rest.length - quote.length) : rest;
-      return value === "" ? m : `${key}${sep}${quote}[redacted]${quote}`;
-    },
-  ],
-  [
-    /(?<![A-Za-z])((?:access|refresh|id)(?:_|%(?:25)?5F)?token|client(?:_|%(?:25)?5F)?secret)((?:\\*["']|(?:%(?:25)?5C)*%(?:25)?22)?(?:\s|%(?:25)?(?:20|09|0A|0D|2B)|\+)*(?:[=:]|%(?:25)?3D|%(?:25)?3A)(?:\s|%(?:25)?(?:20|09|0A|0D|2B)|\+)*)(?!\\*["']|(?:%(?:25)?5C)*%(?:25)?22|%(?:25)?(?:20|09|0A|0D|2B)|\+)[^\s&"',;}]+/gi,
-    "$1$2[redacted]",
-  ],
-  // An OAuth authorization code (`code=4/0Aean...`, `"code":"4/0Aean..."`), plain, URL-encoded or JSON-escaped at any
-  // depth. The match starts at the literal `code`: an optional quote prefix before it would be tried at every
-  // position of a long backslash run (quadratic; the timing test covers it).
-  [
-    /(?<![A-Za-z])(code(?:\\*["']|(?:%(?:25)?5C)*%(?:25)?22)?(?:\s|%(?:25)?(?:20|09|0A|0D|2B)|\+)*(?:[=:]|%(?:25)?3D|%(?:25)?3A)(?:\s|%(?:25)?(?:20|09|0A|0D|2B)|\+)*(?:\\*["']|(?:%(?:25)?5C)*%(?:25)?22)?)4(?:\/|%(?:25)?2F)[\w%.-]+/gi,
-    "$1[redacted]",
-  ],
+/**
+ * The pattern pass: plain secret shapes become `[redacted]`, keeping the surrounding words. It only needs to know
+ * plain text: encoded or escaped text that looks secret never reaches it (scrubSecrets step a), and anything it misses
+ * is caught by the predicate on its output (step c). A replacement keeps a `key=` or `code=` prefix.
+ */
+const SECRET_PATTERNS: readonly (readonly [RegExp, string])[] = [
+  // A value named by a secret key: `"access_token":"..."`, `client_secret = '...'` (quoted, up to the closing quote).
+  [/(?<![A-Za-z])((?:access|refresh|id)_?token|client_?secret)(["']?\s*[=:]\s*)(["'])(?:(?!\3)[^\n])*\3?/gi, "$1$2$3[redacted]$3"],
+  // The same, unquoted: `refresh_token=...`, `accessToken: ...` (up to a separator).
+  [/(?<![A-Za-z])((?:access|refresh|id)_?token|client_?secret)(["']?\s*[=:]\s*)(?!["'])[^\s&"',;}]+/gi, "$1$2[redacted]"],
+  // An OAuth authorization code: `code=4/0Aean...`, `"code":"4/0Aean..."`.
+  [/(?<![A-Za-z])(code["']?\s*[=:]\s*["']?)4\/[\w.-]+/gi, "$1[redacted]"],
   [/Bearer\s+\S+/gi, "[redacted]"],
-  [/Bearer(?:%20|\+)+[^\s&"',;}]+/gi, "[redacted]"],
   [/eyJ[\w-]+\.[\w-]+\.[\w-]+/g, "[redacted]"],
-  [/ya29(?:\.|%2E)[\w.%-]+/gi, "[redacted]"],
+  [/ya29\.[\w.-]+/g, "[redacted]"],
   [/(?<![\w/])1\/\/[\w./-]+/g, "[redacted]"],
   // A refresh token as a URL path segment (`.../1//0gAB...`); a short `1//x` stays, it is not a token.
   [/(?<=\/)1\/\/[\w-]{10,}[\w./-]*/g, "[redacted]"],
-  [/1(?:%2F){2}[\w.%-]+/gi, "[redacted]"],
-  // JSON-escaped slashes: `1\/\/0gAB...`.
-  [/1(?:\\\/){2}[\w.\\\/-]+/g, "[redacted]"],
-  [/GOCSPX(?:-|%2D)[\w%-]+/gi, "[redacted]"],
+  [/GOCSPX-[\w-]+/g, "[redacted]"],
 ];
 
-/**
- * Replaces OAuth secrets found in free text (error messages) with `[redacted]`:
- * `Bearer <anything>`, three-part JWTs, `ya29.` access tokens, `1//` refresh
- * tokens, `GOCSPX-` client secrets and any value named `access_token`,
- * `refresh_token`, `id_token`, `client_secret` (also camelCase: `accessToken`,
- * ...) or an auth code (`code=4/...`, `"code":"4/..."`), with plain or
- * URL-encoded separators (`%3D`, `%3A`, `%22`), also when the value is
- * URL-encoded (`%2F`, `%2E`, `%2D`, `Bearer%20`) or JSON-escaped (`\/`), and a
- * refresh token in a URL path. A quoted value is redacted up to its closing
- * quote. Surrounding words are kept. Fails closed (Ruling 16): if a normalised
- * copy of the result (see normaliseForCheck) still holds anything the patterns
- * would redact, the result is SECRET_LIKE instead (docs/ledger-contract.md,
- * "Free-text secret scrubbing").
- */
-export function scrubSecrets(text: string): string {
-  const out = applyPatterns(text);
-  // Fail closed (Ruling 16): if a normalised copy of the result still holds anything the patterns would redact, an
-  // encoding the patterns do not know hid a secret; return a fixed sentence instead of a partly scrubbed text.
-  const copy = normaliseForCheck(out);
-  return applyPatterns(copy) === copy ? out : SECRET_LIKE;
-}
-
-/** Returned by scrubSecrets when the text still looked like it held a secret after redaction. */
+/** Returned by scrubSecrets when the text holds, or may hide, a secret it cannot cut out cleanly. */
 export const SECRET_LIKE = "[redacted: text contained secret-like data]";
 
-function applyPatterns(text: string): string {
-  let out = text;
-  // Narrowed so each call picks the matching String.replace overload.
-  for (const [p, r] of SECRET_PATTERNS) out = typeof r === "string" ? out.replace(p, r) : out.replace(p, r);
-  return out;
+/**
+ * Ruling 17's predicate: deliberately simple and broad, case-insensitive. Token shapes (`ya29.`, `1//`, `GOCSPX-`,
+ * three-part JWT, auth code `4/0...`), or a secret key word followed by up to 12 separator characters (whitespace,
+ * quotes, `:`, `=`) and then a value character that does not begin `[redacted]`, or `code` followed that way by `4/`.
+ */
+const SECRET_SHAPE =
+  /ya29\.[\w-]{10,}|1\/\/[\w-]{10,}|gocspx-[\w-]{6,}|eyJ[\w-]+\.[\w-]+\.[\w-]+|4\/0[\w-]{10,}|(?:access_?token|refresh_?token|id_?token|client_?secret|authorization|bearer)[\s"':=]{0,12}(?!\[redacted\])[^\s"':=]|code[\s"':=]{0,12}4\//i;
+
+export function looksSecret(text: string): boolean {
+  return SECRET_SHAPE.test(text);
 }
 
 const PERCENT = /%([0-9A-Fa-f]{2})/g;
 
 /**
- * The copy the fail-closed check runs on (never returned): percent-decoded repeatedly, at most 4 times, stopping
- * when nothing changes (a malformed `%` stays as it is; each byte becomes one character, enough for matching);
- * then `+` as a space; then a backslash run before a quote collapsed to the quote, `\/` to `/`, and JSON-escaped
- * whitespace (`\n`, `\r`, `\t`) to a space. Every step is one linear pass.
+ * Percent-decoded repeatedly (at most 4 rounds, stopping when nothing changes; a malformed `%` stays; each byte
+ * becomes one character, enough for matching), then `+` as a space, then every backslash deleted (no escape is
+ * interpreted). Linear, never throws.
  */
-function normaliseForCheck(text: string): string {
+export function normaliseForCheck(text: string): string {
   let cur = text;
   for (let i = 0; i < 4; i++) {
     const next = cur.replace(PERCENT, (_m, hex: string) => String.fromCharCode(parseInt(hex, 16)));
     if (next === cur) break;
     cur = next;
   }
-  // One match per backslash run, always (the next character is optional), so a long run never backtracks.
-  return cur.replace(/\+/g, " ").replace(/\\+([\s\S]?)/g, (run: string, next: string) => {
-    if (next === '"' || next === "'" || next === "/") return next;
-    if (next === "n" || next === "r" || next === "t") return " ";
-    return run;
-  });
+  return cur.replace(/\+/g, " ").replace(/\\/g, "");
+}
+
+/**
+ * Removes OAuth secrets from free text (error messages) before it is stored or shown (Ruling 17;
+ * docs/ledger-contract.md, "Free-text secret scrubbing"):
+ * a. if the decoded input differs from the input and looks secret, the whole text is SECRET_LIKE (any encoded or
+ *    escaped secret fails closed);
+ * b. otherwise the pattern pass replaces plain secret shapes with `[redacted]`, keeping the surrounding words;
+ * c. if the result still looks secret, it is SECRET_LIKE; else the result is returned.
+ * Over-redaction is accepted: a key word in prose followed by a word ("the bearer of good news") fails closed.
+ */
+export function scrubSecrets(text: string): string {
+  const decoded = normaliseForCheck(text);
+  if (decoded !== text && looksSecret(decoded)) return SECRET_LIKE;
+  let out = text;
+  for (const [p, r] of SECRET_PATTERNS) out = out.replace(p, r);
+  return looksSecret(out) ? SECRET_LIKE : out;
 }

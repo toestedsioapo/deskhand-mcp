@@ -138,7 +138,7 @@ export function runLoopbackLogin(
           new OAuthError(
             error === "access_denied"
               ? "Google sign-in was cancelled or denied."
-              : "Google sign-in failed: no authorization code was returned.",
+              : "Google sign-in failed: Google returned no sign-in code.",
           ),
         );
         return;
