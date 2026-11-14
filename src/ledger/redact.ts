@@ -87,9 +87,13 @@ const SECRET_PATTERNS: readonly (readonly [RegExp, string])[] = [
   // Keys in snake or camel case (`refresh_token`, `refreshToken`, `client%5Fsecret`); separators plain or URL-encoded
   // (`=`, `:`, `%3D`, `%3A`, quotes as `%22`), also double-encoded (`%253D`, `%2522`) and with JSON-escaped quotes
   // (`\"access_token\":\"...\"`, JSON inside a JSON string). A quoted value is redacted up to its closing quote
-  // (spaces and escaped quotes `\"` inside it included).
+  // (spaces and escaped quotes inside it included). A backslash run and the character after it are one unit, so
+  // `\\\"` inside a `\"`-quoted value cannot end it (for a plain `"` closer, `\\"` then over-redacts to the end of the
+  // line, which is safe). In a `%22`-quoted value an encoded backslash `%5C` (or `%255C`) pairs with the encoded
+  // character after it (`%5C` or `%22`), as `\` does in JSON, so `%5C%22` stays inside. Every branch is one fixed
+  // unit, so the loop is linear.
   [
-    /(?<![A-Za-z])((?:access|refresh|id)(?:_|%(?:25)?5F)?token|client(?:_|%(?:25)?5F)?secret)((?:\\?["']|%(?:25)?22)?\s*(?:[=:]|%(?:25)?3D|%(?:25)?3A)\s*)(\\?"|\\?'|%(?:25)?22)(?:(?!\3)(?:\\.|[^\n\\]))*(?:\3)?/gi,
+    /(?<![A-Za-z])((?:access|refresh|id)(?:_|%(?:25)?5F)?token|client(?:_|%(?:25)?5F)?secret)((?:\\?["']|%(?:25)?22)?\s*(?:[=:]|%(?:25)?3D|%(?:25)?3A)\s*)(\\?"|\\?'|%(?:25)?22)(?:(?!\3)(?:\\+[^\n]|%(?:25)?5C(?:%(?:25)?5C|%(?:25)?22)?|[^\n\\]))*(?:\3)?/gi,
     "$1$2$3[redacted]$3",
   ],
   [

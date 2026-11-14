@@ -196,6 +196,9 @@ describe("scrubSecrets", () => {
     ["JSON inside a JSON string", 'body {\\"access_token\\":\\"opaqueSECRET1\\"} end', ["opaqueSECRET1"]],
     ["JSON inside a JSON string, camelCase, spaced", 'body \\"refreshToken\\": \\"opaqueSECRET2\\" end', ["opaqueSECRET2"]],
     ["a quoted value containing an escaped quote", 'body {"refresh_token":"ab\\"opaqueSECRET8"} end', ["opaqueSECRET8", "ab\\"]],
+    ["JSON inside a JSON string, value with an escaped quote", 'body {\\"access_token\\":\\"ab\\\\\\"opaqueL\\"} end', ["opaqueL"]],
+    ["URL-encoded value with an escaped quote", "q access_token%22%3A%22ab%5C%22opaqueM%22 end", ["opaqueM"]],
+    ["double URL-encoded value with an escaped quote", "q access_token%2522%253A%2522ab%255C%2522opaqueN%2522 end", ["opaqueN"]],
     ["double URL-encoded = separator", "q refresh_token%253DopaqueSECRET5 end", ["opaqueSECRET5"]],
     ["double URL-encoded JSON separator", "q access_token%2522%253A%2522opaqueSECRET6%2522 end", ["opaqueSECRET6"]],
   ])("scrubs a %s and keeps the surrounding words", (_name, text, gone) => {
@@ -204,6 +207,20 @@ describe("scrubSecrets", () => {
     expect(out).toContain("[redacted]");
     expect(out.split(" ")[0]).toBe(text.split(" ")[0]);
     expect(out.endsWith(" end")).toBe(true);
+  });
+
+  it("stays linear on long backslash and escape runs inside a quoted value", () => {
+    const inputs = [
+      'access_token:\\"' + "\\".repeat(100_000),
+      'access_token:"' + "\\".repeat(100_000),
+      "access_token%22%3A%22" + "%5C".repeat(30_000),
+      'access_token:\\"' + '\\\\\\"'.repeat(25_000),
+    ];
+    for (const s of inputs) {
+      const t = performance.now();
+      scrubSecrets(s);
+      expect(performance.now() - t, `${s.slice(0, 20)}... (${s.length})`).toBeLessThan(50);
+    }
   });
 
   it("leaves ordinary text and URLs alone", () => {

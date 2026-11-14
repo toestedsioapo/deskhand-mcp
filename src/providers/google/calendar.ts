@@ -159,15 +159,16 @@ export function createGoogleCalendarProvider(deps: GoogleHttpDeps): CalendarProv
       const op = "events.insert";
       if (!EVENT_ID.test(idempotencyKey)) throw unreadable(op, "invalid event id");
       const url = `${cal(event.calendarId)}/events?${new URLSearchParams({ sendUpdates: event.sendUpdates }).toString()}`;
-      const zone = event.timeZone === undefined ? {} : { timeZone: event.timeZone };
+      // No spread inside the request's arguments (a structural guard forbids it): build the times here.
+      const at = (dateTime: string) => (event.timeZone === undefined ? { dateTime } : { dateTime, timeZone: event.timeZone });
       const res = await googleRequest(deps, op, {
         method: "POST",
         url,
         body: {
           id: idempotencyKey,
           summary: event.title,
-          start: { dateTime: event.start, ...zone },
-          end: { dateTime: event.end, ...zone },
+          start: at(event.start),
+          end: at(event.end),
           attendees: event.attendees.map((email) => ({ email })),
         },
         requiredScope: SCOPE_CALENDAR_WRITE,

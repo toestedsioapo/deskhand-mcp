@@ -68,6 +68,25 @@ function linesNaming(text: string, word: string): string[] {
 /** An indirect call (`.call(`/`.apply(`/`.bind(`) or an alias (`= fetch`, `= deps.fetch`, `= googleRequest`). */
 const INDIRECT = /\b(?:fetch|googleRequest)\s*\.\s*(?:call|apply|bind)\b|=\s*(?:[\w.]+\.)?(?:fetch|googleRequest)\s*(?:[;,)]|$)/m;
 
+/** An import that renames googleRequest (`googleRequest as x`). */
+const ALIASED_IMPORT = /\bimport\b[^;]*\bgoogleRequest\s+as\b/;
+
+/** The argument text of each `<name>(` call (not its `function <name>(` declaration), up to the matching `)`. */
+function callArgs(text: string, name: string): string[] {
+  const out: string[] = [];
+  for (const m of text.matchAll(new RegExp(`(?<!function )\\b${name}\\s*\\(`, "g"))) {
+    const open = m.index + m[0].length;
+    let depth = 1;
+    let i = open;
+    for (; i < text.length && depth > 0; i++) {
+      if (text[i] === "(") depth++;
+      else if (text[i] === ")") depth--;
+    }
+    out.push(text.slice(open, i - 1));
+  }
+  return out;
+}
+
 /** Each `fetch(` call with its callee and first argument, e.g. `deps.fetch(req.url,`. */
 function fetchCalls(text: string): string[] {
   return [...text.matchAll(/(?:[\w.]+\.)?\bfetch\s*\(\s*[^,)]*,?/g)].map((m) => m[0].replace(/\s+/g, "")).sort();
@@ -168,6 +187,12 @@ describe("safety structure", () => {
       "src/providers/google/http.ts": 1,
     });
     expect(FILES.filter((f) => INDIRECT.test(f.text)).map((f) => f.path)).toEqual([]);
+    // The googleRequest import is never aliased, and no call spreads a request object into its arguments
+    // (tests/google.write-surface.test.ts is the behavioural guard behind these).
+    expect(FILES.filter((f) => ALIASED_IMPORT.test(f.text)).map((f) => f.path)).toEqual([]);
+    const calArgs = callArgs(google.find((f) => f.path.endsWith("/calendar.ts"))!.text, "googleRequest");
+    expect(calArgs).toHaveLength(3);
+    expect(calArgs.filter((a) => a.includes("..."))).toEqual([]);
     // googleRequest is called from calendar.ts only, from exactly three places (get, freeBusy, createEvent).
     const calls = FILES.flatMap((f) =>
       [...f.text.matchAll(/(?<!function )\bgoogleRequest\s*\(/g)].map(() => f.path),
@@ -196,6 +221,11 @@ describe("safety structure", () => {
     expect(INDIRECT.test("const res = await deps.fetch(req.url, init);")).toBe(false);
     expect(linesNaming(sneaky, "fetch")).toHaveLength(1);
     expect(linesNaming(sneaky, "googleRequest")).toHaveLength(1);
+    // Round-4 shapes: an alias import and a spread request object.
+    expect(ALIASED_IMPORT.test('import { googleRequest, googleRequest as send, type GoogleHttpDeps } from "./http.js";')).toBe(true);
+    expect(ALIASED_IMPORT.test('import { googleRequest, type GoogleHttpDeps } from "./http.js";')).toBe(false);
+    const spread = "const res = await googleRequest(deps, op, fbReq);\nawait googleRequest(deps, op, { ...fbReq, url: `${BASE}/x(${id})` });";
+    expect(callArgs(spread, "googleRequest")).toEqual(["deps, op, fbReq", "deps, op, { ...fbReq, url: `${BASE}/x(${id})` }"]);
   });
 
   it("createPlan is imported and mentioned only by the plan tools listed in PLAN_TOOLS (outside src/approval)", () => {
