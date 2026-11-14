@@ -8,6 +8,7 @@ import { getAction } from "../src/ledger/actions.js";
 import { LedgerDb } from "../src/ledger/db.js";
 import { createIdGenerator } from "../src/ledger/ids.js";
 import { queryEvents, type EventRow } from "../src/ledger/events.js";
+import { AuthRequiredError } from "../src/providers/errors.js";
 import type { FixtureProvider } from "../src/providers/fixture/provider.js";
 import { createFixtureProvider } from "../src/providers/fixture/provider.js";
 import type { CalendarProvider, EventRef } from "../src/providers/types.js";
@@ -543,5 +544,67 @@ describe("stored plan oddities", () => {
     const id = seedAction(ctx, "approved");
     db.run("UPDATE actions SET expires_at = 'not a date' WHERE id = ?", [id]);
     await expectRefused(ctx, id, "PLAN_EXPIRED", "approved");
+  });
+});
+
+describe("secrets and auth failures at the provider", () => {
+  const base = (): CalendarProvider => ({
+    freeBusy: (c, r) => provider.freeBusy(c, r),
+    getEvent: (c, i) => provider.getEvent(c, i),
+    listEvents: (c, r, l) => provider.listEvents(c, r, l),
+    createEvent: (e, k) => provider.createEvent(e, k),
+  });
+  const authFail = async () => {
+    throw new AuthRequiredError();
+  };
+
+  it("scrubs tokens from actions.error and every event preview", async () => {
+    const id = seedAction(ctx, "approved");
+    const failing = {
+      ...base(),
+      createEvent: async () => {
+        throw new Error("401 Bearer ya29.A0AbCdEf refresh 1//0gXyZaBc");
+      },
+    };
+    await expectFailed(makeCtx({ provider: failing }), id, "PROVIDER_ERROR");
+    const dump = JSON.stringify([getAction(db, id)!.error, events(id).map((e) => e.preview)]);
+    for (const s of ["ya29.", "1//0g", "Bearer "]) expect(dump).not.toContain(s);
+    expect(getAction(db, id)!.error).toContain("[redacted]");
+  });
+
+  async function expectAuthRefused(p: CalendarProvider, id: string) {
+    const r = await applyAction(makeCtx({ provider: p }), id);
+    expect(r).toMatchObject({ ok: false, errorCode: "AUTH_REQUIRED" });
+    expect(status(id)).toBe("approved");
+    expect(getAction(db, id)!.error).toBeNull();
+    const refused = events(id).filter((e) => e.kind === "apply_refused");
+    expect(refused).toHaveLength(1);
+    expect(refused[0]).toMatchObject({ outcome: "rejected", error_code: "AUTH_REQUIRED" });
+    expect(kinds(id)).not.toContain("apply_failed");
+    expect(provider.writes).toHaveLength(0);
+  }
+
+  it("getEvent AuthRequired (recovery lookup) -> AUTH_REQUIRED, approved", async () => {
+    await expectAuthRefused({ ...base(), getEvent: authFail }, seedAction(ctx, "approved"));
+  });
+
+  it("freeBusy AuthRequired (re-check) -> AUTH_REQUIRED, approved", async () => {
+    await expectAuthRefused({ ...base(), freeBusy: authFail }, seedAction(ctx, "approved"));
+  });
+
+  it("createEvent AuthRequired, follow-up lookup finds nothing -> AUTH_REQUIRED, approved, not failed", async () => {
+    await expectAuthRefused({ ...base(), createEvent: authFail }, seedAction(ctx, "approved"));
+  });
+
+  it("createEvent and the follow-up lookup both AuthRequired -> AUTH_REQUIRED, approved", async () => {
+    let calls = 0;
+    const p: CalendarProvider = {
+      ...base(),
+      getEvent: (c, i) => (++calls >= 2 ? authFail() : provider.getEvent(c, i)),
+      createEvent: authFail,
+    };
+    const id = seedAction(ctx, "approved");
+    await expectAuthRefused(p, id);
+    expect(calls).toBe(2);
   });
 });

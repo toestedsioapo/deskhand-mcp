@@ -79,3 +79,22 @@ export function redactPreview(value: unknown): unknown {
 export function redactInput(value: unknown): unknown {
   return redact(value, 0);
 }
+
+const SECRET_PATTERNS: readonly RegExp[] = [
+  /Bearer\s+\S+/gi,
+  /eyJ[\w-]+\.[\w-]+\.[\w-]+/g,
+  /ya29\.[\w.-]+/g,
+  /(?<![\w/])1\/\/[\w./-]+/g,
+  /GOCSPX-[\w-]+/g,
+];
+
+/**
+ * Replaces OAuth secrets found in free text (error messages) with `[redacted]`:
+ * `Bearer <anything>`, three-part JWTs, `ya29.` access tokens, `1//` refresh
+ * tokens and `GOCSPX-` client secrets. Surrounding words are kept.
+ */
+export function scrubSecrets(text: string): string {
+  let out = text;
+  for (const p of SECRET_PATTERNS) out = out.replace(p, "[redacted]");
+  return out;
+}

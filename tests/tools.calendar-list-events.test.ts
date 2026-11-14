@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { z } from "zod";
 import { createFixtureProvider } from "../src/providers/fixture/provider.js";
+import { AuthRequiredError, ProviderError } from "../src/providers/errors.js";
 import type { CalendarProvider } from "../src/providers/types.js";
 import {
   calendarListEventsInputSchema,
@@ -210,5 +211,34 @@ describe("calendar_list_events", () => {
     expect(JSON.stringify(r)).not.toContain("secret internal detail");
     await h.logging.whenIdle();
     expect(toolCallRows()[0]).toMatchObject({ outcome: "error", error_code: "PROVIDER_ERROR" });
+  });
+
+  const failing = (err: unknown): CalendarProvider => ({
+    freeBusy: () => Promise.reject(err),
+    getEvent: () => Promise.reject(err),
+    listEvents: () => Promise.reject(err),
+    createEvent: () => Promise.reject(err),
+  });
+  const text = (r: unknown) => (r as { content: { text: string }[] }).content[0]!.text;
+
+  it("AuthRequiredError -> AUTH_REQUIRED, tool_call rejected", async () => {
+    h.ctx.provider = failing(new AuthRequiredError());
+    const r = await call(DAY);
+    expect(r.isError).toBe(true);
+    expect(text(r)).toMatch(/^AUTH_REQUIRED: /);
+    await h.logging.whenIdle();
+    expect(toolCallRows()[0]).toMatchObject({ outcome: "rejected", error_code: "AUTH_REQUIRED" });
+  });
+
+  it("an unknown error is a fixed PROVIDER_ERROR text", async () => {
+    h.ctx.provider = failing(new TypeError("fetch failed", { cause: new Error("secret-host") }));
+    const r = await call(DAY);
+    expect(text(r)).toBe("PROVIDER_ERROR: Calendar provider call failed.");
+  });
+
+  it("a ProviderError keeps its own message", async () => {
+    h.ctx.provider = failing(new ProviderError("google calendar", "events.list", { status: 503 }));
+    const r = await call(DAY);
+    expect(text(r)).toBe("PROVIDER_ERROR: google calendar events.list failed: HTTP 503");
   });
 });

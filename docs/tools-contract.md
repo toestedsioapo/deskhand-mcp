@@ -92,7 +92,7 @@ Output (success only):
 }
 ```
 
-Failures are `isError` results with `_meta.deskhand.error_code` and `action_id` (`WRITES_DISABLED`, `UNKNOWN_ACTION`, `NOT_APPROVED`, `PLAN_MODIFIED`, `PLAN_EXPIRED`, `STALE_PLAN`, `PROVIDER_ERROR`, `INTERNAL`). Gate order, row sequences and which refusals change `status` are fixed in `docs/ledger-contract.md`; the schemas are snapshot-tested in `tests/tools.action-apply.test.ts`.
+Failures are `isError` results with `_meta.deskhand.error_code` and `action_id` (`WRITES_DISABLED`, `UNKNOWN_ACTION`, `NOT_APPROVED`, `PLAN_MODIFIED`, `PLAN_EXPIRED`, `STALE_PLAN`, `PROVIDER_ERROR`, `AUTH_REQUIRED`, `INTERNAL`). Gate order, row sequences and which refusals change `status` are fixed in `docs/ledger-contract.md`; the schemas are snapshot-tested in `tests/tools.action-apply.test.ts`.
 
 ## Untrusted text
 
@@ -111,7 +111,7 @@ Input (strict):
 | `time_max` | ISO-8601 datetime, offset allowed | required | normalised to UTC |
 | `limit` | integer 1..250 | 50 | out of range is `INVALID_INPUT` |
 
-Refused as `INVALID_INPUT`: `time_max <= time_min`; a span over 62 days. A provider failure is `PROVIDER_ERROR`.
+Refused as `INVALID_INPUT`: `time_max <= time_min`; a span over 62 days. A provider failure is `PROVIDER_ERROR` (a sign-in problem is `AUTH_REQUIRED`, tool_call outcome `rejected`; an unrecognised failure answers `Calendar provider call failed.`).
 
 Output:
 
@@ -197,7 +197,7 @@ Behaviour: Tempo is asked for 10 suggestions with `now` set to the server clock.
 - Tempo said `counter_offer`: busy candidates are dropped, `slots` is the first `max_suggestions` survivors, `reasons` carries Tempo's reasons (for example `OUTSIDE_AVAILABILITY` with the `participant_id`).
 - `none` when no candidate survives. If Tempo returned no candidate at all, `note: "No slot fits the given rules."`, `busy_dropped: 0` and Tempo's `reasons` are passed through. If there were candidates and every one was dropped as busy, `note: "All suggested slots are busy in calendar <calendar_id>."`. Otherwise `note` is null.
 
-Errors: `INVALID_INPUT` for a bad `time_zone`, no usable own rules, or a Tempo error (message carries Tempo's code and message, for example a duplicate party id or an impossible date); `PROVIDER_ERROR` when `freeBusy` fails; `PROVIDER_NOT_CONFIGURED` with no provider. The output schemas are snapshot-tested in `tests/tools.calendar-find-slots.test.ts`.
+Errors: `INVALID_INPUT` for a bad `time_zone`, no usable own rules, or a Tempo error (message carries Tempo's code and message, for example a duplicate party id or an impossible date); `PROVIDER_ERROR` when `freeBusy` fails (`AUTH_REQUIRED` when sign-in is needed); `PROVIDER_NOT_CONFIGURED` with no provider. The output schemas are snapshot-tested in `tests/tools.calendar-find-slots.test.ts`.
 
 ## `calendar_propose_event`
 
@@ -230,7 +230,7 @@ Output:
 
 The result sets `_meta.deskhand.action_id`, so the `tool_call` row carries the action id. Ledger rows on success: `plan_created`, then `tool_call`, both with the action id.
 
-Refused as `INVALID_INPUT` (no plan row): `end <= start`; `start` not after the server clock; a `time_zone` that is not an IANA name; a `calendar_id` with whitespace or control characters; a `title` that is not one line of visible text; an unknown extra field; a slot that overlaps a busy block in the calendar (`The slot is busy in calendar <id>; use calendar_find_slots.`, checked with `provider.freeBusy`; all-day events are not busy time). A provider failure while checking is `PROVIDER_ERROR`.
+Refused as `INVALID_INPUT` (no plan row): `end <= start`; `start` not after the server clock; a `time_zone` that is not an IANA name; a `calendar_id` with whitespace or control characters; a `title` that is not one line of visible text; an unknown extra field; a slot that overlaps a busy block in the calendar (`The slot is busy in calendar <id>; use calendar_find_slots.`, checked with `provider.freeBusy`; all-day events are not busy time). A provider failure while checking is `PROVIDER_ERROR` (`AUTH_REQUIRED` when sign-in is needed).
 
 The plan it stores (`plan_json`, hashed with the canonical JSON):
 

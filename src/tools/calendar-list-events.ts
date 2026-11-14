@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { AppContext } from "../app-context.js";
 import { calendarIdSchema } from "./calendar-id.js";
-import { requireProvider } from "./provider-guard.js";
+import { providerFailure, requireProvider } from "./provider-guard.js";
 import { toolError, toolOk, type ToolErrorResult, type ToolOkResult } from "./result.js";
 import { untrusted, untrustedTextSchema } from "./untrusted.js";
 
@@ -63,8 +63,8 @@ export async function calendarListEventsHandler(
       { start: min.toISOString(), end: max.toISOString() },
       input.limit,
     );
-  } catch {
-    return toolError("PROVIDER_ERROR", "The calendar provider failed to list events.");
+  } catch (e) {
+    return providerFailure(e);
   }
 
   const source = `calendar:${input.calendar_id}`;

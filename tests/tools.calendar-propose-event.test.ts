@@ -7,6 +7,7 @@ import type { CliIo } from "../src/cli/io.js";
 import { getAction } from "../src/ledger/actions.js";
 import { last4 } from "../src/ledger/ids.js";
 import { LedgerDb } from "../src/ledger/db.js";
+import { AuthRequiredError } from "../src/providers/errors.js";
 import { calendarProposeEventInputSchema, calendarProposeEventOutputSchema } from "../src/tools/calendar-propose-event.js";
 import { NOW, setupHarness } from "./helpers/harness.js";
 
@@ -288,6 +289,25 @@ describe("calendar_propose_event", () => {
     expect(errorCode(r)).toBe("PROVIDER_ERROR");
     await hh.logging.whenIdle();
     expect(actionCount(hh)).toBe(0);
+  });
+
+  it("AuthRequiredError from freeBusy -> AUTH_REQUIRED, tool_call rejected, no plan", async () => {
+    const hh = await harness();
+    (hh.ctx as { provider: unknown }).provider = { ...hh.provider, freeBusy: () => Promise.reject(new AuthRequiredError()) };
+    const r = await call(hh, base);
+    expect(errorCode(r)).toBe("AUTH_REQUIRED");
+    await hh.logging.whenIdle();
+    expect(hh.rows().filter((x) => x.kind === "tool_call").at(-1)).toMatchObject({ outcome: "rejected", error_code: "AUTH_REQUIRED" });
+    expect(actionCount(hh)).toBe(0);
+  });
+
+  it("an unknown freeBusy error is a fixed PROVIDER_ERROR text", async () => {
+    const hh = await harness();
+    const err = new TypeError("fetch failed", { cause: new Error("secret-host") });
+    (hh.ctx as { provider: unknown }).provider = { ...hh.provider, freeBusy: () => Promise.reject(err) };
+    const r = await call(hh, base);
+    expect((r.content as { text: string }[])[0]!.text).toBe("PROVIDER_ERROR: Calendar provider call failed.");
+    expect(JSON.stringify(r)).not.toContain("secret-host");
   });
 
   it("no provider configured -> PROVIDER_NOT_CONFIGURED, no plan", async () => {

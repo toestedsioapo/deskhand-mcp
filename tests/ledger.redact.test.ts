@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { canonicalJson } from "../src/ledger/canonical.js";
-import { redactPreview } from "../src/ledger/redact.js";
+import { redactPreview, scrubSecrets } from "../src/ledger/redact.js";
 
 type Loose = Record<string, any>;
 const sha8 = (s: string) => createHash("sha256").update(s, "utf8").digest("hex").slice(0, 8);
@@ -154,5 +154,25 @@ describe("redactPreview", () => {
     expect(s).not.toContain("Bearer");
     expect(s).not.toContain("abc.def.ghi");
     expect(noSlice(body, s)).toBe(true);
+  });
+});
+
+describe("scrubSecrets", () => {
+  it("replaces every secret pattern and keeps the surrounding words", () => {
+    const jwt = "eyJhbGciOi.eyJzdWIiOiIx.c2lnX25hdHVyZS0x";
+    const text = `401 Bearer ya29.A0AbC-d_e refresh 1//0gXyZ-ab_c secret GOCSPX-abc_DEF-123 jwt ${jwt} done`;
+    const out = scrubSecrets(text);
+    for (const s of ["ya29.", "1//0g", "GOCSPX", "Bearer", "eyJ", "A0AbC", "c2lnX"]) expect(out).not.toContain(s);
+    for (const w of ["401", "refresh", "secret", "jwt", "done"]) expect(out).toContain(w);
+    expect(out).toContain("[redacted]");
+  });
+
+  it("scrubs bare tokens without a Bearer prefix", () => {
+    expect(scrubSecrets("tok ya29.a0.b-c_d end")).toBe("tok [redacted] end");
+    expect(scrubSecrets("rt 1//0abc-d_e/f end")).toBe("rt [redacted] end");
+  });
+
+  it("leaves ordinary text and URLs alone", () => {
+    expect(scrubSecrets("HTTP 403 at http://host/1//x? no")).toBe("HTTP 403 at http://host/1//x? no");
   });
 });

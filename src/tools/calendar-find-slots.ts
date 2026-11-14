@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { AppContext } from "../app-context.js";
 import { calendarIdSchema } from "./calendar-id.js";
-import { requireProvider } from "./provider-guard.js";
+import { providerFailure, requireProvider } from "./provider-guard.js";
 import { toolError, toolOk, type ToolErrorResult, type ToolOkResult } from "./result.js";
 import { loadOwnRules } from "../config/own-rules.js";
 import { findSlots, partyRulesSchema, type PartyRules, type Slot } from "../tempo/index.js";
@@ -95,8 +95,8 @@ export async function calendarFindSlotsHandler(
       busy = (
         await provider.freeBusy(input.calendar_id, { start: new Date(from).toISOString(), end: new Date(to).toISOString() })
       ).busy;
-    } catch {
-      return toolError("PROVIDER_ERROR", "The calendar provider failed to read free/busy.");
+    } catch (e) {
+      return providerFailure(e);
     }
   }
 

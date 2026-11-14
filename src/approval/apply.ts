@@ -4,7 +4,8 @@ import { canonicalJson, planHash } from "../ledger/canonical.js";
 import type { ActionStatus, ErrorCode, EventOutcome } from "../ledger/contract.js";
 import { appendEvent } from "../ledger/events.js";
 import { isoNow } from "../ledger/ids.js";
-import { redactInput } from "../ledger/redact.js";
+import { redactInput, scrubSecrets } from "../ledger/redact.js";
+import { AuthRequiredError } from "../providers/errors.js";
 import type { EventRef } from "../providers/types.js";
 import { getPlanKind, type PlanKind } from "./plan-kinds.js";
 
@@ -49,11 +50,12 @@ const GATE_REFUSALS: readonly ErrorCode[] = [
   "UNKNOWN_ACTION",
   "PLAN_EXPIRED",
   "NOT_APPROVED",
+  "AUTH_REQUIRED",
 ];
 const outcomeFor = (code: ErrorCode): EventOutcome => (GATE_REFUSALS.includes(code) ? "rejected" : "error");
 
 /** Provider error text, through the ledger redactor (long strings are cut and hashed). */
-const errText = (e: unknown): string => String(redactInput(e instanceof Error ? e.message : String(e)));
+const errText = (e: unknown): string => String(redactInput(scrubSecrets(e instanceof Error ? e.message : String(e))));
 
 function preview(actionId: string, existing: boolean, note: string | null): unknown {
   const p: Record<string, unknown> = { v: 1, input: { action_id: actionId }, output: null, note };
@@ -75,6 +77,12 @@ function refuse(ctx: AppContext, actionId: string, existing: boolean, code: Erro
     });
   }, "immediate");
   return { ok: false, errorCode: code, message };
+}
+
+/** A provider call failed during apply: AUTH_REQUIRED for a sign-in problem, else PROVIDER_ERROR. Status unchanged. */
+function refuseProvider(ctx: AppContext, actionId: string, e: unknown, what: string): ApplyResult {
+  if (e instanceof AuthRequiredError) return refuse(ctx, actionId, true, "AUTH_REQUIRED", errText(e));
+  return refuse(ctx, actionId, true, "PROVIDER_ERROR", `${what}: ${errText(e)}`);
 }
 
 /** Replay of a stored result (status already `applied`). */
@@ -208,7 +216,7 @@ export async function applyAction(ctx: AppContext, actionId: string): Promise<Ap
     try {
       return { found: await kind.lookupExisting(validPlan, key, provider) };
     } catch (e) {
-      return { refused: refuse(ctx, actionId, true, "PROVIDER_ERROR", `Provider lookup ${when} failed: ${errText(e)}`) };
+      return { refused: refuseProvider(ctx, actionId, e, `Provider lookup ${when} failed`) };
     }
   };
   const recovered = (ev: EventRef): ApplyResult =>
@@ -228,7 +236,7 @@ export async function applyAction(ctx: AppContext, actionId: string): Promise<Ap
   try {
     check = await kind.recheck(validPlan, provider);
   } catch (e) {
-    return refuse(ctx, actionId, true, "PROVIDER_ERROR", `Provider re-check failed: ${errText(e)}`);
+    return refuseProvider(ctx, actionId, e, "Provider re-check failed");
   }
   if (!check.ok) {
     // The slot may be taken by OUR event (a concurrent apply of this action
@@ -249,6 +257,8 @@ export async function applyAction(ctx: AppContext, actionId: string): Promise<Ap
     const after = await lookup("after a failed write");
     if ("refused" in after) return after.refused;
     if (after.found) return recovered(after.found);
+    // An auth failure means the write was not attempted or not authorised: never terminal.
+    if (e instanceof AuthRequiredError) return refuse(ctx, actionId, true, "AUTH_REQUIRED", errText(e));
     return fail(ctx, actionId, "PROVIDER_ERROR", msg);
   }
   return finalize(ctx, actionId, result, { replayed: false, note: null, beforeCommit: ctx.hooks?.beforeCommit });

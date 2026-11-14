@@ -5,7 +5,7 @@ import { createPlan } from "../approval/plans.js";
 import { canonicalTimeZone } from "../util/local-time.js";
 import { isPlainLine } from "../util/sanitize.js";
 import { calendarIdSchema } from "./calendar-id.js";
-import { requireProvider } from "./provider-guard.js";
+import { providerFailure, requireProvider } from "./provider-guard.js";
 import { toolError, toolOk, type ToolErrorResult, type ToolOkResult } from "./result.js";
 
 export const calendarProposeEventInputSchema = z
@@ -61,8 +61,8 @@ export async function calendarProposeEventHandler(
     if ((await provider.freeBusy(input.calendar_id, range)).busy.length > 0) {
       return toolError("INVALID_INPUT", `The slot is busy in calendar ${input.calendar_id}; use calendar_find_slots.`);
     }
-  } catch {
-    return toolError("PROVIDER_ERROR", "The calendar provider failed to read free/busy.");
+  } catch (e) {
+    return providerFailure(e);
   }
 
   const plan: CalendarCreateEventPlan = {

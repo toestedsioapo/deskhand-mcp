@@ -2,6 +2,7 @@ import { writeFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { z } from "zod";
 import { createFixtureProvider } from "../src/providers/fixture/provider.js";
+import { AuthRequiredError } from "../src/providers/errors.js";
 import type { CalendarProvider } from "../src/providers/types.js";
 import { calendarFindSlotsInputSchema, calendarFindSlotsOutputSchema } from "../src/tools/calendar-find-slots.js";
 import { setupHarness } from "./helpers/harness.js";
@@ -256,6 +257,23 @@ describe("calendar_find_slots", () => {
     expect(r.isError).toBe(true);
     expect(errorCode(r)).toBe("PROVIDER_ERROR");
     expect(JSON.stringify(r)).not.toContain("secret internal detail");
+  });
+
+  it("AuthRequiredError from freeBusy -> AUTH_REQUIRED, tool_call rejected", async () => {
+    h.ctx.provider = { ...createFixtureProvider(makeWorld()), freeBusy: () => Promise.reject(new AuthRequiredError()) };
+    const r = await call(base);
+    expect(r.isError).toBe(true);
+    expect(errorCode(r)).toBe("AUTH_REQUIRED");
+    await h.logging.whenIdle();
+    expect(toolCallRows()[0]).toMatchObject({ outcome: "rejected", error_code: "AUTH_REQUIRED" });
+  });
+
+  it("an unknown freeBusy error is a fixed PROVIDER_ERROR text", async () => {
+    const err = new TypeError("fetch failed", { cause: new Error("secret-host") });
+    h.ctx.provider = { ...createFixtureProvider(makeWorld()), freeBusy: () => Promise.reject(err) };
+    const r = await call(base);
+    expect((r.content as { text: string }[])[0]!.text).toBe("PROVIDER_ERROR: Calendar provider call failed.");
+    expect(JSON.stringify(r)).not.toContain("secret-host");
   });
 
   it("writes exactly one tool_call row per call and changes nothing else", async () => {

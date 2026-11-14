@@ -31,6 +31,7 @@ const GATE_REFUSALS: ReadonlySet<ErrorCode> = new Set<ErrorCode>([
   "UNKNOWN_ACTION",
   "PLAN_EXPIRED",
   "NOT_APPROVED",
+  "AUTH_REQUIRED",
 ]);
 
 const KNOWN_CODES: ReadonlySet<string> = new Set<string>(ERROR_CODES);
