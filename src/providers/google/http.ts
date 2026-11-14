@@ -24,6 +24,7 @@ const REFRESH_MARGIN_MS = 60_000;
 const NOT_SIGNED_IN = "Not signed in to Google. Run: deskhand auth login";
 const NO_WRITE = "Google write access is not granted. Run: deskhand auth upgrade";
 const EXPIRED = "The Google sign-in has expired or was revoked. Run: deskhand auth login";
+const NO_CLIENT_FILE = "The Google OAuth client file is missing or unreadable. See docs/google-oauth-setup.md";
 
 /** Only a missing write scope is fixed by `auth upgrade`; a missing read scope means signing in again. */
 const missingScopeMessage = (scope: string): string => (scope === SCOPE_CALENDAR_WRITE ? NO_WRITE : NOT_SIGNED_IN);
@@ -78,8 +79,8 @@ async function doRefresh(deps: GoogleHttpDeps, op: string, staleAccessToken: str
   try {
     client = loadOAuthClient(deps.configDir);
   } catch {
-    // The login command reports exactly what is wrong with the client file.
-    throw new AuthRequiredError(NOT_SIGNED_IN);
+    // A fixed sentence (never the file's content); `deskhand auth login` reports exactly what is wrong with it.
+    throw new AuthRequiredError(NO_CLIENT_FILE);
   }
   let next: StoredToken;
   try {
@@ -87,14 +88,19 @@ async function doRefresh(deps: GoogleHttpDeps, op: string, staleAccessToken: str
       refreshAccessToken(client, current, { ...deps.oauth, fetch: (u, init) => deps.oauth.fetch(u, { ...init, signal }) }),
     );
   } catch (e) {
-    if (e instanceof TimedOut) throw new ProviderError(PROVIDER, op, { phrase: "timed out" });
+    // The API request was not sent: trying again is safe (retryable).
+    if (e instanceof TimedOut) throw new ProviderError(PROVIDER, op, { phrase: "timed out", retryable: true });
     if (e instanceof OAuthError && e.code === "AUTH_REQUIRED") throw new AuthRequiredError(EXPIRED);
-    throw new ProviderError(PROVIDER, op, { phrase: "token refresh failed" });
+    throw new ProviderError(PROVIDER, op, { phrase: "token refresh failed", retryable: true });
   }
+  // Re-read before writing: a `deskhand auth login` or `upgrade` in another process may have saved a new sign-in
+  // while we waited for Google. That token is newer than ours: keep the file as it is and use it.
+  const onDisk = loadToken(deps.configDir);
+  if (onDisk.refresh_token !== current.refresh_token || onDisk.obtained_at !== current.obtained_at) return onDisk;
   try {
     writeToken(deps.configDir, next);
   } catch {
-    throw new ProviderError(PROVIDER, op, { phrase: "could not save token" });
+    throw new ProviderError(PROVIDER, op, { phrase: "could not save token", retryable: true });
   }
   return next;
 }
@@ -129,14 +135,17 @@ async function send(
     return { status: res.status, json };
   } catch (e) {
     const timedOut = (e as { name?: string } | null)?.name === "TimeoutError";
-    throw new ProviderError(PROVIDER, op, { phrase: timedOut ? "timed out" : "network error" });
+    // The outcome is unknown (the request may have reached Google): retryable, never a definite rejection.
+    throw new ProviderError(PROVIDER, op, { phrase: timedOut ? "timed out" : "network error", retryable: true });
   }
 }
 
 /**
  * One authenticated Google API call. Returns 2xx, 404 and 409 to the caller;
  * every other outcome is an AuthRequiredError or a ProviderError whose text
- * never holds a token, header or response body.
+ * never holds a token, header or response body. A ProviderError is `retryable`
+ * for a timeout, a network error, HTTP 429 and 5xx (outcome unknown or
+ * transient), and definite for every other status.
  */
 export async function googleRequest(
   deps: GoogleHttpDeps,

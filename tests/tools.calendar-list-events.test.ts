@@ -202,6 +202,7 @@ describe("calendar_list_events", () => {
     const boom: CalendarProvider = {
       freeBusy: () => Promise.reject(new Error("x")),
       getEvent: () => Promise.reject(new Error("x")),
+      lookupEvent: () => Promise.reject(new Error("x")),
       listEvents: () => Promise.reject(new Error("secret internal detail")),
       createEvent: () => Promise.reject(new Error("x")),
     };
@@ -216,6 +217,7 @@ describe("calendar_list_events", () => {
   const failing = (err: unknown): CalendarProvider => ({
     freeBusy: () => Promise.reject(err),
     getEvent: () => Promise.reject(err),
+    lookupEvent: () => Promise.reject(err),
     listEvents: () => Promise.reject(err),
     createEvent: () => Promise.reject(err),
   });

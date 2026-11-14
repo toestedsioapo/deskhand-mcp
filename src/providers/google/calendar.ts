@@ -1,6 +1,6 @@
 import { SCOPE_CALENDAR_READ, SCOPE_CALENDAR_WRITE } from "../../config/scopes.js";
-import { ProviderError } from "../errors.js";
-import type { CalendarProvider, EventRef, NewCalendarEvent, TimeRange } from "../types.js";
+import { EVENT_DELETED, ProviderError } from "../errors.js";
+import type { CalendarProvider, EventLookup, EventRef, NewCalendarEvent, TimeRange } from "../types.js";
 import { googleRequest, type GoogleHttpDeps, type GoogleResponse } from "./http.js";
 
 const PROVIDER = "google calendar";
@@ -79,16 +79,26 @@ const instant = (op: string, v: unknown): string => {
 
 export function createGoogleCalendarProvider(deps: GoogleHttpDeps): CalendarProvider {
   const cal = (id: string): string => `${BASE}/calendars/${encodeURIComponent(id)}`;
-  const read = (op: string, method: "GET" | "POST", url: string, reqBody?: unknown) =>
-    googleRequest(deps, op, { method, url, body: reqBody, requiredScope: SCOPE_CALENDAR_READ });
+  /** A read: GET only, under the read scope. The two POSTs (freeBusy, insert) are spelled out where they are sent. */
+  const get = (op: string, url: string) => googleRequest(deps, op, { method: "GET", url, requiredScope: SCOPE_CALENDAR_READ });
+
+  /** One event by id: 404 is absent, `status: cancelled` is cancelled (a deleted event), anything else is mapped. */
+  const lookup = async (op: string, calendarId: string, id: string): Promise<EventLookup> => {
+    const res = await get(op, `${cal(calendarId)}/events/${encodeURIComponent(id)}`);
+    if (res.status === 404) return { state: "absent" };
+    const event = mapEvent(op, body(op, res));
+    return event === null ? { state: "cancelled" } : { state: "present", event };
+  };
 
   return {
     async freeBusy(calendarId: string, range: TimeRange) {
       const op = "freebusy";
-      const res = await read(op, "POST", `${BASE}/freeBusy`, {
-        timeMin: range.start,
-        timeMax: range.end,
-        items: [{ id: calendarId }],
+      // A query, not a write: POST is how the API takes it, under the read scope.
+      const res = await googleRequest(deps, op, {
+        method: "POST",
+        url: `${BASE}/freeBusy`,
+        body: { timeMin: range.start, timeMax: range.end, items: [{ id: calendarId }] },
+        requiredScope: SCOPE_CALENDAR_READ,
       });
       const calendars = body(op, res).calendars;
       const entry = isObj(calendars) ? calendars[calendarId] : undefined;
@@ -107,11 +117,11 @@ export function createGoogleCalendarProvider(deps: GoogleHttpDeps): CalendarProv
     },
 
     async getEvent(calendarId: string, id: string) {
-      const op = "events.get";
-      const res = await read(op, "GET", `${cal(calendarId)}/events/${encodeURIComponent(id)}`);
-      if (res.status === 404) return null;
-      return mapEvent(op, body(op, res));
+      const found = await lookup("events.get", calendarId, id);
+      return found.state === "present" ? found.event : null;
     },
+
+    lookupEvent: (calendarId: string, id: string) => lookup("events.get", calendarId, id),
 
     async listEvents(calendarId: string, range: TimeRange, limit: number) {
       const op = "events.list";
@@ -123,7 +133,7 @@ export function createGoogleCalendarProvider(deps: GoogleHttpDeps): CalendarProv
         maxResults: String(limit),
         fields: LIST_FIELDS,
       });
-      const res = await read(op, "GET", `${cal(calendarId)}/events?${params.toString()}`);
+      const res = await get(op, `${cal(calendarId)}/events?${params.toString()}`);
       const json = body(op, res);
       const items = Array.isArray(json.items) ? json.items : [];
       const events = items.flatMap((item: unknown) => {
@@ -154,15 +164,17 @@ export function createGoogleCalendarProvider(deps: GoogleHttpDeps): CalendarProv
       if (res.status !== 409) {
         const created = mapEvent(op, body(op, res));
         if (created === null) throw unreadable(op, "unreadable event");
+        // Recovery and every later lookup use our id: an event stored under another id could never be found again.
+        if (created.id !== idempotencyKey) throw unreadable(op, "Google returned a different event id");
         return created;
       }
       // 409: the id exists, so an earlier attempt created it. Never insert again, never use a new id.
+      // The event is returned as stored; the apply engine checks that it is the approved one.
       const getOp = "events.get";
-      const got = await read(getOp, "GET", `${cal(event.calendarId)}/events/${encodeURIComponent(idempotencyKey)}`);
-      if (got.status === 404) throw unreadable(getOp, "id conflict but the event is not readable");
-      const existing = mapEvent(getOp, body(getOp, got));
-      if (existing === null) throw unreadable(getOp, "an event with this action's id was created and later deleted");
-      return existing;
+      const existing = await lookup(getOp, event.calendarId, idempotencyKey);
+      if (existing.state === "absent") throw unreadable(getOp, "id conflict but the event is not readable");
+      if (existing.state === "cancelled") throw unreadable(getOp, EVENT_DELETED);
+      return existing.event;
     },
   };
 }

@@ -2,7 +2,7 @@ import type { AppContext } from "../app-context.js";
 import { assertSupportedNode } from "../config/node-check.js";
 import { PACKAGE_VERSION } from "../config/version.js";
 import { createCliContext } from "./context.js";
-import { AUTH_USAGE, authArgsValid, authCommand } from "./auth.js";
+import { authCommand } from "./auth.js";
 import { APPROVE_USAGE, approveArgsValid, approveCommand } from "./approve.js";
 import { oneLine, realCliIo, type CliIo } from "./io.js";
 import { pendingCommand } from "./pending.js";
@@ -62,13 +62,10 @@ export async function runCli(
       io.err(APPROVE_USAGE);
       return 2;
     }
-    if (command === "auth" && !authArgsValid(args)) {
-      io.err(AUTH_USAGE);
-      return 2;
-    }
     let ctx: AppContext | undefined;
     try {
       ctx = ctxFactory();
+      // authCommand checks its own arguments, so a usage error still writes its `cli:auth` row (subcommand null).
       if (command === "auth") return await authCommand(ctx, io, args);
       if (command === "approve") return await approveCommand(ctx, io, args);
       return command === "pending" ? pendingCommand(ctx, io) : rejectCommand(ctx, io, args);

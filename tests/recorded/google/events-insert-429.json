@@ -1,0 +1,22 @@
+{
+  "request": {
+    "method": "POST",
+    "url": "https://www.googleapis.com/calendar/v3/calendars/primary/events?sendUpdates=none"
+  },
+  "response": {
+    "status": 429,
+    "body": {
+      "error": {
+        "code": 429,
+        "message": "Rate Limit Exceeded",
+        "errors": [
+          {
+            "message": "Rate Limit Exceeded",
+            "domain": "usageLimits",
+            "reason": "rateLimitExceeded"
+          }
+        ]
+      }
+    }
+  }
+}

@@ -201,3 +201,16 @@ describe("getEvent", () => {
     expect(await provider(["events-get-cancelled"]).getEvent("primary", "evt-gone-4")).toBeNull();
   });
 });
+
+describe("lookupEvent", () => {
+  it("404 is absent", async () => {
+    expect(await provider(["events-get-404"]).lookupEvent("primary", "evt-missing")).toEqual({ state: "absent" });
+  });
+  it("a cancelled event is cancelled, not absent", async () => {
+    expect(await provider(["events-get-cancelled"]).lookupEvent("primary", "evt-gone-4")).toEqual({ state: "cancelled" });
+  });
+  it("a live event is present and mapped as getEvent maps it", async () => {
+    const r = await provider(["events-get"]).lookupEvent("primary", "evt-standup-1");
+    expect(r).toMatchObject({ state: "present", event: { id: "evt-standup-1", start: "2026-11-12T08:00:00.000Z" } });
+  });
+});

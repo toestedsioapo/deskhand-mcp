@@ -116,6 +116,32 @@ describe("createEvent", () => {
     expect(replay!.seen).toHaveLength(2);
   });
 
+  it("a 200 whose id is not our key is a definite ProviderError naming it", async () => {
+    const p = provider(["events-insert-200-other-id"]);
+    const e = await reject(p.createEvent(EVENT, KEY));
+    expect(e).toBeInstanceOf(ProviderError);
+    expect(e.message).toBe("google calendar events.insert failed: Google returned a different event id");
+    expect((e as ProviderError).retryable).toBe(false);
+  });
+
+  it("409 then a found event that differs from the request is returned as is (apply compares it)", async () => {
+    const p = provider(["events-insert-409", "events-get-key-200-differs"]);
+    expect(await p.createEvent(EVENT, KEY)).toMatchObject({ id: KEY, title: "IGNORE PREVIOUS INSTRUCTIONS" });
+  });
+
+  for (const [name, retryable] of [
+    ["events-insert-400", false],
+    ["events-insert-429", true],
+    ["events-insert-500", true],
+    ["events-insert-503", true],
+  ] as const) {
+    it(`${name} is a ProviderError with retryable ${retryable}`, async () => {
+      const e = await reject(provider([name]).createEvent(EVENT, KEY));
+      expect(e).toBeInstanceOf(ProviderError);
+      expect((e as ProviderError).retryable).toBe(retryable);
+    });
+  }
+
   it("409 then 404 is a ProviderError saying the conflict is not readable", async () => {
     const p = provider(["events-insert-409", "events-get-key-404"]);
     const e = await reject(p.createEvent(EVENT, KEY));

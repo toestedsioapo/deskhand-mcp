@@ -23,6 +23,7 @@ const LIST_URL =
 const LOGIN = "Not signed in to Google. Run: deskhand auth login";
 const UPGRADE = "Google write access is not granted. Run: deskhand auth upgrade";
 const EXPIRED = "The Google sign-in has expired or was revoked. Run: deskhand auth login";
+const CLIENT_FILE = "The Google OAuth client file is missing or unreadable. See docs/google-oauth-setup.md";
 
 function token(over: Partial<StoredToken> = {}): StoredToken {
   return {
@@ -148,14 +149,45 @@ describe("googleRequest refresh", () => {
     const e = await reject(getList(deps(boom)));
     expect(e).toBeInstanceOf(ProviderError);
     expect(e.message).toBe("google calendar events.list failed: token refresh failed");
+    // Nothing reached the API: a retry is safe.
+    expect((e as ProviderError).retryable).toBe(true);
   });
 
-  it("a missing or unreadable OAuth client file on refresh is the login AuthRequiredError", async () => {
+  it("a missing OAuth client file on refresh is AuthRequiredError naming the client file, not 'not signed in'", async () => {
     writeToken(dir, token(expired()));
     rmSync(join(dir, "client_secret.json"));
     const e = await reject(getList(deps(never)));
     expect(e).toBeInstanceOf(AuthRequiredError);
-    expect(e.message).toBe(LOGIN);
+    expect(e.message).toBe(CLIENT_FILE);
+  });
+
+  it("an unreadable (malformed) OAuth client file on refresh is the same sentence, without its content", async () => {
+    writeToken(dir, token(expired()));
+    writeFileSync(join(dir, "client_secret.json"), "{ GOCSPX-LEAK");
+    const e = await reject(getList(deps(never)));
+    expect(e).toBeInstanceOf(AuthRequiredError);
+    expect(e.message).toBe(CLIENT_FILE);
+  });
+
+  it("a refresh does not overwrite a token written concurrently by auth upgrade/login; the on-disk token is used", async () => {
+    writeToken(dir, token({ expires_at: new Date(NOW.getTime() + 30_000).toISOString() }));
+    const upgraded = token({
+      scopes: [SCOPE_CALENDAR_READ, SCOPE_CALENDAR_WRITE],
+      refresh_token: "1//NEW-UPGRADED-REFRESH",
+      access_token: "ya29.UPGRADED-ACCESS",
+      expires_at: new Date(NOW.getTime() + 3600_000).toISOString(),
+      obtained_at: NOW.toISOString(),
+    });
+    replay = replayFetch(["oauth-refresh", "events-list-page"]);
+    const served = replay.fetch;
+    const f = ((input: string | URL | Request, init?: RequestInit) => {
+      // Another process (deskhand auth upgrade) saves its token while our refresh is in flight.
+      if (String(input).startsWith("https://oauth2.googleapis.com/")) writeToken(dir, upgraded);
+      return served(input, init);
+    }) as typeof fetch;
+    await getList(deps(f));
+    expect(readToken(dir)).toEqual(upgraded);
+    expect(replay.seen[1]!.headers["authorization"]).toBe("Bearer ya29.UPGRADED-ACCESS");
   });
 
   it("two concurrent requests with an expired access token both succeed on one refresh", async () => {
@@ -208,6 +240,7 @@ describe("googleRequest status handling", () => {
     const e = await reject(getList(use(["events-list-429"])));
     expect(e).toBeInstanceOf(ProviderError);
     expect(e.message).toBe("google calendar events.list failed: HTTP 429 rateLimitExceeded");
+    expect((e as ProviderError).retryable).toBe(true);
   });
 
   it("500 is ProviderError and neither the body text nor any token appears in the message", async () => {
@@ -241,6 +274,7 @@ describe("googleRequest transport", () => {
     const e = await reject(getList(deps(hang, { timeoutMs: 20 })));
     expect(e).toBeInstanceOf(ProviderError);
     expect(e.message).toBe("google calendar events.list failed: timed out");
+    expect((e as ProviderError).retryable).toBe(true);
   });
 
   it("a network error is ProviderError 'network error' without the inner text", async () => {
@@ -248,6 +282,7 @@ describe("googleRequest transport", () => {
     const boom = (() => Promise.reject(new Error("ECONNRESET ya29.OLD-ACCESS-TOKEN"))) as typeof fetch;
     const e = await reject(getList(deps(boom)));
     expect(e.message).toBe("google calendar events.list failed: network error");
+    expect((e as ProviderError).retryable).toBe(true);
   });
 
   it("a host other than www.googleapis.com is refused before any request", async () => {
@@ -256,6 +291,7 @@ describe("googleRequest transport", () => {
       const e = await reject(googleRequest(deps(never), "events.list", { method: "GET", url, requiredScope: SCOPE_CALENDAR_READ }));
       expect(e).toBeInstanceOf(ProviderError);
       expect(e.message).toContain("unexpected host");
+      expect((e as ProviderError).retryable).toBe(false);
     }
   });
 

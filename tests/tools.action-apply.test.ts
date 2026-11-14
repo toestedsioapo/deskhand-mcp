@@ -45,6 +45,18 @@ describe("action_apply tool", () => {
       replayed: false,
       result: { id: idempotencyKey(id) },
     });
+    // Calendar text goes back to the client marked as untrusted data, as in the read tools.
+    const wrapped = (content: string) => ({ untrusted: true, source: "calendar:primary", content });
+    const result = (r.structuredContent as { result: Record<string, unknown> }).result;
+    expect(result).toEqual({
+      id: idempotencyKey(id),
+      etag: expect.any(String),
+      all_day: false,
+      start: "2026-11-12T10:00:00.000Z",
+      end: "2026-11-12T10:30:00.000Z",
+      title: wrapped("Sync"),
+      attendees: ["a@example.com", "b@example.com", "c@example.com"].map(wrapped),
+    });
     await hh.logging.whenIdle();
     const mine = hh.rows().filter((x) => x.action_id === id).map((x) => [x.kind, x.outcome]);
     expect(mine).toEqual([
@@ -55,14 +67,14 @@ describe("action_apply tool", () => {
     expect(hh.provider.writes).toHaveLength(1);
 
     const again = await hh.client.callTool({ name: "action_apply", arguments: { action_id: id } });
-    expect(again.structuredContent).toMatchObject({ replayed: true, status: "applied" });
+    expect(again.structuredContent).toMatchObject({ replayed: true, status: "applied", result });
     expect(hh.provider.writes).toHaveLength(1);
   });
 
   it("an AuthRequiredError during apply -> AUTH_REQUIRED, tool_call and apply_refused rejected, still approved", async () => {
     const hh = await harness();
     const id = seedAction(hh.ctx, "approved");
-    (hh.ctx as { provider: unknown }).provider = { ...hh.provider, getEvent: () => Promise.reject(new AuthRequiredError()) };
+    (hh.ctx as { provider: unknown }).provider = { ...hh.provider, lookupEvent: () => Promise.reject(new AuthRequiredError()) };
     const r = await hh.client.callTool({ name: "action_apply", arguments: { action_id: id } });
     expect(r.isError).toBe(true);
     expect(deskhandMeta(r)).toEqual({ error_code: "AUTH_REQUIRED", action_id: id });

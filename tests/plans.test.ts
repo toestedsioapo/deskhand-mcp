@@ -277,8 +277,24 @@ describe("calendar.create_event kind", () => {
     expect((await kind().recheck(plan(), provider)).ok).toBe(false);
   });
   it("execute then lookupExisting by idempotency key", async () => {
-    expect(await kind().lookupExisting(plan(), "key1", provider)).toBeNull();
+    expect(await kind().lookupExisting(plan(), "key1", provider)).toEqual({ state: "absent" });
     const ref = await kind().execute(plan(), "key1", provider);
-    expect((await kind().lookupExisting(plan(), "key1", provider))?.id).toBe(ref.id);
+    expect(await kind().lookupExisting(plan(), "key1", provider)).toEqual({ state: "present", event: ref });
+  });
+  it("matches: the approved event under our key; never another id, title, instant or attendee set", async () => {
+    const ref = await kind().execute(plan(), "key1", provider);
+    const k = kind();
+    expect(k.matches(plan(), "key1", ref)).toBe(true);
+    expect(k.matches(plan(), "key2", ref)).toBe(false);
+    expect(k.matches(plan(), "key1", { ...ref, id: "other" })).toBe(false);
+    expect(k.matches(plan(), "key1", { ...ref, title: `${ref.title} ` })).toBe(false);
+    expect(k.matches(plan(), "key1", { ...ref, start: "2026-11-12T10:00:01.000Z" })).toBe(false);
+    expect(k.matches(plan(), "key1", { ...ref, end: "not a time" })).toBe(false);
+    expect(k.matches(plan(), "key1", { ...ref, allDay: true })).toBe(false);
+    expect(k.matches(plan(), "key1", { ...ref, attendees: [...ref.attendees, "x@example.com"] })).toBe(false);
+    // Same instants in another offset, attendees in another case, order or with a repeat: still ours.
+    const shifted = { ...ref, start: "2026-11-12T11:00:00+01:00", end: "2026-11-12T11:30:00+01:00" };
+    expect(k.matches(plan(), "key1", { ...shifted, attendees: [...ref.attendees].reverse().map((a) => a.toUpperCase()) })).toBe(true);
+    expect(k.matches(plan(), "key1", { ...ref, attendees: [...ref.attendees, ref.attendees[0]!] })).toBe(true);
   });
 });

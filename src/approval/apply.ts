@@ -5,9 +5,9 @@ import type { ActionStatus, ErrorCode, EventOutcome } from "../ledger/contract.j
 import { appendEvent } from "../ledger/events.js";
 import { isoNow } from "../ledger/ids.js";
 import { redactInput, scrubSecrets } from "../ledger/redact.js";
-import { AuthRequiredError } from "../providers/errors.js";
-import type { EventRef } from "../providers/types.js";
-import { getPlanKind, type PlanKind } from "./plan-kinds.js";
+import { AuthRequiredError, EVENT_DELETED, ProviderError } from "../providers/errors.js";
+import type { EventLookup, EventRef } from "../providers/types.js";
+import { EVENT_DIFFERS, getPlanKind, type PlanKind } from "./plan-kinds.js";
 
 /**
  * The apply engine: the ONLY place a plan kind's write is executed (a
@@ -16,8 +16,9 @@ import { getPlanKind, type PlanKind } from "./plan-kinds.js";
  * recovery, expiry, re-check, write.
  */
 
+/** `calendarId` is the plan's calendar (where `result` lives), so the tool can label the event's text by its source. */
 export type ApplyResult =
-  | { ok: true; replayed: boolean; result: EventRef }
+  | { ok: true; replayed: boolean; result: EventRef; calendarId: string }
   | { ok: false; errorCode: ErrorCode; message: string };
 
 const TOOL = "action_apply";
@@ -85,9 +86,20 @@ function refuseProvider(ctx: AppContext, actionId: string, e: unknown, what: str
   return refuse(ctx, actionId, true, "PROVIDER_ERROR", `${what}: ${errText(e)}`);
 }
 
+/** The stored plan's calendar id; "unknown" for a plan that does not name one (unreachable through the plan tools). */
+function calendarIdOf(row: RawAction): string {
+  try {
+    const id = (JSON.parse(row.plan_json) as { event?: { calendarId?: unknown } } | null)?.event?.calendarId;
+    return typeof id === "string" ? id : "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
 /** Replay of a stored result (status already `applied`). */
 function replay(row: RawAction): ApplyResult {
-  return { ok: true, replayed: true, result: JSON.parse(row.result_json ?? "null") as EventRef };
+  const result = JSON.parse(row.result_json ?? "null") as EventRef;
+  return { ok: true, replayed: true, result, calendarId: calendarIdOf(row) };
 }
 
 /**
@@ -132,7 +144,7 @@ function finalize(
   ctx: AppContext,
   actionId: string,
   result: EventRef,
-  opts: { replayed: boolean; note: string | null; beforeCommit?: () => void },
+  opts: { replayed: boolean; note: string | null; calendarId: string; beforeCommit?: () => void },
 ): ApplyResult {
   const won = ctx.db.transaction(() => {
     const ts = isoNow(ctx.clock);
@@ -152,7 +164,7 @@ function finalize(
     opts.beforeCommit?.();
     return true;
   }, "immediate");
-  return won ? { ok: true, replayed: opts.replayed, result } : afterLostCas(ctx, actionId);
+  return won ? { ok: true, replayed: opts.replayed, result, calendarId: opts.calendarId } : afterLostCas(ctx, actionId);
 }
 
 export async function applyAction(ctx: AppContext, actionId: string): Promise<ApplyResult> {
@@ -208,10 +220,10 @@ export async function applyAction(ctx: AppContext, actionId: string): Promise<Ap
   }
   const validPlan = parsed.data;
   const key = idempotencyKey(actionId);
+  const calendarId = calendarIdOf(row);
 
-  // Our own event under the idempotency key, if the provider already holds it.
-  // A read error is retryable: refuse with PROVIDER_ERROR, status unchanged.
-  type Lookup = { found: EventRef | null } | { refused: ApplyResult };
+  // What the provider holds under the idempotency key. A read error is retryable: refuse, status unchanged.
+  type Lookup = { found: EventLookup } | { refused: ApplyResult };
   const lookup = async (when: string): Promise<Lookup> => {
     try {
       return { found: await kind.lookupExisting(validPlan, key, provider) };
@@ -219,13 +231,27 @@ export async function applyAction(ctx: AppContext, actionId: string): Promise<Ap
       return { refused: refuseProvider(ctx, actionId, e, `Provider lookup ${when} failed`) };
     }
   };
-  const recovered = (ev: EventRef): ApplyResult =>
-    finalize(ctx, actionId, ev, { replayed: true, note: "recovered" });
+  /**
+   * An event under our key counts as this action's write only when it is the approved one. Every place an existing
+   * event is accepted goes through here: the recovery lookup, the re-lookups and an event `execute` returned.
+   * Cancelled (deleted after an earlier write) and differing events end the plan `failed`, never re-written.
+   */
+  const accept = (ev: EventRef, opts: { replayed: boolean; note: string | null; beforeCommit?: () => void }): ApplyResult =>
+    kind.matches(validPlan, key, ev)
+      ? finalize(ctx, actionId, ev, { ...opts, calendarId })
+      : fail(ctx, actionId, "STALE_PLAN", EVENT_DIFFERS);
+  /** A lookup that found something decides the apply; `undefined` means nothing is there. */
+  const settle = (found: EventLookup): ApplyResult | undefined => {
+    if (found.state === "absent") return undefined;
+    if (found.state === "cancelled") return fail(ctx, actionId, "STALE_PLAN", EVENT_DELETED);
+    return accept(found.event, { replayed: true, note: "recovered" });
+  };
 
   // 6. Recovery: our own earlier write that crashed before the ledger commit.
   const first = await lookup("for recovery");
   if ("refused" in first) return first.refused;
-  if (first.found) return recovered(first.found);
+  const recovered = settle(first.found);
+  if (recovered) return recovered;
 
   // 7. Expiry. Fails closed: an unparseable expires_at counts as expired.
   if (!(ctx.clock().getTime() < Date.parse(row.expires_at))) {
@@ -243,23 +269,27 @@ export async function applyAction(ctx: AppContext, actionId: string): Promise<Ap
     // wrote it after our recovery lookup): look again before failing.
     const again = await lookup("after a failed re-check");
     if ("refused" in again) return again.refused;
-    if (again.found) return recovered(again.found);
-    return fail(ctx, actionId, "STALE_PLAN", `The world changed since planning: ${check.reason}.`);
+    return settle(again.found) ?? fail(ctx, actionId, "STALE_PLAN", `The world changed since planning: ${check.reason}.`);
   }
   // 9. Write with the idempotency key, then commit.
   let result: EventRef;
   try {
     result = await kind.execute(validPlan, key, provider);
   } catch (e) {
-    // Ambiguous failure (e.g. a timeout after the provider accepted the write):
-    // if our event exists, the write happened. Only a confirmed absence is terminal.
-    const msg = `Provider write failed: ${errText(e)}`;
+    // The write may have happened anyway (e.g. a timeout after the provider accepted it): look for our event.
     const after = await lookup("after a failed write");
     if ("refused" in after) return after.refused;
-    if (after.found) return recovered(after.found);
-    // An auth failure means the write was not attempted or not authorised: never terminal.
+    const settled = settle(after.found);
+    if (settled) return settled;
+    // Nothing there. An auth failure means the write was not attempted or not authorised: never terminal.
     if (e instanceof AuthRequiredError) return refuse(ctx, actionId, true, "AUTH_REQUIRED", errText(e));
+    const msg = `Provider write failed: ${errText(e)}`;
+    // Ambiguous (timeout, network, 429, 5xx): it may still land, and a retry with the same key cannot duplicate
+    // it (recovery or the provider's existing-id path finds it). Stay approved. Only a definite rejection fails.
+    if (e instanceof ProviderError && e.retryable) return refuse(ctx, actionId, true, "PROVIDER_ERROR", msg);
     return fail(ctx, actionId, "PROVIDER_ERROR", msg);
   }
-  return finalize(ctx, actionId, result, { replayed: false, note: null, beforeCommit: ctx.hooks?.beforeCommit });
+  // `execute` may return an event that already existed under our key (a concurrent apply, or the provider's
+  // existing-id path): it is accepted only when it is the approved one.
+  return accept(result, { replayed: false, note: null, beforeCommit: ctx.hooks?.beforeCommit });
 }

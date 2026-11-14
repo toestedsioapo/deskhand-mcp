@@ -88,9 +88,19 @@ Output (success only):
   action_id: string,
   status: "applied",
   replayed: boolean,   // true when the stored result was returned (repeat call) or the write was recovered
-  result: unknown      // the stored result_json (for calendar.create_event: the created event)
+  result: {            // the event as stored in result_json, shaped like a calendar_list_events item
+    id: string,
+    etag: string,
+    all_day: boolean,
+    start: string,
+    end: string,
+    title: Untrusted,          // source "calendar:<the plan's calendarId>"
+    attendees: Untrusted[]     // one per address, same source
+  }
 }
 ```
+
+The event's title and attendees are calendar text and come back wrapped as untrusted (see "Untrusted text"), on the first apply, on a recovery and on every replay. Before M3b fix wave 1 `result` was the raw stored event (`z.unknown()`); this is a snapshot-tested output change. `result_json` in the ledger is unchanged (the raw `EventRef`). An event under the action's id that is not the approved plan's event is never returned: apply fails with `STALE_PLAN` and a fixed phrase that carries no event content (ledger contract, gate 6).
 
 Failures are `isError` results with `_meta.deskhand.error_code` and `action_id` (`WRITES_DISABLED`, `UNKNOWN_ACTION`, `NOT_APPROVED`, `PLAN_MODIFIED`, `PLAN_EXPIRED`, `STALE_PLAN`, `PROVIDER_ERROR`, `AUTH_REQUIRED`, `INTERNAL`). Gate order, row sequences and which refusals change `status` are fixed in `docs/ledger-contract.md`; the schemas are snapshot-tested in `tests/tools.action-apply.test.ts`.
 

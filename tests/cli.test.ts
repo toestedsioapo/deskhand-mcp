@@ -45,12 +45,6 @@ describe("runCli", () => {
     expect(line).not.toContain("not implemented");
   });
 
-  it.each([[["auth"]], [["auth", "bogus"]], [["auth", "login", "extra"]]])("%j is a usage error", async (argv) => {
-    const { code, err } = await run(argv);
-    expect(code).toBe(2);
-    expect(err).toContain("usage: deskhand auth login | status | upgrade");
-  });
-
   it("prints the version", async () => {
     const { code, out } = await run(["--version"]);
     expect(code).toBe(0);

@@ -135,6 +135,7 @@ Then point your MCP client at the server with `DESKHAND_PROVIDER=google` (and `D
 - **Only your test users can sign in.** Anyone else gets "access blocked".
 - **Where the token lives:** `token.json` next to `client_secret.json`. It is the sensitive file. It is never written to the ledger or printed.
 - **To revoke access:** <https://myaccount.google.com/permissions>, find your app name, **Remove access**. Then delete `token.json`.
+- **Dropping write access.** `deskhand auth login` asks for and stores the read scope only, even if you ran `upgrade` before, so `auth status` says `Write access: no` after it. Google itself still remembers the earlier write grant until you remove the app at <https://myaccount.google.com/permissions>; do that if you want the grant gone at Google too.
 - **To undo everything:** delete the OAuth client under **Clients**, or delete the whole project under **IAM & Admin** > **Settings** > **Shut down**.
 - **Costs:** none. The Calendar API has no charge at this usage; no billing account is needed.
 

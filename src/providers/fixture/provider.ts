@@ -1,12 +1,18 @@
 import { appendFileSync } from "node:fs";
 import { redactPreview } from "../../ledger/redact.js";
-import type { CalendarProvider, EventRef, NewCalendarEvent, TimeRange } from "../types.js";
+import { EVENT_DELETED, ProviderError } from "../errors.js";
+import type { CalendarProvider, EventLookup, EventRef, NewCalendarEvent, TimeRange } from "../types.js";
 import type { FixtureWorld } from "./world.js";
 
 export interface FixtureProvider extends CalendarProvider {
   readonly writes: readonly EventRef[];
   addBusy(calendarId: string, range: TimeRange): void;
   touchEvent(calendarId: string, id: string): void;
+  /**
+   * Test seam: the user deletes an event. Like Google, the id stays known as cancelled: getEvent, listEvents and
+   * freeBusy no longer see it, lookupEvent reports `cancelled`, and createEvent with that id throws.
+   */
+  cancelEvent(calendarId: string, id: string): void;
 }
 
 export interface FixtureProviderOptions {
@@ -43,6 +49,8 @@ export function createFixtureProvider(
     );
   }
   const extraBusy = new Map<string, TimeRange[]>();
+  const cancelled = new Map<string, Set<string>>();
+  const isCancelled = (calendarId: string, id: string): boolean => cancelled.get(calendarId)?.has(id) === true;
   const writes: EventRef[] = [];
   const latency = world.settings.latency_ms;
   const writeLog = world.settings.write_log;
@@ -84,6 +92,13 @@ export function createFixtureProvider(
       return e ? copy(e) : null;
     },
 
+    async lookupEvent(calendarId, id): Promise<EventLookup> {
+      await delay();
+      if (isCancelled(calendarId, id)) return { state: "cancelled" };
+      const e = calendars.get(calendarId)?.get(id);
+      return e ? { state: "present", event: copy(e) } : { state: "absent" };
+    },
+
     async listEvents(calendarId, range, limit) {
       await delay();
       const hits = [...(calendars.get(calendarId)?.values() ?? [])]
@@ -99,6 +114,9 @@ export function createFixtureProvider(
     async createEvent(event: NewCalendarEvent, idempotencyKey: string) {
       await delay();
       const cal = calendar(event.calendarId);
+      if (isCancelled(event.calendarId, idempotencyKey)) {
+        throw new ProviderError("fixture calendar", "createEvent", { phrase: EVENT_DELETED });
+      }
       const existing = cal.get(idempotencyKey);
       if (existing) return copy(existing);
       const created: EventRef = {
@@ -137,6 +155,14 @@ export function createFixtureProvider(
       const e = calendars.get(calendarId)?.get(id);
       if (!e) throw new Error(`touchEvent: unknown event ${calendarId}/${id}`);
       e.etag = `${e.etag}+`;
+    },
+
+    cancelEvent(calendarId, id) {
+      const cal = calendars.get(calendarId);
+      if (!cal?.delete(id)) throw new Error(`cancelEvent: unknown event ${calendarId}/${id}`);
+      const set = cancelled.get(calendarId) ?? new Set<string>();
+      set.add(id);
+      cancelled.set(calendarId, set);
     },
   };
 }

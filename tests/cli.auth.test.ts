@@ -2,7 +2,9 @@ import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { AppContext } from "../src/app-context.js";
-import { authCommand } from "../src/cli/auth.js";
+import { AUTH_USAGE, authCommand } from "../src/cli/auth.js";
+import { createCliContext } from "../src/cli/context.js";
+import { runCli } from "../src/cli/index.js";
 import type { CliIo } from "../src/cli/io.js";
 import { loadConfig } from "../src/config/env.js";
 import { SCOPE_CALENDAR_READ, SCOPE_CALENDAR_WRITE } from "../src/config/scopes.js";
@@ -137,6 +139,24 @@ describe("auth login", () => {
     expect(s.browser.urls[0]?.searchParams.get("scope")).toBe(SCOPE_CALENDAR_READ);
   });
 
+  it("the consent URL has no include_granted_scopes, so earlier grants are not folded in", async () => {
+    replyScopes([SCOPE_CALENDAR_READ]);
+    const s = scriptedIo();
+    expect(await authCommand(ctx(), s.io, ["login"], deps())).toBe(0);
+    await s.settle();
+    expect(s.browser.urls[0]?.searchParams.has("include_granted_scopes")).toBe(false);
+  });
+
+  it("a login whose token response also lists the write scope (an earlier upgrade) stores the read scope only", async () => {
+    replyScopes([SCOPE_CALENDAR_READ, SCOPE_CALENDAR_WRITE]);
+    const s = scriptedIo();
+    expect(await authCommand(ctx({ DESKHAND_ALLOW_WRITES: "1" }), s.io, ["login"], deps())).toBe(0);
+    await s.settle();
+    expect(readToken(home.home)?.scopes).toEqual([SCOPE_CALENDAR_READ]);
+    expect(s.outText()).not.toContain(SCOPE_CALENDAR_WRITE);
+    expect(rows()[0]?.preview).toMatchObject({ output: { scopes: [SCOPE_CALENDAR_READ] } });
+  });
+
   it("denied: exit 1, one stderr line, AUTH_REQUIRED row, no token.json", async () => {
     const s = scriptedIo({ mode: "deny", urls: [] });
     const code = await authCommand(ctx(), s.io, ["login"], deps());
@@ -206,6 +226,7 @@ describe("auth upgrade", () => {
     expect(await authCommand(ctx({ DESKHAND_ALLOW_WRITES: "1" }), s.io, ["upgrade"], deps())).toBe(0);
     await s.settle();
     expect(s.browser.urls[0]?.searchParams.get("scope")).toBe(`${SCOPE_CALENDAR_READ} ${SCOPE_CALENDAR_WRITE}`);
+    expect(s.browser.urls[0]?.searchParams.get("include_granted_scopes")).toBe("true");
     expect(readToken(home.home)?.scopes).toEqual([SCOPE_CALENDAR_READ, SCOPE_CALENDAR_WRITE]);
     expect(rows()[0]).toMatchObject({ outcome: "ok" });
   });
@@ -266,6 +287,24 @@ describe("usage and mapping", () => {
     expect(s.errText()).toContain("usage: deskhand auth login | status | upgrade");
     expect(rows()[0]).toMatchObject({ outcome: "error", error_code: "INVALID_INPUT" });
   });
+
+  it.each([[["auth"]], [["auth", "bogus"]], [["auth", "login", "extra"]]])(
+    "%j through runCli with a real context: exit 2, usage on stderr, one cli:auth row with subcommand null",
+    async (argv) => {
+      const s = scriptedIo();
+      expect(await runCli(argv, s.io, () => createCliContext(home.env))).toBe(2);
+      expect(s.errText()).toBe(AUTH_USAGE);
+      const r = rows();
+      expect(r).toHaveLength(1);
+      expect(r[0]).toMatchObject({ kind: "cli_command", tool: "cli:auth", outcome: "error", error_code: "INVALID_INPUT" });
+      expect(r[0]?.preview).toEqual({
+        v: 1,
+        input: { subcommand: null },
+        output: null,
+        note: "usage: deskhand auth login | status | upgrade",
+      });
+    },
+  );
 
   it("OAuthError carries an explicit code", () => {
     expect(new OAuthError("x").code).toBe("AUTH_REQUIRED");

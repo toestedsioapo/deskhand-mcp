@@ -15,9 +15,24 @@ export class AuthRequiredError extends Error {
 
 const REASON = /^[A-Za-z]{1,40}$/;
 
+/** Fixed phrase: an event under the action's id existed and was deleted (Google keeps it as `status: cancelled`). */
+export const EVENT_DELETED = "an event with this action's id was created and later deleted";
+
 /** A provider call failed. The message never holds a response body or headers. Maps to `PROVIDER_ERROR`. */
 export class ProviderError extends Error {
-  constructor(provider: string, op: string, detail: { status?: number; reason?: string; phrase?: string }) {
+  /**
+   * True when the provider may not have seen or finished the request, so its outcome is unknown and trying again
+   * is safe and may succeed: a timeout, a network error, HTTP 429 or any 5xx. False for a definite answer (any other
+   * status, or a fixed phrase not marked retryable). The apply engine keeps a plan `approved` after a retryable
+   * write failure and marks it `failed` only after a definite one.
+   */
+  readonly retryable: boolean;
+
+  constructor(
+    provider: string,
+    op: string,
+    detail: { status?: number; reason?: string; phrase?: string; retryable?: boolean },
+  ) {
     let text: string;
     if (detail.status !== undefined) {
       const reason = detail.reason !== undefined && REASON.test(detail.reason) ? ` ${detail.reason}` : "";
@@ -27,5 +42,7 @@ export class ProviderError extends Error {
     }
     super(`${provider} ${op} failed: ${text}`);
     this.name = "ProviderError";
+    const status = detail.status;
+    this.retryable = detail.retryable ?? (status !== undefined && (status === 429 || status >= 500));
   }
 }

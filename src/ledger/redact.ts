@@ -80,21 +80,36 @@ export function redactInput(value: unknown): unknown {
   return redact(value, 0);
 }
 
-const SECRET_PATTERNS: readonly RegExp[] = [
-  /Bearer\s+\S+/gi,
-  /eyJ[\w-]+\.[\w-]+\.[\w-]+/g,
-  /ya29\.[\w.-]+/g,
-  /(?<![\w/])1\/\/[\w./-]+/g,
-  /GOCSPX-[\w-]+/g,
+/** [pattern, replacement]. A replacement keeps a `key=` or `code=` prefix so the surrounding text still reads. */
+const SECRET_PATTERNS: readonly (readonly [RegExp, string])[] = [
+  // A secret named by its parameter or JSON key, in any of its usual spellings: `refresh_token=...`,
+  // `"access_token":"..."`, `client_secret: ...`. The value is anything up to a separator.
+  [/\b((?:access|refresh|id)_token|client_secret)(["']?\s*[=:]\s*["']?)[^\s&"',;}]+/gi, "$1$2[redacted]"],
+  // An OAuth authorization code in a callback query (`code=4/0Aean...`), plain or URL-encoded.
+  [/\b(code=)4(?:\/|%2F)[\w%-]+/gi, "$1[redacted]"],
+  [/Bearer\s+\S+/gi, "[redacted]"],
+  [/Bearer(?:%20|\+)+[^\s&"',;}]+/gi, "[redacted]"],
+  [/eyJ[\w-]+\.[\w-]+\.[\w-]+/g, "[redacted]"],
+  [/ya29(?:\.|%2E)[\w.%-]+/gi, "[redacted]"],
+  [/(?<![\w/])1\/\/[\w./-]+/g, "[redacted]"],
+  // A refresh token as a URL path segment (`.../1//0gAB...`); a short `1//x` stays, it is not a token.
+  [/(?<=\/)1\/\/[\w-]{10,}[\w./-]*/g, "[redacted]"],
+  [/1(?:%2F){2}[\w.%-]+/gi, "[redacted]"],
+  // JSON-escaped slashes: `1\/\/0gAB...`.
+  [/1(?:\\\/){2}[\w.\\\/-]+/g, "[redacted]"],
+  [/GOCSPX(?:-|%2D)[\w%-]+/gi, "[redacted]"],
 ];
 
 /**
  * Replaces OAuth secrets found in free text (error messages) with `[redacted]`:
  * `Bearer <anything>`, three-part JWTs, `ya29.` access tokens, `1//` refresh
- * tokens and `GOCSPX-` client secrets. Surrounding words are kept.
+ * tokens, `GOCSPX-` client secrets and any value named `access_token`,
+ * `refresh_token`, `id_token`, `client_secret` or `code=4/...`, also when
+ * URL-encoded (`%2F`, `%2E`, `%2D`, `Bearer%20`) or JSON-escaped (`\/`), and a
+ * refresh token in a URL path. Surrounding words are kept.
  */
 export function scrubSecrets(text: string): string {
   let out = text;
-  for (const p of SECRET_PATTERNS) out = out.replace(p, "[redacted]");
+  for (const [p, r] of SECRET_PATTERNS) out = out.replace(p, r);
   return out;
 }

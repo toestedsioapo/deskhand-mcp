@@ -33,10 +33,10 @@ afterEach(async () => {
 });
 
 /** Starts a login and resolves with the consent URL and the settling promise. */
-function start(over: Partial<OAuthDeps> = {}) {
+function start(over: Partial<OAuthDeps> = {}, opts?: { includeGrantedScopes?: boolean }, scopes: string[] = SCOPES) {
   let urlResolve!: (u: URL) => void;
   const urlP = new Promise<URL>((r) => (urlResolve = r));
-  const result = runLoopbackLogin(client, SCOPES, deps(over), (u) => urlResolve(new URL(u)));
+  const result = runLoopbackLogin(client, scopes, deps(over), (u) => urlResolve(new URL(u)), opts);
   // Avoid unhandled rejection warnings while the test is still driving the browser.
   result.catch(() => undefined);
   return { urlP, result };
@@ -95,13 +95,35 @@ describe("runLoopbackLogin", () => {
     expect(p.get("scope")).toBe(SCOPES.join(" "));
     expect(p.get("access_type")).toBe("offline");
     expect(p.get("prompt")).toBe("consent");
-    expect(p.get("include_granted_scopes")).toBe("true");
+    // Login never asks Google to fold earlier grants in (minimum scope): only upgrade does.
+    expect(p.has("include_granted_scopes")).toBe(false);
     expect(p.get("state")).toMatch(/^[A-Za-z0-9_-]{43}$/);
     expect(p.get("code_challenge")).toMatch(/^[A-Za-z0-9_-]{43}$/);
     expect(p.get("code_challenge_method")).toBe("S256");
     expect(url.toString()).not.toContain("client_secret");
     expect(url.toString()).not.toContain(client.clientSecret);
     await expect(result).rejects.toBeInstanceOf(OAuthError);
+  });
+
+  it("sends include_granted_scopes=true only when asked (auth upgrade)", async () => {
+    const { urlP, result } = start({ timeoutMs: 100 }, { includeGrantedScopes: true });
+    expect((await urlP).searchParams.get("include_granted_scopes")).toBe("true");
+    await expect(result).rejects.toBeInstanceOf(OAuthError);
+  });
+
+  it("stores only the requested scopes that were granted, never an extra scope Google reports", async () => {
+    fake.respond((_req, res) =>
+      jsonReply(res, 200, {
+        access_token: "ya29.access",
+        refresh_token: "1//refresh",
+        expires_in: 3600,
+        scope: `${SCOPES[0]} https://www.googleapis.com/auth/calendar.events openid`,
+      }),
+    );
+    const { urlP, result } = start();
+    const url = await urlP;
+    await fetch(`${callbackBase(url)}/oauth2callback?code=CODE1&state=${url.searchParams.get("state")}`);
+    expect((await result).scopes).toEqual(SCOPES);
   });
 
   it("exchanges the code with a verifier matching the challenge", async () => {

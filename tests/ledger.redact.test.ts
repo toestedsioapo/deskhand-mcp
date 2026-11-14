@@ -172,6 +172,26 @@ describe("scrubSecrets", () => {
     expect(scrubSecrets("rt 1//0abc-d_e/f end")).toBe("rt [redacted] end");
   });
 
+  it.each([
+    ["URL-encoded refresh token", "grant refresh_token=1%2F%2F0gABCDEFxyz&x=1 end", ["1%2F%2F0g", "ABCDEFxyz"]],
+    ["URL-encoded, lowercase escapes", "rt 1%2f%2f0gABCDEFxyz end", ["0gABCDEFxyz"]],
+    ["JSON-escaped refresh token", 'body {"refresh_token":"1\\/\\/0gABCDEFxyz"} end', ["0gABCDEFxyz"]],
+    ["refresh token in a URL path", "GET https://host/revoke/1//0gABCDEFxyz?x=1 end", ["1//0g", "ABCDEFxyz"]],
+    ["URL-encoded Bearer", "header Bearer%20opaqueTOKEN123 end", ["opaqueTOKEN123"]],
+    ["plus-encoded Bearer", "header Bearer+opaqueTOKEN123 end", ["opaqueTOKEN123"]],
+    ["client secret in a query string", "POST ?client_id=x&client_secret=GOCSPX-abc_DEF-123&y=2 end", ["GOCSPX", "abc_DEF"]],
+    ["URL-encoded client secret prefix", "q client_secret=GOCSPX%2Dabc_DEF end", ["GOCSPX", "abc_DEF"]],
+    ["URL-encoded access token", "q access_token=ya29%2Ea0AfH6xyz end", ["ya29", "a0AfH6"]],
+    ["opaque access token in a query", "GET /x?access_token=plainopaque123 end", ["plainopaque123"]],
+    ["auth code in a query", "cb ?state=s&code=4/0AeanS0abcdef end", ["0AeanS0abcdef"]],
+  ])("scrubs a %s and keeps the surrounding words", (_name, text, gone) => {
+    const out = scrubSecrets(text);
+    for (const g of gone) expect(out).not.toContain(g);
+    expect(out).toContain("[redacted]");
+    expect(out.split(" ")[0]).toBe(text.split(" ")[0]);
+    expect(out.endsWith(" end")).toBe(true);
+  });
+
   it("leaves ordinary text and URLs alone", () => {
     expect(scrubSecrets("HTTP 403 at http://host/1//x? no")).toBe("HTTP 403 at http://host/1//x? no");
   });

@@ -18,6 +18,9 @@ export interface EventRef {
   allDay: boolean;
 }
 
+/** What a provider holds under one event id. */
+export type EventLookup = { state: "absent" } | { state: "cancelled" } | { state: "present"; event: EventRef };
+
 export interface NewCalendarEvent {
   title: string;
   start: string;
@@ -35,7 +38,13 @@ export interface NewCalendarEvent {
  */
 export interface CalendarProvider {
   freeBusy(calendarId: string, range: TimeRange): Promise<{ busy: TimeRange[] }>;
+  /** null when the event does not exist or was deleted (cancelled). */
   getEvent(calendarId: string, id: string): Promise<EventRef | null>;
+  /**
+   * Like getEvent, but tells "never existed" apart from "existed and was deleted". Used only by the apply engine to
+   * look up the event under an action's idempotency key: a deleted one must not be created again.
+   */
+  lookupEvent(calendarId: string, id: string): Promise<EventLookup>;
   /**
    * Events overlapping `range`, sorted by start then id, at most `limit`;
    * `truncated` is true when more exist.
@@ -49,7 +58,9 @@ export interface CalendarProvider {
    * Creates the event under an id derived from `idempotencyKey`. Calling it
    * again with a key that already exists MUST return the existing event: it
    * must not throw and must not create a duplicate (apply recovery and
-   * concurrent applies rely on this).
+   * concurrent applies rely on this). The existing event is returned as stored, even if it differs from `event`
+   * (the apply engine compares it with the plan). A key whose event was deleted is never re-created: that throws a
+   * ProviderError with the EVENT_DELETED phrase.
    */
   createEvent(event: NewCalendarEvent, idempotencyKey: string): Promise<EventRef>;
 }

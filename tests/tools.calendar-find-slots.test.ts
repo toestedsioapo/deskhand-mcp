@@ -249,6 +249,7 @@ describe("calendar_find_slots", () => {
     const boom: CalendarProvider = {
       freeBusy: () => Promise.reject(new Error("secret internal detail")),
       getEvent: () => Promise.reject(new Error("x")),
+      lookupEvent: () => Promise.reject(new Error("x")),
       listEvents: () => Promise.reject(new Error("x")),
       createEvent: () => Promise.reject(new Error("x")),
     };

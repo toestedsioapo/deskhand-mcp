@@ -13,6 +13,14 @@ describe("provider errors", () => {
     const e = new ProviderError("google calendar", "events.insert", { status: 403, reason: "rate<script>" });
     expect(e.message).toBe("google calendar events.insert failed: HTTP 403");
   });
+  it("ProviderError is retryable for HTTP 429 and 5xx, not for other statuses", () => {
+    for (const s of [429, 500, 502, 503, 504]) expect(new ProviderError("g", "op", { status: s }).retryable, String(s)).toBe(true);
+    for (const s of [400, 403, 404, 409, 410, 412]) expect(new ProviderError("g", "op", { status: s }).retryable, String(s)).toBe(false);
+  });
+  it("a phrase ProviderError is definite unless marked retryable", () => {
+    expect(new ProviderError("g", "op", { phrase: "invalid event id" }).retryable).toBe(false);
+    expect(new ProviderError("g", "op", { phrase: "timed out", retryable: true }).retryable).toBe(true);
+  });
   it("ProviderError keeps a plain reason or a fixed phrase", () => {
     expect(new ProviderError("g", "op", { status: 403, reason: "rateLimit" }).message).toBe("g op failed: HTTP 403 rateLimit");
     expect(new ProviderError("g", "op", { phrase: "network error" }).message).toBe("g op failed: network error");

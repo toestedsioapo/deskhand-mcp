@@ -80,11 +80,24 @@ function plainPage(res: ServerResponse, status: number, text: string): void {
   res.end(text);
 }
 
+export interface LoginOptions {
+  /**
+   * Sends `include_granted_scopes=true`, so Google folds earlier grants into the new token. Only `deskhand auth
+   * upgrade` sets it; `login` never does (minimum scope: a plain login must not bring back an earlier write grant).
+   */
+  includeGrantedScopes?: boolean;
+}
+
+/**
+ * Loopback sign-in for `scopes`. The stored token lists only the requested scopes that Google granted (every
+ * requested one must be), never an extra scope Google reports from an earlier grant.
+ */
 export function runLoopbackLogin(
   client: OAuthClient,
   scopes: string[],
   deps: OAuthDeps,
   onUrl: (url: string) => void,
+  opts: LoginOptions = {},
 ): Promise<StoredToken> {
   return new Promise<StoredToken>((resolve, reject) => {
     const state = randomBytes(32).toString("base64url");
@@ -179,7 +192,7 @@ export function runLoopbackLogin(
       return {
         version: 1,
         client_id: client.clientId,
-        scopes: granted,
+        scopes: scopes.filter((s) => granted.includes(s)),
         refresh_token: body.refresh_token,
         access_token: body.access_token,
         expires_at: expiresAt(body, now),
@@ -202,7 +215,7 @@ export function runLoopbackLogin(
       auth.searchParams.set("scope", scopes.join(" "));
       auth.searchParams.set("access_type", "offline");
       auth.searchParams.set("prompt", "consent");
-      auth.searchParams.set("include_granted_scopes", "true");
+      if (opts.includeGrantedScopes === true) auth.searchParams.set("include_granted_scopes", "true");
       auth.searchParams.set("state", state);
       auth.searchParams.set("code_challenge", challenge);
       auth.searchParams.set("code_challenge_method", "S256");

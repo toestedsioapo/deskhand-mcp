@@ -28,7 +28,81 @@ exports[`action_apply schemas > output schema is stable 1`] = `
     "replayed": {
       "type": "boolean",
     },
-    "result": {},
+    "result": {
+      "additionalProperties": false,
+      "properties": {
+        "all_day": {
+          "type": "boolean",
+        },
+        "attendees": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "type": "string",
+              },
+              "source": {
+                "type": "string",
+              },
+              "untrusted": {
+                "const": true,
+                "type": "boolean",
+              },
+            },
+            "required": [
+              "untrusted",
+              "source",
+              "content",
+            ],
+            "type": "object",
+          },
+          "type": "array",
+        },
+        "end": {
+          "type": "string",
+        },
+        "etag": {
+          "type": "string",
+        },
+        "id": {
+          "type": "string",
+        },
+        "start": {
+          "type": "string",
+        },
+        "title": {
+          "additionalProperties": false,
+          "properties": {
+            "content": {
+              "type": "string",
+            },
+            "source": {
+              "type": "string",
+            },
+            "untrusted": {
+              "const": true,
+              "type": "boolean",
+            },
+          },
+          "required": [
+            "untrusted",
+            "source",
+            "content",
+          ],
+          "type": "object",
+        },
+      },
+      "required": [
+        "id",
+        "etag",
+        "all_day",
+        "start",
+        "end",
+        "title",
+        "attendees",
+      ],
+      "type": "object",
+    },
     "status": {
       "const": "applied",
       "type": "string",

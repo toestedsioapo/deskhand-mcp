@@ -45,6 +45,15 @@ const PARAM_STATUS = /\bstatus\s*=\s*\?/i;
 /** An import specifier that reaches into the CLI layer (`cli/...`). */
 const CLI_IMPORT = /(^|\/)cli\//;
 
+/** The [start, end) span of `async <name>(` ... its closing `\n    },\n` in a provider object literal; throws if absent. */
+function methodBody(text: string, name: string): { start: number; end: number } {
+  const start = text.indexOf(`async ${name}(`);
+  if (start <= 0) throw new Error(`no method ${name}`);
+  const end = text.indexOf("\n    },\n", start);
+  if (end <= start) throw new Error(`no end for method ${name}`);
+  return { start, end };
+}
+
 describe("safety structure", () => {
   it("scans a non-trivial source tree", () => {
     expect(FILES.map((f) => f.path)).toContain("src/approval/plan-kinds.ts");
@@ -66,13 +75,37 @@ describe("safety structure", () => {
       "src/providers/google/calendar.ts",
     ]);
     const cal = google.find((f) => f.path === "src/providers/google/calendar.ts")!.text;
-    const start = cal.indexOf("async createEvent(");
-    expect(start).toBeGreaterThan(0);
-    const end = cal.indexOf("\n    },\n", start);
+    const { start, end } = methodBody(cal, "createEvent");
     const outside = cal.slice(0, start) + cal.slice(end);
-    expect(outside).not.toMatch(/method:\s*["']POST["']/);
     expect(outside).not.toMatch(/requiredScope:\s*SCOPE_CALENDAR_WRITE/);
     expect(cal.slice(start, end)).toMatch(/method:\s*["']POST["']/);
+  });
+
+  it("calendar.ts sends a POST from exactly two call sites: createEvent's insert and freeBusy's POST /freeBusy", () => {
+    const cal = FILES.find((f) => f.path === "src/providers/google/calendar.ts")!.text;
+    // Every "POST" string literal in the file, wherever it is (a helper parameter, a type, a positional argument).
+    const posts = [...cal.matchAll(/["'`]POST["'`]/g)].map((m) => m.index);
+    expect(posts).toHaveLength(2);
+    const insert = methodBody(cal, "createEvent");
+    const freeBusy = methodBody(cal, "freeBusy");
+    const inInsert = posts.filter((i) => i > insert.start && i < insert.end);
+    const inFreeBusy = posts.filter((i) => i > freeBusy.start && i < freeBusy.end);
+    expect(inInsert).toHaveLength(1);
+    expect(inFreeBusy).toHaveLength(1);
+    expect(cal.slice(freeBusy.start, freeBusy.end)).toMatch(/method:\s*"POST",\s*url:\s*`\$\{BASE\}\/freeBusy`/);
+    // Every request goes through googleRequest with a literal method: no variable method, no other transport.
+    expect([...cal.matchAll(/method:\s*([^,\s}]+)/g)].map((m) => m[1]).sort()).toEqual(['"GET"', '"POST"', '"POST"']);
+    expect(cal).not.toMatch(/\bfetch\s*\(/);
+  });
+
+  it("methodBody finds a real, non-empty span (the guards above cannot pass vacuously)", () => {
+    const cal = FILES.find((f) => f.path === "src/providers/google/calendar.ts")!.text;
+    for (const name of ["createEvent", "freeBusy"]) {
+      const { start, end } = methodBody(cal, name);
+      expect(start).toBeGreaterThan(0);
+      expect(end).toBeGreaterThan(start + 50);
+    }
+    expect(() => methodBody(cal, "noSuchMethod")).toThrow();
   });
 
   it("createPlan is imported and mentioned only by the plan tools listed in PLAN_TOOLS (outside src/approval)", () => {

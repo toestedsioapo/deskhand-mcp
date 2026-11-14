@@ -95,9 +95,15 @@ async function signIn(
     now: ctx.clock,
     ...deps,
   };
-  const token = await runLoopbackLogin(client, requestedScopes(sub === "upgrade"), oauthDeps, (url) => {
-    io.out(`Open this link in your browser to sign in:\n${url}\n`);
-  });
+  const upgrade = sub === "upgrade";
+  // Only upgrade folds in earlier grants; a login asks for (and stores) the read scope alone.
+  const token = await runLoopbackLogin(
+    client,
+    requestedScopes(upgrade),
+    oauthDeps,
+    (url) => io.out(`Open this link in your browser to sign in:\n${url}\n`),
+    { includeGrantedScopes: upgrade },
+  );
   mkdirSync(configDir, { recursive: true });
   writeToken(configDir, token);
   const scopes = token.scopes.map((s) => oneLine(s, 200));
