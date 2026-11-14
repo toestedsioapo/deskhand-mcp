@@ -297,4 +297,24 @@ describe("calendar.create_event kind", () => {
     expect(k.matches(plan(), "key1", { ...shifted, attendees: [...ref.attendees].reverse().map((a) => a.toUpperCase()) })).toBe(true);
     expect(k.matches(plan(), "key1", { ...ref, attendees: [...ref.attendees, ref.attendees[0]!] })).toBe(true);
   });
+  it("matches: the organiser must be you; a recurring event never matches", async () => {
+    const ref = await kind().execute(plan(), "key1", provider);
+    const k = kind();
+    expect(ref.organizerSelf).toBe(true); // the fixture marks its own writes
+    expect(k.matches(plan(), "key1", { ...ref, organizerSelf: undefined })).toBe(false);
+    expect(k.matches(plan(), "key1", { ...ref, organizerSelf: false })).toBe(false);
+    expect(k.matches(plan(), "key1", { ...ref, recurring: true })).toBe(false);
+  });
+  it("matches: the owner as a self attendee counts only when the plan invited the owner", async () => {
+    const ref = await kind().execute(plan(), "key1", provider);
+    const k = kind();
+    const p = plan();
+    const withOwner = k.schema.parse(validPlan({}, { attendees: [...validPlan().event.attendees, "Me@Example.com"] }));
+    // Google added the owner (dropped from attendees, kept as ownerEmail): plan without the owner matches.
+    expect(k.matches(p, "key1", { ...ref, ownerEmail: "me@example.com" })).toBe(true);
+    // The plan invited the owner explicitly: matches only with ownerEmail present.
+    expect(k.matches(withOwner, "key1", { ...ref, ownerEmail: "me@example.com" })).toBe(true);
+    expect(k.matches(withOwner, "key1", ref)).toBe(false);
+    expect(k.matches(withOwner, "key1", { ...ref, ownerEmail: "other@example.com" })).toBe(false);
+  });
 });

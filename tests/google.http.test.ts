@@ -18,7 +18,7 @@ const LIST_URL =
     singleEvents: "true",
     orderBy: "startTime",
     maxResults: "50",
-    fields: "items(id,etag,status,summary,start,end,attendees(email,self)),nextPageToken",
+    fields: "items(id,etag,status,summary,start,end,attendees(email,self),organizer(self),recurrence,recurringEventId),nextPageToken",
   }).toString();
 const LOGIN = "Not signed in to Google. Run: deskhand auth login";
 const UPGRADE = "Google write access is not granted. Run: deskhand auth upgrade";

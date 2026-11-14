@@ -57,6 +57,7 @@ afterEach(() => {
 function setup(
   names: string[],
   intercept?: (method: string, url: URL) => Promise<Response> | undefined,
+  attendees: string[] = ["a@example.com", "b@example.com"],
 ): { ctx: AppContext; id: string } {
   replay = replayFetch(names);
   const served = replay.fetch;
@@ -80,7 +81,7 @@ function setup(
   };
   const plan = validPlan(
     { observed: { slotFree: true, etags: {} } },
-    { attendees: ["a@example.com", "b@example.com"], sendUpdates: "none", timeZone: "UTC" },
+    { attendees, sendUpdates: "none", timeZone: "UTC" },
   );
   const { actionId, planHash } = createPlan(ctx, { tool: "calendar_propose_event", input: {}, plan });
   db.run(
@@ -297,6 +298,103 @@ describe("apply with the Google provider", () => {
   it("a found event with an extra attendee who is not the owner still differs", async () => {
     const { ctx, id } = setup(["events-get-key-200-extra-attendee"]);
     expect(await applyAction(ctx, id)).toEqual({ ok: false, errorCode: "STALE_PLAN", message: DIFFERS });
+    expect(getAction(db, id)!.status).toBe("failed");
+  });
+
+  it("a plan that invites the owner: the insert echoes the owner as self -> applied", async () => {
+    const { ctx, id } = setup(
+      ["events-get-key-404", "freebusy-empty", "events-insert-200-owner-invited"],
+      undefined,
+      ["Owner@Example.com", "a@example.com"],
+    );
+    expect(await applyAction(ctx, id)).toMatchObject({ ok: true, replayed: false, result: { id: KEY } });
+    expect(getAction(db, id)!.status).toBe("applied");
+  });
+
+  it("a plan that invites the owner: recovery finds the event with the owner as self -> applied", async () => {
+    const a = setup(["events-get-key-200-owner-invited"], undefined, ["owner@example.com", "a@example.com"]);
+    expect(await applyAction(a.ctx, a.id)).toMatchObject({ ok: true, replayed: true });
+  });
+
+  it("a plan that invites the owner: insert 409 then GET with the owner as self -> applied", async () => {
+    const { ctx, id } = setup(
+      ["events-get-key-404", "freebusy-empty", "events-insert-409", "events-get-key-200-owner-invited"],
+      undefined,
+      ["owner@example.com", "a@example.com"],
+    );
+    expect(await applyAction(ctx, id)).toMatchObject({ ok: true });
+    expect(getAction(db, id)!.status).toBe("applied");
+  });
+
+  it("a plan that invites the owner, an event without the owner -> differs", async () => {
+    const { ctx, id } = setup(["events-get-key-200"], undefined, ["owner@example.com", "a@example.com", "b@example.com"]);
+    expect(await applyAction(ctx, id)).toEqual({ ok: false, errorCode: "STALE_PLAN", message: DIFFERS });
+  });
+
+  it("an invite under our id organised by someone else, otherwise identical -> failed differs, no write", async () => {
+    const { ctx, id } = setup(["events-get-key-200-foreign-organizer"]);
+    expect(await applyAction(ctx, id)).toEqual({ ok: false, errorCode: "STALE_PLAN", message: DIFFERS });
+    expect(getAction(db, id)!.status).toBe("failed");
+    expect(replay!.seen.filter((q) => q.method === "POST")).toHaveLength(0);
+    expect(dump()).not.toContain("IGNORE ALL");
+  });
+
+  it("insert 409 then GET of an invite organised by someone else -> failed differs", async () => {
+    const { ctx, id } = setup(["events-get-key-404", "freebusy-empty", "events-insert-409", "events-get-key-200-foreign-organizer"]);
+    expect(await applyAction(ctx, id)).toEqual({ ok: false, errorCode: "STALE_PLAN", message: DIFFERS });
+  });
+
+  for (const name of ["events-get-key-200-recurring", "events-get-key-200-instance"]) {
+    it(`a recurring series or instance under our id (${name}) never matches a single-event plan`, async () => {
+      const { ctx, id } = setup([name]);
+      expect(await applyAction(ctx, id)).toEqual({ ok: false, errorCode: "STALE_PLAN", message: DIFFERS });
+    });
+  }
+
+  it("insert 200 with an unreadable body, lookup 404 -> approved (retryable); the retry recovers it", async () => {
+    const { ctx, id } = setup([
+      "events-get-key-404",
+      "freebusy-empty",
+      "events-insert-200-unreadable",
+      "events-get-key-404",
+      "events-get-key-200",
+    ]);
+    expect(await applyAction(ctx, id)).toMatchObject({ ok: false, errorCode: "PROVIDER_ERROR" });
+    expect(getAction(db, id)!.status).toBe("approved");
+    expect(await applyAction(ctx, id)).toMatchObject({ ok: true, replayed: true });
+    expect(inserts()).toHaveLength(1);
+  });
+
+  it("after an ambiguous insert, a retry whose re-check sees the slot busy but finds nothing stays approved", async () => {
+    const { ctx, id } = setup([
+      "events-get-key-404",
+      "freebusy-empty",
+      "events-insert-503",
+      "events-get-key-404",
+      // retry: free/busy already sees our landed event, events.get does not yet
+      "events-get-key-404",
+      "freebusy",
+      "events-get-key-404",
+      // third call: the event is readable
+      "events-get-key-200",
+    ]);
+    expect(await applyAction(ctx, id)).toMatchObject({ ok: false, errorCode: "PROVIDER_ERROR" });
+    const second = await applyAction(ctx, id);
+    expect(second).toEqual({
+      ok: false,
+      errorCode: "PROVIDER_ERROR",
+      message: "an earlier write attempt may still be landing; retry later",
+    });
+    expect(getAction(db, id)!.status).toBe("approved");
+    expect(rowsOf(id).at(-1)).toMatchObject({ kind: "apply_refused", outcome: "error", error_code: "PROVIDER_ERROR" });
+    expect(await applyAction(ctx, id)).toMatchObject({ ok: true, replayed: true });
+    expect(getAction(db, id)!.status).toBe("applied");
+    expect(inserts()).toHaveLength(1);
+  });
+
+  it("without an earlier write attempt, a busy re-check is still terminal STALE_PLAN", async () => {
+    const { ctx, id } = setup(["events-get-key-404", "freebusy", "events-get-key-404"]);
+    expect(await applyAction(ctx, id)).toMatchObject({ ok: false, errorCode: "STALE_PLAN" });
     expect(getAction(db, id)!.status).toBe("failed");
   });
 

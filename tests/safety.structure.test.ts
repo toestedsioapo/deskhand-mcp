@@ -54,6 +54,16 @@ function methodBody(text: string, name: string): { start: number; end: number } 
   return { start, end };
 }
 
+/** "POST" string literals (any quote), not counting the `"GET" | "POST"` method type. */
+function postLiterals(text: string): number {
+  return (text.replace(/"GET"\s*\|\s*"POST"/g, "").match(/["'`]POST["'`]/g) ?? []).length;
+}
+
+/** Each `fetch(` call with its callee and first argument, e.g. `deps.fetch(req.url,`. */
+function fetchCalls(text: string): string[] {
+  return [...text.matchAll(/(?:[\w.]+\.)?\bfetch\s*\(\s*[^,)]*,?/g)].map((m) => m[0].replace(/\s+/g, "")).sort();
+}
+
 describe("safety structure", () => {
   it("scans a non-trivial source tree", () => {
     expect(FILES.map((f) => f.path)).toContain("src/approval/plan-kinds.ts");
@@ -106,6 +116,51 @@ describe("safety structure", () => {
       expect(end).toBeGreaterThan(start + 50);
     }
     expect(() => methodBody(cal, "noSuchMethod")).toThrow();
+  });
+
+  it("every file in src/providers/google/: only oauth.ts (token endpoint) and calendar.ts (insert, freeBusy) can POST", () => {
+    const google = FILES.filter((f) => f.path.startsWith("src/providers/google/"));
+    expect(google.length).toBeGreaterThanOrEqual(5);
+    const name = (p: string) => p.slice("src/providers/google/".length);
+    // A "POST" string anywhere (a variable, an argument, a property), except the `"GET" | "POST"` type of http.ts.
+    expect(
+      Object.fromEntries(google.map((f) => [name(f.path), postLiterals(f.text)]).filter(([, n]) => n !== 0)),
+    ).toEqual({ "calendar.ts": 2, "oauth.ts": 1 });
+    // Network calls: http.ts `send` (deps.fetch) and the refresh pass-through to the token endpoint; oauth.ts postToken.
+    expect(Object.fromEntries(google.map((f) => [name(f.path), fetchCalls(f.text)]).filter(([, c]) => c.length > 0))).toEqual({
+      "http.ts": ["deps.fetch(req.url,", "deps.oauth.fetch(u,"],
+      "oauth.ts": ["deps.fetch(deps.endpoints.tokenUrl,"],
+    });
+    // No other transport: no node:https, undici or http(s).request; node:http only for oauth.ts's loopback listener.
+    for (const f of google) {
+      expect(f.text, f.path).not.toMatch(/["']node:https["']|["']undici["']|\bhttps?\.request\b|\brequest\s*\(/);
+      if (f.path.endsWith("/oauth.ts")) expect(f.text).toMatch(/import \{ createServer, type Server, type ServerResponse \} from "node:http";/);
+      else expect(f.text, f.path).not.toMatch(/["']node:http["']/);
+    }
+    // http.ts only forwards the method it is given.
+    const http = google.find((f) => f.path.endsWith("/http.ts"))!.text;
+    expect([...http.matchAll(/\bmethod\s*:\s*([^,;}\n]+)/g)].map((m) => m[1]!.trim()).sort()).toEqual([
+      '"GET" | "POST"',
+      '"GET" | "POST"',
+      "req.method",
+    ]);
+    // googleRequest is called from calendar.ts only, from exactly three places (get, freeBusy, createEvent).
+    const calls = FILES.flatMap((f) =>
+      [...f.text.matchAll(/(?<!function )\bgoogleRequest\s*\(/g)].map(() => f.path),
+    );
+    expect(calls).toEqual(["src/providers/google/calendar.ts", "src/providers/google/calendar.ts", "src/providers/google/calendar.ts"]);
+    // calendar.ts never passes a method by shorthand (`{ method }`), so every method is a visible literal.
+    const cal = google.find((f) => f.path.endsWith("/calendar.ts"))!.text;
+    expect(cal).not.toMatch(/[{,]\s*method\s*[,}]/);
+  });
+
+  it("the provider POST guards detect what they are meant to detect (self-test)", () => {
+    const evil = 'const m = "POST";\nconst r = await googleRequest(deps, op, { method: m, url, requiredScope: SCOPE_CALENDAR_READ });\nawait fetch(url, { method: `POST` });';
+    expect(postLiterals(evil)).toBe(2);
+    expect(fetchCalls(evil)).toEqual(["fetch(url,"]);
+    expect(postLiterals('req: { method: "GET" | "POST"; url: string }')).toBe(0);
+    expect(postLiterals("method: 'POST'")).toBe(1);
+    expect(/[{,]\s*method\s*[,}]/.test("googleRequest(deps, op, { method, url })")).toBe(true);
   });
 
   it("createPlan is imported and mentioned only by the plan tools listed in PLAN_TOOLS (outside src/approval)", () => {

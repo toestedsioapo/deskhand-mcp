@@ -96,6 +96,31 @@ function calendarIdOf(row: RawAction): string {
   }
 }
 
+/** Prefix of the refusal note for an ambiguous (retryable) write failure; `hadAmbiguousWrite` looks for it. */
+const WRITE_FAILED = "Provider write failed: ";
+/** Fixed note: a failed re-check after an earlier ambiguous write attempt (ledger contract, gate 8). */
+const STILL_LANDING = "an earlier write attempt may still be landing; retry later";
+
+/**
+ * True when this action's own ledger rows show an earlier write attempt whose outcome was unknown: an
+ * `apply_refused` PROVIDER_ERROR whose note is the write-failure note (gate 9, ambiguous). Read from the ledger,
+ * so it holds across processes and restarts.
+ */
+function hadAmbiguousWrite(ctx: AppContext, actionId: string): boolean {
+  const rows = ctx.db.all<{ preview_json: string }>(
+    "SELECT preview_json FROM events WHERE action_id = ? AND kind = 'apply_refused' AND error_code = 'PROVIDER_ERROR'",
+    [actionId],
+  );
+  return rows.some((r) => {
+    try {
+      const note = (JSON.parse(r.preview_json) as { note?: unknown } | null)?.note;
+      return typeof note === "string" && note.startsWith(WRITE_FAILED);
+    } catch {
+      return false;
+    }
+  });
+}
+
 /** Replay of a stored result (status already `applied`). */
 function replay(row: RawAction): ApplyResult {
   const result = JSON.parse(row.result_json ?? "null") as EventRef;
@@ -269,7 +294,12 @@ export async function applyAction(ctx: AppContext, actionId: string): Promise<Ap
     // wrote it after our recovery lookup): look again before failing.
     const again = await lookup("after a failed re-check");
     if ("refused" in again) return again.refused;
-    return settle(again.found) ?? fail(ctx, actionId, "STALE_PLAN", `The world changed since planning: ${check.reason}.`);
+    const settled = settle(again.found);
+    if (settled) return settled;
+    // An earlier attempt of this action may have written the event that now makes the slot busy, while the
+    // provider cannot read it back yet. Not terminal: refuse, status unchanged; a later apply recovers it.
+    if (hadAmbiguousWrite(ctx, actionId)) return refuse(ctx, actionId, true, "PROVIDER_ERROR", STILL_LANDING);
+    return fail(ctx, actionId, "STALE_PLAN", `The world changed since planning: ${check.reason}.`);
   }
   // 9. Write with the idempotency key, then commit.
   let result: EventRef;
@@ -283,7 +313,7 @@ export async function applyAction(ctx: AppContext, actionId: string): Promise<Ap
     if (settled) return settled;
     // Nothing there. An auth failure means the write was not attempted or not authorised: never terminal.
     if (e instanceof AuthRequiredError) return refuse(ctx, actionId, true, "AUTH_REQUIRED", errText(e));
-    const msg = `Provider write failed: ${errText(e)}`;
+    const msg = `${WRITE_FAILED}${errText(e)}`;
     // Ambiguous (timeout, network, 429, 5xx): it may still land, and a retry with the same key cannot duplicate
     // it (recovery or the provider's existing-id path finds it). Stay approved. Only a definite rejection fails.
     if (e instanceof ProviderError && e.retryable) return refuse(ctx, actionId, true, "PROVIDER_ERROR", msg);

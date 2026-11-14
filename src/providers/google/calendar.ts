@@ -5,8 +5,9 @@ import { googleRequest, type GoogleHttpDeps, type GoogleResponse } from "./http.
 
 const PROVIDER = "google calendar";
 const BASE = "https://www.googleapis.com/calendar/v3";
-// `self` is requested so the calendar owner, whom Google adds to `attendees`, can be dropped (see mapEvent).
-const LIST_FIELDS = "items(id,etag,status,summary,start,end,attendees(email,self)),nextPageToken";
+// The plan-match fields are requested too (see mapEvent): attendee `self`, `organizer.self`, and the recurrence markers.
+const LIST_FIELDS =
+  "items(id,etag,status,summary,start,end,attendees(email,self),organizer(self),recurrence,recurringEventId),nextPageToken";
 const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
 const RFC3339 = /^\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}(\.\d+)?([Zz]|[+-]\d{2}:\d{2})$/;
 
@@ -52,17 +53,23 @@ function mapEvent(op: string, item: unknown): EventRef | null {
   if (item.status === "cancelled") return null;
   if (typeof item.id !== "string" || typeof item.etag !== "string") throw unreadable(op, "unreadable event");
   // Google lists the calendar owner among the attendees (`self: true`) of an event that has attendees, on insert,
-  // get and list. The owner is not one of the plan's attendees, so it is dropped here: a fresh insert must never
-  // look like it differs from the approved plan.
-  const attendees = Array.isArray(item.attendees)
-    ? item.attendees.flatMap((a) => (isObj(a) && typeof a.email === "string" && a.self !== true ? [a.email] : []))
-    : [];
+  // get and list. The owner is kept apart as `ownerEmail` (the plan match decides whether the plan invited them)
+  // and left out of `attendees`, which the read tools show.
+  const list = Array.isArray(item.attendees) ? item.attendees.filter(isObj) : [];
+  const attendees = list.flatMap((a) => (typeof a.email === "string" && a.self !== true ? [a.email] : []));
+  const owner = list.find((a) => a.self === true && typeof a.email === "string")?.email;
+  const recurring =
+    (Array.isArray(item.recurrence) && item.recurrence.length > 0) ||
+    (typeof item.recurringEventId === "string" && item.recurringEventId !== "");
   return {
     id: item.id,
     etag: item.etag,
     title: typeof item.summary === "string" ? item.summary : "",
     ...mapTimes(op, item.start, item.end),
     attendees,
+    ...(typeof owner === "string" ? { ownerEmail: owner } : {}),
+    ...(isObj(item.organizer) && item.organizer.self === true ? { organizerSelf: true } : {}),
+    ...(recurring ? { recurring: true } : {}),
   };
 }
 
@@ -165,13 +172,21 @@ export function createGoogleCalendarProvider(deps: GoogleHttpDeps): CalendarProv
         },
         requiredScope: SCOPE_CALENDAR_WRITE,
       });
-      if (res.status !== 409) {
-        const created = mapEvent(op, body(op, res));
-        if (created === null) throw unreadable(op, "unreadable event");
+      if (res.status >= 200 && res.status < 300) {
+        // A 2xx means Google created the event; a body we cannot read does not undo that. Retryable: the follow-up
+        // lookup (or the retry's recovery) decides.
+        let created: EventRef | null = null;
+        try {
+          created = mapEvent(op, res.json);
+        } catch {
+          created = null;
+        }
+        if (created === null) throw new ProviderError(PROVIDER, op, { phrase: "unreadable response", retryable: true });
         // Recovery and every later lookup use our id: an event stored under another id could never be found again.
         if (created.id !== idempotencyKey) throw unreadable(op, "Google returned a different event id");
         return created;
       }
+      if (res.status !== 409) throw new ProviderError(PROVIDER, op, { status: res.status });
       // 409: the id exists, so an earlier attempt created it. Never insert again, never use a new id.
       // The event is returned as stored; the apply engine checks that it is the approved one.
       const getOp = "events.get";

@@ -72,6 +72,7 @@ const CREATED = {
   end: "2026-11-12T10:30:00.000Z",
   attendees: ["a@example.com", "b@example.com"],
   allDay: false,
+  organizerSelf: true,
 };
 
 describe("createEvent", () => {
@@ -122,6 +123,13 @@ describe("createEvent", () => {
     expect(e).toBeInstanceOf(ProviderError);
     expect(e.message).toBe("google calendar events.insert failed: Google returned a different event id");
     expect((e as ProviderError).retryable).toBe(false);
+  });
+
+  it("a 200 with an unreadable body is a retryable ProviderError (the event was probably created)", async () => {
+    const e = await reject(provider(["events-insert-200-unreadable"]).createEvent(EVENT, KEY));
+    expect(e).toBeInstanceOf(ProviderError);
+    expect((e as ProviderError).retryable).toBe(true);
+    expect(e.message).not.toContain("Backend Error");
   });
 
   it("409 then a found event that differs from the request is returned as is (apply compares it)", async () => {

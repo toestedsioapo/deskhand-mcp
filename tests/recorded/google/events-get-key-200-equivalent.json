@@ -11,6 +11,10 @@
       "etag": "\"3100000000000010\"",
       "status": "confirmed",
       "summary": "Sync",
+      "organizer": {
+        "email": "owner@example.com",
+        "self": true
+      },
       "start": {
         "dateTime": "2026-11-12T11:00:00+01:00",
         "timeZone": "Europe/Berlin"

@@ -58,6 +58,7 @@ describe("fixture provider", () => {
     const p = createFixtureProvider(makeWorld());
     const a = await p.createEvent(newEvent, "key1");
     expect(a.id).toBe("key1");
+    expect(a.organizerSelf).toBe(true);
     expect(p.writes).toHaveLength(1);
     const b = await p.createEvent(newEvent, "key1");
     expect(b).toEqual(a);

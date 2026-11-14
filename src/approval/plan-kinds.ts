@@ -30,12 +30,22 @@ export interface PlanKind<P> {
 /** Fixed phrase (no event content): an event is under the action's id but it is not the approved one. */
 export const EVENT_DIFFERS = "an event with this action's id exists but differs from the approved plan";
 
-/** Attendee addresses compared as a set, case-insensitively. */
+/** Attendee addresses compared as a set, case-insensitively, repeats collapsed. */
 function sameAddresses(a: readonly string[], b: readonly string[]): boolean {
   const norm = (xs: readonly string[]) => [...new Set(xs.map((x) => x.toLowerCase()))].sort();
   const x = norm(a);
   const y = norm(b);
   return x.length === y.length && x.every((v, i) => v === y[i]);
+}
+
+/**
+ * The plan's attendees against a found event: the event's attendees (owner excluded) as they are, or with the owner
+ * added when the plan invited the owner explicitly. The owner Google adds on its own is never a difference; an
+ * extra address that is not the owner always is.
+ */
+function sameAttendees(planned: readonly string[], ev: EventRef): boolean {
+  if (sameAddresses(planned, ev.attendees)) return true;
+  return ev.ownerEmail !== undefined && sameAddresses(planned, [...ev.attendees, ev.ownerEmail]);
 }
 
 /** Two instants compared as times, not strings (`10:00Z` equals `11:00+01:00`); an unparseable one never matches. */
@@ -125,13 +135,17 @@ export const calendarCreateEvent: PlanKind<CalendarCreateEventPlan> = {
   lookupExisting: (plan, key, provider) => provider.lookupEvent(plan.event.calendarId, key),
 
   // The calendar is fixed by where it is looked up (lookupExisting and execute both use plan.event.calendarId).
+  // The organiser must be the calendar owner (a foreign invite under our id is not our write), and a recurring
+  // series or instance never matches a single-event plan.
   matches: (plan, key, ev) =>
     ev.id === key &&
+    ev.organizerSelf === true &&
+    ev.recurring !== true &&
     !ev.allDay &&
     ev.title === plan.event.title &&
     sameInstant(ev.start, plan.event.start) &&
     sameInstant(ev.end, plan.event.end) &&
-    sameAddresses(ev.attendees, plan.event.attendees),
+    sameAttendees(plan.event.attendees, ev),
 
   execute: (plan, key, provider) => provider.createEvent(plan.event, key),
 };

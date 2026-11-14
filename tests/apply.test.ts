@@ -686,6 +686,35 @@ describe("an event under our id that is not the approved one", () => {
 
 /** Ambiguous write failures (timeout, network, 429, 5xx) stay retryable; a definite rejection is terminal. */
 describe("write failures: ambiguous vs definite", () => {
+  it("after an earlier ambiguous write attempt, a failed re-check with nothing found stays approved (fixed note)", async () => {
+    const id = seedAction(ctx, "approved");
+    const flaky: CalendarProvider = {
+      ...delegate(),
+      createEvent: async () => {
+        throw new ProviderError("fixture", "createEvent", { phrase: "timed out", retryable: true });
+      },
+    };
+    await applyAction(makeCtx({ provider: flaky }), id);
+    provider.addBusy("primary", SLOT);
+    const r = await applyAction(ctx, id);
+    expect(r).toEqual({ ok: false, errorCode: "PROVIDER_ERROR", message: "an earlier write attempt may still be landing; retry later" });
+    expect(status(id)).toBe("approved");
+    expect((events(id).at(-1)!.preview as { note: unknown }).note).toBe("an earlier write attempt may still be landing; retry later");
+  });
+
+  it("an earlier refusal that was not a write attempt (a read error) does not count: busy re-check -> STALE_PLAN", async () => {
+    const id = seedAction(ctx, "approved");
+    const down: CalendarProvider = {
+      ...delegate(),
+      lookupEvent: async () => {
+        throw new ProviderError("fixture", "lookup", { status: 503 });
+      },
+    };
+    await applyAction(makeCtx({ provider: down }), id);
+    provider.addBusy("primary", SLOT);
+    await expectFailed(ctx, id, "STALE_PLAN");
+  });
+
   it("a retryable ProviderError and nothing found -> PROVIDER_ERROR refusal, still approved; a retry applies", async () => {
     const id = seedAction(ctx, "approved");
     const flaky: CalendarProvider = {

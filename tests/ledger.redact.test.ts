@@ -184,6 +184,15 @@ describe("scrubSecrets", () => {
     ["URL-encoded access token", "q access_token=ya29%2Ea0AfH6xyz end", ["ya29", "a0AfH6"]],
     ["opaque access token in a query", "GET /x?access_token=plainopaque123 end", ["plainopaque123"]],
     ["auth code in a query", "cb ?state=s&code=4/0AeanS0abcdef end", ["0AeanS0abcdef"]],
+    ["auth code in JSON", 'body {"code":"4/0AeanS0abcdef","state":"s"} end', ["0AeanS0abcdef"]],
+    ["camelCase accessToken with =", "q accessToken=opaqueSECRET123 end", ["opaqueSECRET123"]],
+    ["camelCase refreshToken in JSON", 'body {"refreshToken":"1/xyzSECRET"} end', ["xyzSECRET"]],
+    ["camelCase clientSecret in JSON", 'body {"clientSecret":"plainSECRET"} end', ["plainSECRET"]],
+    ["camelCase idToken with :", "q idToken: opaqueIDTOKEN end", ["opaqueIDTOKEN"]],
+    ["URL-encoded = separator", "q refresh_token%3DopaqueSECRET end", ["opaqueSECRET"]],
+    ["URL-encoded JSON separator", "q access_token%22%3A%22opaqueVALUE%22 end", ["opaqueVALUE"]],
+    ["URL-encoded underscore in the key", "q client%5Fsecret=SECRETVAL end", ["SECRETVAL"]],
+    ["quoted value with a space", 'q client_secret = "abc def" end', ["abc", "def"]],
   ])("scrubs a %s and keeps the surrounding words", (_name, text, gone) => {
     const out = scrubSecrets(text);
     for (const g of gone) expect(out).not.toContain(g);

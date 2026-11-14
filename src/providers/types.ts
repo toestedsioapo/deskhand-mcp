@@ -14,8 +14,18 @@ export interface EventRef {
   title: string;
   start: string;
   end: string;
+  /** Without the calendar owner (see `ownerEmail`). */
   attendees: string[];
   allDay: boolean;
+  /**
+   * Plan-match fields, never shown by the read tools; each is present only when it holds. `ownerEmail`: the calendar
+   * owner Google lists among the attendees (`self: true`), kept apart from `attendees`. `organizerSelf`: the calendar
+   * owner organises the event (Google `organizer.self`; the fixture sets it on its own writes). `recurring`: a series
+   * or an instance of one.
+   */
+  ownerEmail?: string;
+  organizerSelf?: boolean;
+  recurring?: boolean;
 }
 
 /** What a provider holds under one event id. */

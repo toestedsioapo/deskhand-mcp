@@ -84,9 +84,18 @@ export function redactInput(value: unknown): unknown {
 const SECRET_PATTERNS: readonly (readonly [RegExp, string])[] = [
   // A secret named by its parameter or JSON key, in any of its usual spellings: `refresh_token=...`,
   // `"access_token":"..."`, `client_secret: ...`. The value is anything up to a separator.
-  [/\b((?:access|refresh|id)_token|client_secret)(["']?\s*[=:]\s*["']?)[^\s&"',;}]+/gi, "$1$2[redacted]"],
-  // An OAuth authorization code in a callback query (`code=4/0Aean...`), plain or URL-encoded.
-  [/\b(code=)4(?:\/|%2F)[\w%-]+/gi, "$1[redacted]"],
+  // Keys in snake or camel case (`refresh_token`, `refreshToken`, `client%5Fsecret`); separators plain or URL-encoded
+  // (`=`, `:`, `%3D`, `%3A`, quotes as `%22`). A quoted value is redacted up to its closing quote (spaces included).
+  [
+    /(?<![A-Za-z])((?:access|refresh|id)(?:_|%5F)?token|client(?:_|%5F)?secret)((?:["']|%22)?\s*(?:[=:]|%3D|%3A)\s*)("|'|%22)(?:(?!\3)[^\n])*(?:\3)?/gi,
+    "$1$2$3[redacted]$3",
+  ],
+  [
+    /(?<![A-Za-z])((?:access|refresh|id)(?:_|%5F)?token|client(?:_|%5F)?secret)((?:["']|%22)?\s*(?:[=:]|%3D|%3A)\s*)(?!["']|%22)[^\s&"',;}]+/gi,
+    "$1$2[redacted]",
+  ],
+  // An OAuth authorization code (`code=4/0Aean...`, `"code":"4/0Aean..."`), plain or URL-encoded.
+  [/(?<![A-Za-z])((?:["']|%22)?code(?:["']|%22)?\s*(?:[=:]|%3D|%3A)\s*(?:["']|%22)?)4(?:\/|%2F)[\w%.-]+/gi, "$1[redacted]"],
   [/Bearer\s+\S+/gi, "[redacted]"],
   [/Bearer(?:%20|\+)+[^\s&"',;}]+/gi, "[redacted]"],
   [/eyJ[\w-]+\.[\w-]+\.[\w-]+/g, "[redacted]"],
@@ -104,9 +113,12 @@ const SECRET_PATTERNS: readonly (readonly [RegExp, string])[] = [
  * Replaces OAuth secrets found in free text (error messages) with `[redacted]`:
  * `Bearer <anything>`, three-part JWTs, `ya29.` access tokens, `1//` refresh
  * tokens, `GOCSPX-` client secrets and any value named `access_token`,
- * `refresh_token`, `id_token`, `client_secret` or `code=4/...`, also when
+ * `refresh_token`, `id_token`, `client_secret` (also camelCase: `accessToken`,
+ * ...) or an auth code (`code=4/...`, `"code":"4/..."`), with plain or
+ * URL-encoded separators (`%3D`, `%3A`, `%22`), also when the value is
  * URL-encoded (`%2F`, `%2E`, `%2D`, `Bearer%20`) or JSON-escaped (`\/`), and a
- * refresh token in a URL path. Surrounding words are kept.
+ * refresh token in a URL path. A quoted value is redacted up to its closing
+ * quote. Surrounding words are kept.
  */
 export function scrubSecrets(text: string): string {
   let out = text;

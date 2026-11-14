@@ -101,6 +101,34 @@ describe("listEvents", () => {
     expect(r.events[0]!.attendees).toEqual(["ana@example.com", "ben@example.com"]);
     const g = await createGoogleCalendarProvider(deps(stub(item))).getEvent("primary", "evt-1");
     expect(g!.attendees).toEqual(["ana@example.com", "ben@example.com"]);
+    expect(g!.ownerEmail).toBe("owner@example.com");
+    expect(g!.organizerSelf).toBeUndefined();
+  });
+
+  it("keeps organizer.self and a recurrence marker for the plan match (never shown by the read tools)", async () => {
+    const base = {
+      id: "evt-1",
+      etag: '"1"',
+      status: "confirmed",
+      start: { dateTime: "2026-11-12T10:00:00Z" },
+      end: { dateTime: "2026-11-12T10:30:00Z" },
+    };
+    const get = (item: object) => createGoogleCalendarProvider(deps(stub(item))).getEvent("primary", "evt-1");
+    expect(await get({ ...base, organizer: { email: "me@example.com", self: true } })).toMatchObject({ organizerSelf: true });
+    const plain = await get({ ...base, organizer: { email: "x@example.com" } });
+    expect(plain).not.toHaveProperty("organizerSelf");
+    expect(plain).not.toHaveProperty("recurring");
+    expect(plain).not.toHaveProperty("ownerEmail");
+    expect(await get({ ...base, recurrence: ["RRULE:FREQ=DAILY"] })).toMatchObject({ recurring: true });
+    expect(await get({ ...base, recurringEventId: "abc" })).toMatchObject({ recurring: true });
+  });
+
+  it("the list fields mask asks for organizer(self), attendees(email,self), recurrence and recurringEventId", async () => {
+    const p = provider(["events-list-page"]);
+    await p.listEvents("primary", RANGE, 50);
+    expect(new URL(replay!.seen[0]!.url).searchParams.get("fields")).toBe(
+      "items(id,etag,status,summary,start,end,attendees(email,self),organizer(self),recurrence,recurringEventId),nextPageToken",
+    );
   });
 
   it("truncated is true when nextPageToken is present", async () => {

@@ -127,6 +127,8 @@ export function createFixtureProvider(
         end: event.end,
         attendees: [...event.attendees],
         allDay: false,
+        // The fixture's own writes are organised by the calendar owner, as a Google insert is.
+        organizerSelf: true,
       };
       cal.set(created.id, created);
       writes.push(created);
