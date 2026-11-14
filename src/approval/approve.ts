@@ -1,5 +1,5 @@
 import type { AppContext } from "../app-context.js";
-import { oneLine, writeRows, type CliIo } from "../util/sanitize.js";
+import { DEFAULT_COLUMNS, oneLine, writeRows, type CliIo } from "../util/sanitize.js";
 import { getAction } from "../ledger/actions.js";
 import { canonicalJson, hashPrefix, planHash } from "../ledger/canonical.js";
 import type { ActionStatus, ErrorCode, RejectionMethod } from "../ledger/contract.js";
@@ -187,16 +187,30 @@ export async function approveAction(ctx: AppContext, actionId: string, io: CliIo
 
   // 7. Show exactly what is being approved (sanitised), then read the typed last 4.
   const hash = recomputeHash(initial.plan_json)!; // equals plan_hash: checked in step 5
+  // The width the plan is laid out for is watched until the answer: if the terminal gets narrower meanwhile, it has
+  // re-wrapped the rows without the continuation marker, so the approval is refused.
+  const shownWidth = io.columns ?? DEFAULT_COLUMNS;
+  const watch = io.watchWidth?.();
   writeRows(io, "", `Approve ${oneLine(initial.id, 64)} (${oneLine(initial.tool, 80)})`);
   // The CLI wraps long values itself (continuation marker), so terminal wrapping cannot forge a line.
   for (const line of renderDiff(JSON.parse(initial.plan_json) as unknown, ctx.config.timeZone)) writeRows(io, "    ", line);
-  io.out(`plan hash ${hashPrefix(hash)}\n`);
-  io.out(`expires   ${oneLine(initial.expires_at, 40)}\n`);
+  writeRows(io, "", `plan hash ${hashPrefix(hash)}`);
+  writeRows(io, "", `expires   ${oneLine(initial.expires_at, 40)}`);
   let typed: string;
+  let narrowest: number | undefined;
   try {
     typed = await io.readLine("Type the last 4 characters of the action id to approve: ");
   } catch {
     typed = "";
+  } finally {
+    narrowest = watch?.narrowest();
+    watch?.stop();
+  }
+  if (narrowest !== undefined && narrowest < shownWidth) {
+    return refuseApprove(ctx, shown, initial.id, {
+      code: "CONFIRMATION_MISMATCH",
+      message: `The terminal got narrower (${shownWidth} to ${narrowest} columns) while the plan for ${shown} was shown, so it may have been re-wrapped; nothing was approved. Run deskhand approve again.`,
+    });
   }
   if (asciiUpper(typed.trim()) !== confirm) {
     return refuseApprove(ctx, shown, initial.id, {

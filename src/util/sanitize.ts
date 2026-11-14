@@ -13,8 +13,14 @@ export interface CliIo {
   /** `process.execArgv` and `NODE_OPTIONS` of the running process (the real CLI sets both); omitted means none. */
   execArgv?: readonly string[];
   nodeOptions?: string;
-  /** Terminal width in columns when stdout is a TTY; omitted means unknown (rows are laid out for 80). */
+  /** Terminal width in columns (see pickColumns in src/cli/io.ts); omitted means unknown (rows are laid out for 80). */
   columns?: number;
+  /**
+   * Starts tracking the terminal width; `narrowest()` is the smallest width seen since (including now). Approve
+   * uses it to refuse when the terminal got narrower while the plan was on screen: the terminal re-wraps rows that
+   * were laid out for the wider width, without the continuation marker. Omitted means the width cannot change.
+   */
+  watchWidth?: () => { narrowest(): number | undefined; stop(): void };
   readLine(prompt: string): Promise<string>;
 }
 
@@ -32,6 +38,12 @@ const HIDDEN =
 
 /** More combining marks on one character than any script needs: they stack over the rows above and below. */
 const MARK_STACK = /\p{M}{5,}/u;
+/** A mark or other extender at the start would join the label's trailing space (`create event: `) into one character. */
+const LEADING_EXTENDER = /^[\p{M}\p{Grapheme_Extend}]/u;
+/** Code points in one user-perceived character: more than this is a run built to be one unbreakable character. */
+const MAX_GRAPHEME_CODE_POINTS = 8;
+
+const graphemes = new Intl.Segmenter("en", { granularity: "grapheme" });
 
 /**
  * Untrusted text made safe for a terminal: every hidden character (see HIDDEN) is removed except newline and tab.
@@ -59,7 +71,11 @@ export function oneLine(s: string, max = 200): string {
  * and written, which is why titles must pass it.
  */
 export function isPlainLine(s: string): boolean {
-  return s.length > 0 && !MARK_STACK.test(s) && oneLine(s, Number.POSITIVE_INFINITY) === s;
+  if (s.length === 0 || MARK_STACK.test(s) || LEADING_EXTENDER.test(s)) return false;
+  for (const { segment } of graphemes.segment(s)) {
+    if ([...segment].length > MAX_GRAPHEME_CODE_POINTS) return false;
+  }
+  return oneLine(s, Number.POSITIVE_INFINITY) === s;
 }
 
 // ---------------------------------------------------------------- terminal rows
@@ -85,44 +101,61 @@ export function termWidth(s: string): number {
   return w;
 }
 
-const graphemes = new Intl.Segmenter("en", { granularity: "grapheme" });
-
 /**
  * `text` laid out as terminal rows of at most `columns` (see termWidth): the first row starts with `prefix`, every
  * further row with CONTINUATION. The CLI wraps long values itself so that text the terminal would have wrapped can
- * never start a row and pass for a diff line. A row breaks after its last double space, else its last space, else
- * between two characters (graphemes), never inside one.
+ * never start a row and pass for a diff line. A row breaks after its last double space, else its last space (a
+ * leading indent is not a break point), else between two characters (graphemes). Every row fits: text carried to
+ * the next row is checked to fit there, and a single character too wide for a row is split into its code points.
+ * Prefixes are at most as wide as CONTINUATION.
  */
 export function layoutRow(prefix: string, text: string, columns: number = DEFAULT_COLUMNS): string[] {
   const width = Math.max(Number.isNaN(columns) ? DEFAULT_COLUMNS : Math.floor(columns), MIN_COLUMNS);
+  const room = width - CONTINUATION.length; // text columns on a continuation row
+  const units: string[] = [];
+  for (const { segment } of graphemes.segment(text)) {
+    if (termWidth(segment) <= room) units.push(segment);
+    else units.push(...segment); // each code point is at most 2 columns
+  }
   const rows: string[] = [];
   let head = prefix;
-  let row: string[] = []; // graphemes on the current row
+  let row: string[] = []; // units on the current row
   let used = termWidth(prefix);
-  for (const { segment } of graphemes.segment(text)) {
-    const w = termWidth(segment);
+  for (const u of units) {
+    const w = termWidth(u);
     if (row.length > 0 && used + w > width) {
-      // Prefer to break after the last space on the row (the space stays at the end of the row, so the rows
-      // still join back to the exact text); otherwise break between characters.
-      // A double space (the pending header's column gap) wins, so a label is not split from its value.
-      const gap = row.findLastIndex((g, k) => g === " " && row[k - 1] === " ");
-      const space = gap >= 0 ? gap : row.lastIndexOf(" ");
-      const carry = space >= 0 && space < row.length - 1 ? row.splice(space + 1) : [];
-      rows.push(head + row.join(""));
+      // Break after a space when the carried text (and this unit) fits on the next row; the space stays at the end
+      // of the row, so the rows still join back to the exact text. Otherwise break between characters.
+      const k = breakPoint(row);
+      let carry = k >= 0 ? row.slice(k + 1) : [];
+      if (CONTINUATION.length + termWidth(carry.join("")) + w > width) carry = [];
+      rows.push(head + row.slice(0, row.length - carry.length).join(""));
       head = CONTINUATION;
       row = carry;
       used = CONTINUATION.length + termWidth(carry.join(""));
-      if (row.length > 0 && used + w > width) {
-        rows.push(head + row.join(""));
-        row = [];
-        used = CONTINUATION.length;
-      }
     }
-    row.push(segment);
+    row.push(u);
     used += w;
   }
   rows.push(head + row.join(""));
   return rows;
+}
+
+/**
+ * Index of the space to break after: the last double space (the pending header's column gap, so a label is not
+ * split from its value), else the last space; never one in the row's leading indent. -1 when there is none.
+ */
+function breakPoint(row: readonly string[]): number {
+  const start = row.findIndex((g) => g !== " ");
+  if (start < 0) return -1;
+  let gap = -1;
+  let space = -1;
+  for (let k = start + 1; k < row.length; k++) {
+    if (row[k] !== " ") continue;
+    space = k;
+    if (row[k - 1] === " ") gap = k;
+  }
+  return gap >= 0 ? gap : space;
 }
 
 /**

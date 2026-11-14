@@ -3,7 +3,7 @@ import { applyAction } from "../src/approval/apply.js";
 import { approveAction } from "../src/approval/approve.js";
 import { renderDiff } from "../src/approval/plan-kinds.js";
 import { runCli } from "../src/cli/index.js";
-import type { CliIo } from "../src/cli/io.js";
+import { pickColumns, type CliIo } from "../src/cli/io.js";
 import { getAction } from "../src/ledger/actions.js";
 import { canonicalJson, planHash } from "../src/ledger/canonical.js";
 import { LedgerDb } from "../src/ledger/db.js";
@@ -239,4 +239,112 @@ describe("the stored-plan schema is as strict as the tool input (third review M6
     it(`${name} is an invalid plan`, () => expect(renderDiff(validPlan({}, ev), "UTC")).toEqual(["(invalid plan)"]));
   }
   it("the plan the tool stores still passes", () => expect(renderDiff(validPlan(), "UTC")[0]).toBe("create event: Sync"));
+});
+
+// ---------------------------------------------------------------- fourth review (wrapping code, 2026-11-14)
+
+describe("layoutRow: every row fits, for any text (fourth review I2, M3)", () => {
+  it("a single grapheme wider than a row is split so no row overflows", () => {
+    for (const w of [20, 40, 80]) {
+      for (const text of [
+        `create event: ${cp(0x1100).repeat(50)} calendar: primary`,
+        `create event: ${cp(0x915, 0x94d).repeat(60)}${cp(0x915)}`,
+        `create event: ${cp(0xd4e).repeat(76)}c`,
+      ]) {
+        const rows = layoutRow("    ", text, w);
+        for (const r of rows) expect(termWidth(r), `${w}: ${r}`).toBeLessThanOrEqual(w);
+        expect(rows.map((r, k) => (k === 0 ? r.slice(4) : r.slice(CONTINUATION.length))).join("")).toBe(text);
+      }
+    }
+  });
+  it("a carried row never overflows when the first prefix is narrower than the marker", () => {
+    for (const r of layoutRow("", `  ${"T".repeat(200)}`, 80)) expect(termWidth(r), r).toBeLessThanOrEqual(80);
+  });
+  it("random text of ASCII, spaces, CJK and marks: rows fit and rejoin exactly at widths 20 to 90", () => {
+    const alphabet = ["a", "b", " ", " ", "|", ":", cp(0x4f1a), cp(0x1f600), `e${cp(0x301)}`, cp(0x1100)];
+    let seed = 7;
+    const rnd = (n: number) => ((seed = (seed * 1103515245 + 12345) % 2147483648), seed % n);
+    for (let t = 0; t < 400; t++) {
+      const text = Array.from({ length: 1 + rnd(160) }, () => alphabet[rnd(alphabet.length)]).join("");
+      const prefix = ["", "    ", "      "][rnd(3)]!;
+      const w = 20 + rnd(71);
+      const rows = layoutRow(prefix, text, w);
+      for (const r of rows) expect(termWidth(r), `${w} ${JSON.stringify(r)}`).toBeLessThanOrEqual(w);
+      for (const r of rows.slice(1)) expect(r.startsWith(CONTINUATION)).toBe(true);
+      expect(rows.map((r, k) => (k === 0 ? r.slice(prefix.length) : r.slice(CONTINUATION.length))).join("")).toBe(text);
+    }
+  });
+  it("the leading indent is not a break point: a long address does not leave a blank row (M4)", () => {
+    const rows = layoutRow("    ", `  ${"a".repeat(80)}@example.com`, 80);
+    expect(rows[0]!.trim()).not.toBe("");
+  });
+});
+
+describe("isPlainLine: titles that cannot be laid out faithfully (fourth review I2, M2)", () => {
+  it("refuses a character built from more than 8 code points", () => {
+    expect(isPlainLine(cp(0x1100).repeat(50))).toBe(false);
+    expect(isPlainLine(`${cp(0x915, 0x94d).repeat(60)}${cp(0x915)}`)).toBe(false);
+    expect(isPlainLine(`${cp(0xd4e).repeat(76)}c`)).toBe(false);
+  });
+  it("still accepts ordinary conjuncts and Hangul", () => {
+    expect(isPlainLine(cp(0x915, 0x94d, 0x937))).toBe(true);
+    expect(isPlainLine(cp(0xd55c, 0xad6d))).toBe(true);
+    expect(isPlainLine(cp(0x1112, 0x1161, 0x11ab))).toBe(true);
+  });
+  it("refuses a title that starts with a combining mark or other extender", () => {
+    expect(isPlainLine(`${cp(0x301)}abc`)).toBe(false);
+    expect(isPlainLine(`${cp(0xff9e)}abc`)).toBe(false);
+    expect(isPlainLine(`${cp(0x903)}abc`)).toBe(false);
+  });
+});
+
+describe("approve: the whole display fits, and a narrower terminal is not trusted (fourth review M1, I1)", () => {
+  it("at 20 columns every approve row fits, footer included", async () => {
+    h = await setupHarness({ env: {} });
+    const r = await propose(h, { title: "Team lunch with the whole design group", attendees: ["ana@example.com"] });
+    const id = (r.structuredContent as { action_id: string }).action_id;
+    const io = scripted([last4(id)], 20);
+    expect(await approveAction(h.ctx, id, io)).toEqual({ ok: true });
+    for (const row of io.outText().split("\n")) expect(termWidth(row), row).toBeLessThanOrEqual(20);
+  });
+
+  function watching(columns: number, narrowest: number, answer: string) {
+    const io = scripted([answer], columns);
+    let stopped = false;
+    return Object.assign(io, {
+      watchWidth: () => ({ narrowest: () => narrowest, stop: () => void (stopped = true) }),
+      stopped: () => stopped,
+    });
+  }
+
+  it("refuses when the terminal got narrower while the plan was shown", async () => {
+    h = await setupHarness({ env: {} });
+    const r = await propose(h, { title: "Team lunch" });
+    const id = (r.structuredContent as { action_id: string }).action_id;
+    const io = watching(120, 60, last4(id));
+    expect(await approveAction(h.ctx, id, io)).toMatchObject({ ok: false, errorCode: "CONFIRMATION_MISMATCH" });
+    expect(getAction(h.db, id)!.status).toBe("planned");
+    expect(io.stopped()).toBe(true);
+  });
+  it("approves when the width did not shrink", async () => {
+    h = await setupHarness({ env: {} });
+    const r = await propose(h, { title: "Team lunch" });
+    const id = (r.structuredContent as { action_id: string }).action_id;
+    const io = watching(80, 80, last4(id));
+    expect(await approveAction(h.ctx, id, io)).toEqual({ ok: true });
+    expect(io.stopped()).toBe(true);
+  });
+});
+
+describe("pickColumns: the width the CLI lays out for (fourth review I1)", () => {
+  it("stdout's width when stdout is a terminal", () => {
+    expect(pickColumns({ isTTY: true, columns: 100 }, { isTTY: true, columns: 60 })).toBe(100);
+  });
+  it("stderr's width when stdout is piped but stderr is a terminal (deskhand pending | more)", () => {
+    expect(pickColumns({ isTTY: false }, { isTTY: true, columns: 60 })).toBe(60);
+  });
+  it("unknown when neither is a terminal or the width is not positive", () => {
+    expect(pickColumns({ isTTY: false }, { isTTY: false })).toBeUndefined();
+    expect(pickColumns({ isTTY: true, columns: 0 }, { isTTY: false })).toBeUndefined();
+  });
 });

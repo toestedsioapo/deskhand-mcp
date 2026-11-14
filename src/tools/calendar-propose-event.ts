@@ -12,7 +12,7 @@ export const calendarProposeEventInputSchema = z
   .object({
     title: z.string().min(1).max(200).refine(isPlainLine, {
       message:
-        "title must be one line of visible text: no control, invisible or blank filler characters, no line breaks or tabs, and single spaces only between words",
+        "title must be one line of visible text: no control, invisible or blank filler characters, no line breaks or tabs, single spaces only between words, not starting with a combining mark, at most 4 marks and 8 code points per character",
     }),
     start: z.iso.datetime({ offset: true }),
     end: z.iso.datetime({ offset: true }),
