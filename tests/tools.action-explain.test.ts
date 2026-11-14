@@ -81,7 +81,8 @@ describe("action_explain", () => {
     });
     const r = await h.client.callTool({ name: "action_explain", arguments: { action_id: "act_CAL" } });
     const diff = (r.structuredContent as { diff: string[] }).diff;
-    expect(diff).toContain("will email 1 attendees");
+    expect(diff).toContain("1 attendee");
+    expect(diff).toContain("will email 1 attendee");
   });
 
   it("diff is rendered in the server's time zone, with the event zone and every attendee", async () => {

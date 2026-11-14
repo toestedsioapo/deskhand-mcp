@@ -292,6 +292,14 @@ describe("the notification line states the stored sendUpdates value", () => {
     expect(last({ sendUpdates: "none", attendees: [] })).toBe("no attendee notifications (sendUpdates=none)");
   });
   it("all with attendees", () => expect(last({ sendUpdates: "all", attendees: THREE })).toBe("will email 3 attendees"));
+  it("one attendee is singular in the count and notification lines", () => {
+    const d = renderDiff(validPlan({}, { sendUpdates: "all", attendees: ["a@example.com"] }), "UTC");
+    expect(d).toContain("1 attendee");
+    expect(d).not.toContain("1 attendees");
+    expect(d.at(-1)).toBe("will email 1 attendee");
+    const zero = renderDiff(validPlan({}, { sendUpdates: "none", attendees: [] }), "UTC");
+    expect(zero).toContain("0 attendees");
+  });
   it("externalOnly with attendees does not claim that everyone is emailed", () => {
     expect(last({ sendUpdates: "externalOnly", attendees: THREE })).toBe(
       "will email the attendees outside your organisation, up to 3 (sendUpdates=externalOnly)",

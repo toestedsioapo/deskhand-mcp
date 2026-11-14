@@ -54,11 +54,16 @@ export const calendarCreateEventPlanSchema = z
 
 export type CalendarCreateEventPlan = z.infer<typeof calendarCreateEventPlanSchema>;
 
+/** `1 attendee`, otherwise `<n> attendees`. */
+function attendeeCount(n: number): string {
+  return `${n} ${n === 1 ? "attendee" : "attendees"}`;
+}
+
 /** Always names the stored `sendUpdates` value when it is not the plain case, so the line never says `none` for a plan that stores `all`. */
 function notificationLine(sendUpdates: "none" | "all" | "externalOnly", n: number): string {
   if (sendUpdates === "none") return "no attendee notifications (sendUpdates=none)";
   if (n === 0) return `no attendee notifications (sendUpdates=${sendUpdates}, no attendees)`;
-  if (sendUpdates === "all") return `will email ${n} attendees`;
+  if (sendUpdates === "all") return `will email ${attendeeCount(n)}`;
   return `will email the attendees outside your organisation, up to ${n} (sendUpdates=externalOnly)`;
 }
 
@@ -73,7 +78,7 @@ export const calendarCreateEvent: PlanKind<CalendarCreateEventPlan> = {
     if (e.timeZone !== undefined && e.timeZone !== viewerTimeZone) {
       lines.push(`event zone: ${formatLocalRange(e.start, e.end, e.timeZone)}`);
     }
-    lines.push(`utc: ${e.start} to ${e.end}`, `calendar: ${e.calendarId}`, `${n} attendees`);
+    lines.push(`utc: ${e.start} to ${e.end}`, `calendar: ${e.calendarId}`, attendeeCount(n));
     for (const a of e.attendees) lines.push(`  ${a}`);
     lines.push(notificationLine(e.sendUpdates, n));
     return lines;

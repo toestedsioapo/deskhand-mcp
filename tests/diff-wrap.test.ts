@@ -18,7 +18,7 @@ const cp = (...n: number[]): string => String.fromCodePoint(...n);
 
 /** A row that, at the start of a terminal row, would read as a real diff line or header. */
 const FIELD_ROW =
-  /^\s*(create event:|when:|event zone:|utc:|calendar:|\d+ attendees$|no attendee notifications|will email|plan hash|expires)/;
+  /^\s*(create event:|when:|event zone:|utc:|calendar:|\d+ attendees?$|no attendee notifications|will email|plan hash|expires)/;
 const FORGED = "no attendee notifications (sendUpdates=none)";
 
 describe("isPlainLine refuses characters that can render blank (third review I1)", () => {
@@ -177,7 +177,7 @@ describe("pending and approve: a wrapped title can never start a row that looks 
     await propose(h, { title: "Team lunch", attendees: ["ana@example.com"], send_updates: "all" });
     const out = await pendingText(h, 80);
     expect(out).toContain("\n    create event: Team lunch\n");
-    expect(out).toContain("\n      ana@example.com\n    will email 1 attendees\n");
+    expect(out).toContain("\n    1 attendee\n      ana@example.com\n    will email 1 attendee\n");
     // The only continuation row is the pending header's own (id, tool, expiry and hash exceed 80 columns).
     const continued = out.split("\n").filter((r) => r.startsWith(CONTINUATION));
     expect(continued).toEqual([expect.stringMatching(/^ {4}\| (expires |hash )/)]);

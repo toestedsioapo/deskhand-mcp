@@ -309,9 +309,9 @@ The human diff (`deskhand pending`, `deskhand approve`, `action_explain.diff`) i
 3. `event zone: <range in event.timeZone>`, only when `event.timeZone` is set and differs from the viewer zone
 4. `utc: <start> to <end>` (always)
 5. `calendar: <calendarId>`, verbatim
-6. `<n> attendees`
+6. `<n> attendees` (`1 attendee` when there is one)
 7. one line per attendee, in plan order: two spaces then the address, verbatim
-8. the notification line: `no attendee notifications (sendUpdates=none)`; `will email <n> attendees` (`all`); `will email the attendees outside your organisation, up to <n> (sendUpdates=externalOnly)`; or, for `all` / `externalOnly` with no attendees, `no attendee notifications (sendUpdates=<value>, no attendees)`. The stored `sendUpdates` value is always the one named.
+8. the notification line: `no attendee notifications (sendUpdates=none)`; `will email <n> attendees` (`all`; `will email 1 attendee` for one); `will email the attendees outside your organisation, up to <n> (sendUpdates=externalOnly)`; or, for `all` / `externalOnly` with no attendees, `no attendee notifications (sendUpdates=<value>, no attendees)`. The stored `sendUpdates` value is always the one named.
 
 No diff line ever contains a line break or a hidden character: the schema above refuses them, and `renderDiff` replaces any line break left in a line with a space as a backstop for future plan kinds. The CLI header (`id`, `tool`, `expires`, `hash`) is built from row columns, each flattened to one line; the hash prefix is printed only when `plan_hash` is 64 lowercase hex characters, else `(invalid)`.
 
