@@ -81,7 +81,8 @@ export function redactInput(value: unknown): unknown {
 }
 
 /** [pattern, replacement]. A replacement keeps a `key=` or `code=` prefix so the surrounding text still reads. */
-const SECRET_PATTERNS: readonly (readonly [RegExp, string])[] = [
+type Replacement = string | ((match: string, ...groups: string[]) => string);
+const SECRET_PATTERNS: readonly (readonly [RegExp, Replacement])[] = [
   // A secret named by its parameter or JSON key, in any of its usual spellings: `refresh_token=...`,
   // `"access_token":"..."`, `client_secret: ...`. The value is anything up to a separator.
   // Keys in snake or camel case (`refresh_token`, `refreshToken`, `client%5Fsecret`); separators plain or URL-encoded
@@ -98,18 +99,23 @@ const SECRET_PATTERNS: readonly (readonly [RegExp, string])[] = [
   // in pretty-printed JSON that was URL-encoded; rule 2's value never starts on encoded whitespace, so it cannot
   // re-scan rule 1's `%3A%20%22[redacted]` and eat the rest of the line.
   [
-    /(?<![A-Za-z])((?:access|refresh|id)(?:_|%(?:25)?5F)?token|client(?:_|%(?:25)?5F)?secret)((?:\\*["']|(?:%(?:25)?5C)*%(?:25)?22)?(?:\s|%(?:25)?(?:20|09|0A|0D)|\+)*(?:[=:]|%(?:25)?3D|%(?:25)?3A)(?:\s|%(?:25)?(?:20|09|0A|0D)|\+)*)(\\*"|\\*'|(?:%(?:25)?5C)*%(?:25)?22)(?:(?!\3)(?:\\+[^\n]|(?:%(?:25)?5C)+(?:%(?:25)?22)?|[^\n\\]))*(?:\3)?/gi,
-    "$1$2$3[redacted]$3",
+    /(?<![A-Za-z])((?:access|refresh|id)(?:_|%(?:25)?5F)?token|client(?:_|%(?:25)?5F)?secret)((?:\\*["']|(?:%(?:25)?5C)*%(?:25)?22)?(?:\s|%(?:25)?(?:20|09|0A|0D|2B)|\+)*(?:[=:]|%(?:25)?3D|%(?:25)?3A)(?:\s|%(?:25)?(?:20|09|0A|0D|2B)|\+)*)(\\*"|\\*'|(?:%(?:25)?5C)*%(?:25)?22)(?:(?!\3)(?:\\+[^\n]|(?:%(?:25)?5C)+(?:%(?:25)?22)?|[^\n\\]))*(?:\3)?/gi,
+    // An empty value (`"access_token":""`) is not a secret and stays as it is.
+    (m: string, key: string, sep: string, quote: string): string => {
+      const rest = m.slice(key.length + sep.length + quote.length);
+      const value = rest.endsWith(quote) ? rest.slice(0, rest.length - quote.length) : rest;
+      return value === "" ? m : `${key}${sep}${quote}[redacted]${quote}`;
+    },
   ],
   [
-    /(?<![A-Za-z])((?:access|refresh|id)(?:_|%(?:25)?5F)?token|client(?:_|%(?:25)?5F)?secret)((?:\\*["']|(?:%(?:25)?5C)*%(?:25)?22)?(?:\s|%(?:25)?(?:20|09|0A|0D)|\+)*(?:[=:]|%(?:25)?3D|%(?:25)?3A)(?:\s|%(?:25)?(?:20|09|0A|0D)|\+)*)(?!\\*["']|(?:%(?:25)?5C)*%(?:25)?22|%(?:25)?(?:20|09|0A|0D)|\+)[^\s&"',;}]+/gi,
+    /(?<![A-Za-z])((?:access|refresh|id)(?:_|%(?:25)?5F)?token|client(?:_|%(?:25)?5F)?secret)((?:\\*["']|(?:%(?:25)?5C)*%(?:25)?22)?(?:\s|%(?:25)?(?:20|09|0A|0D|2B)|\+)*(?:[=:]|%(?:25)?3D|%(?:25)?3A)(?:\s|%(?:25)?(?:20|09|0A|0D|2B)|\+)*)(?!\\*["']|(?:%(?:25)?5C)*%(?:25)?22|%(?:25)?(?:20|09|0A|0D|2B)|\+)[^\s&"',;}]+/gi,
     "$1$2[redacted]",
   ],
   // An OAuth authorization code (`code=4/0Aean...`, `"code":"4/0Aean..."`), plain, URL-encoded or JSON-escaped at any
   // depth. The match starts at the literal `code`: an optional quote prefix before it would be tried at every
   // position of a long backslash run (quadratic; the timing test covers it).
   [
-    /(?<![A-Za-z])(code(?:\\*["']|(?:%(?:25)?5C)*%(?:25)?22)?(?:\s|%(?:25)?(?:20|09|0A|0D)|\+)*(?:[=:]|%(?:25)?3D|%(?:25)?3A)(?:\s|%(?:25)?(?:20|09|0A|0D)|\+)*(?:\\*["']|(?:%(?:25)?5C)*%(?:25)?22)?)4(?:\/|%(?:25)?2F)[\w%.-]+/gi,
+    /(?<![A-Za-z])(code(?:\\*["']|(?:%(?:25)?5C)*%(?:25)?22)?(?:\s|%(?:25)?(?:20|09|0A|0D|2B)|\+)*(?:[=:]|%(?:25)?3D|%(?:25)?3A)(?:\s|%(?:25)?(?:20|09|0A|0D|2B)|\+)*(?:\\*["']|(?:%(?:25)?5C)*%(?:25)?22)?)4(?:\/|%(?:25)?2F)[\w%.-]+/gi,
     "$1[redacted]",
   ],
   [/Bearer\s+\S+/gi, "[redacted]"],
@@ -134,10 +140,48 @@ const SECRET_PATTERNS: readonly (readonly [RegExp, string])[] = [
  * URL-encoded separators (`%3D`, `%3A`, `%22`), also when the value is
  * URL-encoded (`%2F`, `%2E`, `%2D`, `Bearer%20`) or JSON-escaped (`\/`), and a
  * refresh token in a URL path. A quoted value is redacted up to its closing
- * quote. Surrounding words are kept.
+ * quote. Surrounding words are kept. Fails closed (Ruling 16): if a normalised
+ * copy of the result (see normaliseForCheck) still holds anything the patterns
+ * would redact, the result is SECRET_LIKE instead (docs/ledger-contract.md,
+ * "Free-text secret scrubbing").
  */
 export function scrubSecrets(text: string): string {
+  const out = applyPatterns(text);
+  // Fail closed (Ruling 16): if a normalised copy of the result still holds anything the patterns would redact, an
+  // encoding the patterns do not know hid a secret; return a fixed sentence instead of a partly scrubbed text.
+  const copy = normaliseForCheck(out);
+  return applyPatterns(copy) === copy ? out : SECRET_LIKE;
+}
+
+/** Returned by scrubSecrets when the text still looked like it held a secret after redaction. */
+export const SECRET_LIKE = "[redacted: text contained secret-like data]";
+
+function applyPatterns(text: string): string {
   let out = text;
-  for (const [p, r] of SECRET_PATTERNS) out = out.replace(p, r);
+  // Narrowed so each call picks the matching String.replace overload.
+  for (const [p, r] of SECRET_PATTERNS) out = typeof r === "string" ? out.replace(p, r) : out.replace(p, r);
   return out;
+}
+
+const PERCENT = /%([0-9A-Fa-f]{2})/g;
+
+/**
+ * The copy the fail-closed check runs on (never returned): percent-decoded repeatedly, at most 4 times, stopping
+ * when nothing changes (a malformed `%` stays as it is; each byte becomes one character, enough for matching);
+ * then `+` as a space; then a backslash run before a quote collapsed to the quote, `\/` to `/`, and JSON-escaped
+ * whitespace (`\n`, `\r`, `\t`) to a space. Every step is one linear pass.
+ */
+function normaliseForCheck(text: string): string {
+  let cur = text;
+  for (let i = 0; i < 4; i++) {
+    const next = cur.replace(PERCENT, (_m, hex: string) => String.fromCharCode(parseInt(hex, 16)));
+    if (next === cur) break;
+    cur = next;
+  }
+  // One match per backslash run, always (the next character is optional), so a long run never backtracks.
+  return cur.replace(/\+/g, " ").replace(/\\+([\s\S]?)/g, (run: string, next: string) => {
+    if (next === '"' || next === "'" || next === "/") return next;
+    if (next === "n" || next === "r" || next === "t") return " ";
+    return run;
+  });
 }

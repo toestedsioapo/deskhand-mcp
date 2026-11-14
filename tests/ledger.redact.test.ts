@@ -273,6 +273,8 @@ describe("scrubSecrets", () => {
     ["double encodeURIComponent", (s: string) => encodeURIComponent(encodeURIComponent(s))],
     ["encodeURI", (s: string) => encodeURI(s)],
     ["URLSearchParams", (s: string) => new URLSearchParams({ j: s }).toString()],
+    ["URLSearchParams then encodeURIComponent", (s: string) => encodeURIComponent(new URLSearchParams({ j: s }).toString())],
+    ["URLSearchParams twice", (s: string) => new URLSearchParams({ k: new URLSearchParams({ j: s }).toString() }).toString()],
   ] as const) {
     for (const depth of [1, 2, 3]) {
       it(`scrubs pretty-printed JSON through ${label} at depth ${depth}; other values kept`, () => {
@@ -331,5 +333,118 @@ describe("scrubSecrets", () => {
 
   it("leaves ordinary text and URLs alone", () => {
     expect(scrubSecrets("HTTP 403 at http://host/1//x? no")).toBe("HTTP 403 at http://host/1//x? no");
+  });
+});
+
+/**
+ * Ruling 16: after the pattern pass, scrubSecrets checks a normalised copy of its result (percent-decoded up to 4
+ * times, `+` as a space, backslash runs before quotes and `\/` collapsed). If that copy still holds a secret, the
+ * whole text becomes a fixed sentence.
+ */
+describe("scrubSecrets fails closed", () => {
+  const FAIL = "[redacted: text contained secret-like data]";
+
+  it("returns the fixed sentence when an encoding the patterns miss still holds a secret", () => {
+    for (const t of [
+      "x ya29%25252Ea0SEKRITabc end", // triple-encoded access token
+      "x 1%25252F%25252F0gSEKRITabcdef end", // triple-encoded refresh token
+      "x GOCSPX%25252DSEKRIT end",
+      "x access_token%25252522%2525253A%25252522SEKRIT%25252522 end", // key and value four encodings deep
+      "x %2561ccess_token=SEKRIT end", // a letter of the key itself encoded
+    ]) {
+      expect(scrubSecrets(t), t).toBe(FAIL);
+    }
+  });
+
+  it("keeps the pattern pass's output when the normalised copy is clean", () => {
+    expect(scrubSecrets("401 Bearer ya29.A0AbC refresh 1//0gXyZ end")).toBe("401 [redacted] refresh [redacted] end");
+    expect(scrubSecrets('q {"access_token":"abc","x":"KEEPME"} end')).toBe('q {"access_token":"[redacted]","x":"KEEPME"} end');
+  });
+
+  it("an empty secret value is not a secret (no fail-closed for it)", () => {
+    expect(scrubSecrets('q {"access_token":"","x":"KEEPME"} end')).toBe('q {"access_token":"","x":"KEEPME"} end');
+    expect(scrubSecrets("q access_token=&x=1 end")).toBe("q access_token=&x=1 end");
+  });
+
+  it("ordinary prose and URLs with + and %20 and no secret come back unchanged", () => {
+    for (const t of [
+      "HTTP 503 backendError at https://www.googleapis.com/calendar/v3/calendars/primary/events?q=a+b%20c&maxResults=50",
+      "search?q=access+token+docs&lang=en",
+      "the code%20is%204%2F5 and 100%25 sure",
+      "a+b=c, 50% off, %zz and %2 are malformed",
+      'He said "hi" and C:\\temp\\new is a path, a\\/b',
+      "Error code: 4 retries left",
+      "token refresh failed",
+      "client secret file is missing",
+    ]) {
+      expect(scrubSecrets(t), t).toBe(t);
+    }
+  });
+
+  // Fuzz: one secret, many encodings. The secret's marker must never survive.
+  const secrets: [string, unknown][] = [
+    ["access_token", { access_token: "opaq'SEKRIT1", x: "KEEPME" }],
+    ["refreshToken", { refreshToken: "a,b&cSEKRIT2", x: "KEEPME" }],
+    ["clientSecret", { clientSecret: 'q"x\'SEKRIT3' }],
+    ["id_token", { id_token: "plainSEKRIT4" }],
+    ["code", { code: "4/0AeanSEKRIT5" }],
+    ["ya29", { note: "ya29.a0SEKRIT6" }],
+    ["1//", { note: "1//0gSEKRIT7abcdef" }],
+    ["GOCSPX", { note: "GOCSPX-SEKRIT8" }],
+  ];
+  const nests: [string, (v: unknown) => string][] = [];
+  for (const depth of [1, 2, 3]) {
+    for (const pretty of [false, true]) {
+      nests.push([
+        `json${depth}${pretty ? "-pretty" : ""}`,
+        (v) => {
+          let s = pretty ? JSON.stringify(v, null, 2) : JSON.stringify(v);
+          for (let i = 1; i < depth; i++) s = JSON.stringify(s);
+          return s;
+        },
+      ]);
+    }
+  }
+  const encoders: [string, (s: string) => string][] = [
+    ["raw", (s) => s],
+    ["encodeURIComponent", (s) => encodeURIComponent(s)],
+    ["encodeURIComponent x2", (s) => encodeURIComponent(encodeURIComponent(s))],
+    ["encodeURIComponent x3", (s) => encodeURIComponent(encodeURIComponent(encodeURIComponent(s)))],
+    ["encodeURI", (s) => encodeURI(s)],
+    ["URLSearchParams", (s) => new URLSearchParams({ j: s }).toString()],
+    ["URLSearchParams then encodeURIComponent", (s) => encodeURIComponent(new URLSearchParams({ j: s }).toString())],
+    ["URLSearchParams x2", (s) => new URLSearchParams({ k: new URLSearchParams({ j: s }).toString() }).toString()],
+  ];
+  it(`never lets a secret survive: ${secrets.length} secrets x ${nests.length} JSON shapes x ${encoders.length} encoders`, () => {
+    const leaks: string[] = [];
+    for (const [sName, obj] of secrets) {
+      const marker = /SEKRIT\d/.exec(JSON.stringify(obj))![0];
+      for (const [nName, nest] of nests) {
+        for (const [eName, enc] of encoders) {
+          const text = `pre ${enc(nest(obj))} post`;
+          if (scrubSecrets(text).includes(marker)) leaks.push(`${sName} / ${nName} / ${eName}`);
+        }
+      }
+    }
+    expect(leaks).toEqual([]);
+  });
+
+  it("stays linear on ~100 KB inputs, including long %25 chains", () => {
+    const inputs = [
+      "%25".repeat(33_000),
+      "x " + "%2525".repeat(20_000) + "2E",
+      "ya29" + "%25".repeat(33_000) + "2E",
+      "access_token%3A" + "%2B".repeat(33_000),
+      "access_token%253A" + "%2B".repeat(33_000),
+      "+".repeat(100_000),
+      "\\".repeat(100_000) + '"',
+      "%5C".repeat(33_000) + "%22",
+      "a%20".repeat(25_000),
+    ];
+    for (const s of inputs) {
+      const t = performance.now();
+      scrubSecrets(s);
+      expect(performance.now() - t, `${s.slice(0, 20)}... (${s.length})`).toBeLessThan(50);
+    }
   });
 });
