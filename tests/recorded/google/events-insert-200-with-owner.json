@@ -1,0 +1,44 @@
+{
+  "request": {
+    "method": "POST",
+    "url": "https://www.googleapis.com/calendar/v3/calendars/primary/events?sendUpdates=none"
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "kind": "calendar#event",
+      "id": "088afa7571116bd6a8f7b781318e85bd9a37eed81b5140bfe630e9f752558fa8",
+      "etag": "\"3100000000000010\"",
+      "status": "confirmed",
+      "summary": "Sync",
+      "organizer": {
+        "email": "owner@example.com",
+        "self": true
+      },
+      "start": {
+        "dateTime": "2026-11-12T10:00:00Z",
+        "timeZone": "UTC"
+      },
+      "end": {
+        "dateTime": "2026-11-12T10:30:00Z",
+        "timeZone": "UTC"
+      },
+      "attendees": [
+        {
+          "email": "owner@example.com",
+          "self": true,
+          "organizer": true,
+          "responseStatus": "accepted"
+        },
+        {
+          "email": "a@example.com",
+          "responseStatus": "needsAction"
+        },
+        {
+          "email": "b@example.com",
+          "responseStatus": "needsAction"
+        }
+      ]
+    }
+  }
+}

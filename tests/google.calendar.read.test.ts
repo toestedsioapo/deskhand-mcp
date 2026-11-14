@@ -83,6 +83,26 @@ describe("listEvents", () => {
     ]);
   });
 
+  it("drops the calendar owner Google adds to attendees (self: true); other attendees stay", async () => {
+    const item = {
+      id: "evt-1",
+      etag: '"1"',
+      status: "confirmed",
+      summary: "Sync",
+      start: { dateTime: "2026-11-12T10:00:00Z" },
+      end: { dateTime: "2026-11-12T10:30:00Z" },
+      attendees: [
+        { email: "owner@example.com", self: true, organizer: true, responseStatus: "accepted" },
+        { email: "ana@example.com", self: false },
+        { email: "ben@example.com", organizer: true },
+      ],
+    };
+    const r = await createGoogleCalendarProvider(deps(stub({ items: [item] }))).listEvents("primary", RANGE, 5);
+    expect(r.events[0]!.attendees).toEqual(["ana@example.com", "ben@example.com"]);
+    const g = await createGoogleCalendarProvider(deps(stub(item))).getEvent("primary", "evt-1");
+    expect(g!.attendees).toEqual(["ana@example.com", "ben@example.com"]);
+  });
+
   it("truncated is true when nextPageToken is present", async () => {
     const r = await provider(["events-list-truncated"]).listEvents("primary", RANGE, 2);
     expect(r.truncated).toBe(true);

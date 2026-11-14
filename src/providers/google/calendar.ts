@@ -5,7 +5,8 @@ import { googleRequest, type GoogleHttpDeps, type GoogleResponse } from "./http.
 
 const PROVIDER = "google calendar";
 const BASE = "https://www.googleapis.com/calendar/v3";
-const LIST_FIELDS = "items(id,etag,status,summary,start,end,attendees/email),nextPageToken";
+// `self` is requested so the calendar owner, whom Google adds to `attendees`, can be dropped (see mapEvent).
+const LIST_FIELDS = "items(id,etag,status,summary,start,end,attendees(email,self)),nextPageToken";
 const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
 const RFC3339 = /^\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}(\.\d+)?([Zz]|[+-]\d{2}:\d{2})$/;
 
@@ -50,8 +51,11 @@ function mapEvent(op: string, item: unknown): EventRef | null {
   if (!isObj(item)) throw unreadable(op, "unreadable event");
   if (item.status === "cancelled") return null;
   if (typeof item.id !== "string" || typeof item.etag !== "string") throw unreadable(op, "unreadable event");
+  // Google lists the calendar owner among the attendees (`self: true`) of an event that has attendees, on insert,
+  // get and list. The owner is not one of the plan's attendees, so it is dropped here: a fresh insert must never
+  // look like it differs from the approved plan.
   const attendees = Array.isArray(item.attendees)
-    ? item.attendees.flatMap((a) => (isObj(a) && typeof a.email === "string" ? [a.email] : []))
+    ? item.attendees.flatMap((a) => (isObj(a) && typeof a.email === "string" && a.self !== true ? [a.email] : []))
     : [];
   return {
     id: item.id,

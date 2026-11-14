@@ -276,6 +276,30 @@ describe("apply with the Google provider", () => {
     expect(replay!.seen.filter((q) => q.method === "POST")).toHaveLength(0);
   });
 
+  it("a fresh insert whose response adds the calendar owner (self: true) to attendees -> applied, not 'differs'", async () => {
+    const { ctx, id } = setup(["events-get-key-404", "freebusy-empty", "events-insert-200-with-owner"]);
+    const r = await applyAction(ctx, id);
+    expect(r).toMatchObject({ ok: true, replayed: false, result: { id: KEY, attendees: ["a@example.com", "b@example.com"] } });
+    expect(getAction(db, id)!.status).toBe("applied");
+  });
+
+  it("insert 409 then a GET that adds the calendar owner to attendees -> applied", async () => {
+    const { ctx, id } = setup(["events-get-key-404", "freebusy-empty", "events-insert-409", "events-get-key-200-with-owner"]);
+    expect(await applyAction(ctx, id)).toMatchObject({ ok: true, result: { id: KEY } });
+    expect(getAction(db, id)!.status).toBe("applied");
+  });
+
+  it("the recovery lookup finds our event with the owner added -> recovered", async () => {
+    const { ctx, id } = setup(["events-get-key-200-with-owner"]);
+    expect(await applyAction(ctx, id)).toMatchObject({ ok: true, replayed: true, result: { id: KEY } });
+  });
+
+  it("a found event with an extra attendee who is not the owner still differs", async () => {
+    const { ctx, id } = setup(["events-get-key-200-extra-attendee"]);
+    expect(await applyAction(ctx, id)).toEqual({ ok: false, errorCode: "STALE_PLAN", message: DIFFERS });
+    expect(getAction(db, id)!.status).toBe("failed");
+  });
+
   it("an equivalent event (same instants in another offset, attendees in another case and order) is recovered", async () => {
     const { ctx, id } = setup(["events-get-key-200-equivalent"]);
     expect(await applyAction(ctx, id)).toMatchObject({ ok: true, replayed: true, result: { id: KEY } });
