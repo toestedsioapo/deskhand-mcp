@@ -55,6 +55,26 @@ describe("safety structure", () => {
     expect(matching(/\bcreateEvent\b/, (p) => !p.startsWith("src/providers/"))).toEqual(["src/approval/plan-kinds.ts"]);
   });
 
+  it("the Google adapter's events insert (a literal `method: \"POST\"` with the write scope) lives only inside createEvent", () => {
+    const google = FILES.filter((f) => f.path.startsWith("src/providers/google/"));
+    // Outside calendar.ts: no literal POST except the OAuth token endpoint, and the write scope is only compared, never requested.
+    expect(google.filter((f) => /method:\s*["']POST["']/.test(f.text)).map((f) => f.path).sort()).toEqual([
+      "src/providers/google/calendar.ts",
+      "src/providers/google/oauth.ts",
+    ]);
+    expect(google.filter((f) => /requiredScope:\s*SCOPE_CALENDAR_WRITE/.test(f.text)).map((f) => f.path)).toEqual([
+      "src/providers/google/calendar.ts",
+    ]);
+    const cal = google.find((f) => f.path === "src/providers/google/calendar.ts")!.text;
+    const start = cal.indexOf("async createEvent(");
+    expect(start).toBeGreaterThan(0);
+    const end = cal.indexOf("\n    },\n", start);
+    const outside = cal.slice(0, start) + cal.slice(end);
+    expect(outside).not.toMatch(/method:\s*["']POST["']/);
+    expect(outside).not.toMatch(/requiredScope:\s*SCOPE_CALENDAR_WRITE/);
+    expect(cal.slice(start, end)).toMatch(/method:\s*["']POST["']/);
+  });
+
   it("createPlan is imported and mentioned only by the plan tools listed in PLAN_TOOLS (outside src/approval)", () => {
     const outside = (p: string) => !p.startsWith("src/approval/");
     expect(matching(/\bimport\s*\{[^}]*\bcreatePlan\b[^}]*\}\s*from/, outside)).toEqual(PLAN_TOOLS);

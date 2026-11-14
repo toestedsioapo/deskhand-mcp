@@ -1,0 +1,22 @@
+{
+  "request": {
+    "method": "GET",
+    "url": "https://www.googleapis.com/calendar/v3/calendars/primary/events/088afa7571116bd6a8f7b781318e85bd9a37eed81b5140bfe630e9f752558fa8"
+  },
+  "response": {
+    "status": 404,
+    "body": {
+      "error": {
+        "code": 404,
+        "message": "Not Found",
+        "errors": [
+          {
+            "message": "Not Found",
+            "domain": "global",
+            "reason": "notFound"
+          }
+        ]
+      }
+    }
+  }
+}

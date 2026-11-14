@@ -1,6 +1,6 @@
-import { SCOPE_CALENDAR_READ } from "../../config/scopes.js";
+import { SCOPE_CALENDAR_READ, SCOPE_CALENDAR_WRITE } from "../../config/scopes.js";
 import { ProviderError } from "../errors.js";
-import type { CalendarProvider, EventRef, TimeRange } from "../types.js";
+import type { CalendarProvider, EventRef, NewCalendarEvent, TimeRange } from "../types.js";
 import { googleRequest, type GoogleHttpDeps, type GoogleResponse } from "./http.js";
 
 const PROVIDER = "google calendar";
@@ -16,6 +16,8 @@ function validDate(s: string): boolean {
   const t = new Date(Date.UTC(y, m - 1, d));
   return t.getUTCFullYear() === y && t.getUTCMonth() === m - 1 && t.getUTCDate() === d;
 }
+/** Google event ids: base32hex characters, 5 to 1024 of them. */
+const EVENT_ID = /^[a-v0-9]{5,1024}$/;
 const REASON = /^[A-Za-z]{1,40}$/;
 
 type Obj = Record<string, unknown>;
@@ -132,9 +134,35 @@ export function createGoogleCalendarProvider(deps: GoogleHttpDeps): CalendarProv
       return { events, truncated: typeof json.nextPageToken === "string" && json.nextPageToken !== "" };
     },
 
-    // Replaced in Task 6.
-    createEvent() {
-      return Promise.reject(new ProviderError(PROVIDER, "events.insert", { phrase: "not implemented" }));
+    async createEvent(event: NewCalendarEvent, idempotencyKey: string) {
+      const op = "events.insert";
+      if (!EVENT_ID.test(idempotencyKey)) throw unreadable(op, "invalid event id");
+      const url = `${cal(event.calendarId)}/events?${new URLSearchParams({ sendUpdates: event.sendUpdates }).toString()}`;
+      const zone = event.timeZone === undefined ? {} : { timeZone: event.timeZone };
+      const res = await googleRequest(deps, op, {
+        method: "POST",
+        url,
+        body: {
+          id: idempotencyKey,
+          summary: event.title,
+          start: { dateTime: event.start, ...zone },
+          end: { dateTime: event.end, ...zone },
+          attendees: event.attendees.map((email) => ({ email })),
+        },
+        requiredScope: SCOPE_CALENDAR_WRITE,
+      });
+      if (res.status !== 409) {
+        const created = mapEvent(op, body(op, res));
+        if (created === null) throw unreadable(op, "unreadable event");
+        return created;
+      }
+      // 409: the id exists, so an earlier attempt created it. Never insert again, never use a new id.
+      const getOp = "events.get";
+      const got = await read(getOp, "GET", `${cal(event.calendarId)}/events/${encodeURIComponent(idempotencyKey)}`);
+      if (got.status === 404) throw unreadable(getOp, "id conflict but the event is not readable");
+      const existing = mapEvent(getOp, body(getOp, got));
+      if (existing === null) throw unreadable(getOp, "an event with this action's id was created and later deleted");
+      return existing;
     },
   };
 }
