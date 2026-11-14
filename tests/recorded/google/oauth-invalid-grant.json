@@ -1,0 +1,13 @@
+{
+  "request": {
+    "method": "POST",
+    "url": "https://oauth2.googleapis.com/token"
+  },
+  "response": {
+    "status": 400,
+    "body": {
+      "error": "invalid_grant",
+      "error_description": "Token has been expired or revoked."
+    }
+  }
+}
