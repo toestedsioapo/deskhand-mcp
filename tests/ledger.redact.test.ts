@@ -262,8 +262,50 @@ describe("scrubSecrets", () => {
     }
   }
 
+  // Pretty-printed JSON, URL-encoded: the whitespace around a separator arrives as `%20`, `+`, `%0A` (or `%2520`...).
+  const nestPretty = (v: unknown, depth: number): string => {
+    let s = JSON.stringify(v, null, 2);
+    for (let i = 1; i < depth; i++) s = JSON.stringify(s);
+    return s;
+  };
+  for (const [label, enc] of [
+    ["encodeURIComponent", (s: string) => encodeURIComponent(s)],
+    ["double encodeURIComponent", (s: string) => encodeURIComponent(encodeURIComponent(s))],
+    ["encodeURI", (s: string) => encodeURI(s)],
+    ["URLSearchParams", (s: string) => new URLSearchParams({ j: s }).toString()],
+  ] as const) {
+    for (const depth of [1, 2, 3]) {
+      it(`scrubs pretty-printed JSON through ${label} at depth ${depth}; other values kept`, () => {
+        const cases: [unknown, string, boolean][] = [
+          [{ access_token: "it'sSEKRIT", x: "KEEPME" }, "SEKRIT", true],
+          [{ refreshToken: "a,b&cSEKRIT", x: "KEEPME" }, "SEKRIT", true],
+          [{ clientSecret: "q\"x'SEKRIT", x: "KEEPME" }, "SEKRIT", true],
+          [{ code: "4/0AeanCODEXQ" }, "CODEXQ", false],
+        ];
+        for (const [obj, gone, keyed] of cases) {
+          const text = `q=${enc(nestPretty(obj, depth))} end`;
+          const out = scrubSecrets(text);
+          expect(out, text).not.toContain(gone);
+          expect(out.endsWith(" end")).toBe(true);
+          if (keyed) expect(out, text).toContain("KEEPME");
+        }
+      });
+    }
+  }
+
+  it("prose around the word code is left alone", () => {
+    for (const t of ["Error code: 4 retries left", "zip code + 4/5 digits", "the code%20is%204%2F5", "code=%204 apples"]) {
+      expect(scrubSecrets(t)).toBe(t);
+    }
+  });
+
   it("stays linear on long backslash and escape runs inside a quoted value", () => {
     const inputs = [
+      "access_token%3A" + "%20".repeat(33_000),
+      "code%3A" + "%20".repeat(33_000),
+      "access_token%3A" + "+".repeat(100_000),
+      "access_token%253A" + "%2520".repeat(20_000),
+      "access_token%22" + "%0A".repeat(33_000),
       "access_token%3A" + "%5C".repeat(33_000),
       "code%3A" + "%5C".repeat(33_000),
       "access_token%253A" + "%255C".repeat(20_000),
