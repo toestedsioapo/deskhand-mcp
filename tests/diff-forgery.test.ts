@@ -7,7 +7,7 @@ import { getAction } from "../src/ledger/actions.js";
 import { planHash } from "../src/ledger/canonical.js";
 import { LedgerDb } from "../src/ledger/db.js";
 import { last4 } from "../src/ledger/ids.js";
-import { isPlainLine, oneLine, stripControl } from "../src/util/sanitize.js";
+import { isPlainLine, layoutRow, oneLine, stripControl } from "../src/util/sanitize.js";
 import { setupHarness } from "./helpers/harness.js";
 import { validPlan } from "./helpers/seed.js";
 
@@ -195,10 +195,12 @@ describe("calendar_propose_event: the title a human approves is the title that i
       const stored = (getAction(hh.db, out.action_id)!.plan_json as unknown as { event: { title: string } }).event.title;
       expect(stored).toBe(title);
       expect(out.diff[0]).toBe(`create event: ${stored}`);
-      expect(await pendingText(hh)).toContain(`    create event: ${stored}\n`);
+      // Printed verbatim; a long title is wrapped by the CLI with continuation markers (third review).
+      const rows = `${layoutRow("    ", `create event: ${stored}`).join("\n")}\n`;
+      expect(await pendingText(hh)).toContain(rows);
       const io = scripted([last4(out.action_id)]);
       expect(await approveAction(hh.ctx, out.action_id, io)).toEqual({ ok: true });
-      expect(io.outText()).toContain(`    create event: ${stored}\n`);
+      expect(io.outText()).toContain(rows);
     }
   });
 });

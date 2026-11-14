@@ -3,7 +3,7 @@ import { listPending } from "../approval/plans.js";
 import { renderDiff } from "../approval/plan-kinds.js";
 import { appendEvent } from "../ledger/events.js";
 import { isoNow } from "../ledger/ids.js";
-import { oneLine, stripControl, type CliIo } from "./io.js";
+import { oneLine, writeRows, type CliIo } from "./io.js";
 
 /** `deskhand pending`: planned actions, oldest first. Writes one `cli_command` row. */
 export function pendingCommand(ctx: AppContext, io: CliIo): number {
@@ -15,14 +15,15 @@ export function pendingCommand(ctx: AppContext, io: CliIo): number {
     const expired = !(nowMs < Date.parse(a.expires_at));
     // Every column is a database value: each is flattened to one line, and the hash is shown only if it is one.
     const hash = /^[0-9a-f]{64}$/.test(a.plan_hash) ? a.plan_hash.slice(0, 8) : "(invalid)";
-    io.out(
-      `${oneLine(a.id, 64)}  ${oneLine(a.tool, 80)}  expires ${oneLine(a.expires_at, 40)}${expired ? " EXPIRED" : ""}  hash ${hash}\n`,
+    writeRows(
+      io,
+      "",
+      `${oneLine(a.id, 64)}  ${oneLine(a.tool, 80)}  expires ${oneLine(a.expires_at, 40)}${expired ? " EXPIRED" : ""}  hash ${hash}`,
     );
     // A plan_json that does not parse is shown, never thrown on: the listing must still work.
     const diff = a.plan ? renderDiff(a.plan.value, ctx.config.timeZone) : ["(invalid plan)"];
-    for (const line of diff) {
-      for (const part of stripControl(line).split("\n")) io.out(`    ${part}\n`);
-    }
+    // The CLI wraps long values itself (continuation marker), so terminal wrapping cannot forge a line.
+    for (const line of diff) writeRows(io, "    ", line);
   }
   appendEvent(ctx.db, {
     ts: isoNow(ctx.clock),

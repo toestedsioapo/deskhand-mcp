@@ -2,7 +2,7 @@ import type { CliIo } from "../util/sanitize.js";
 
 // The sanitisers and the CliIo shape live in src/util/sanitize.ts (so
 // src/approval need not import from src/cli/); re-exported for CLI callers.
-export { oneLine, stripControl, type CliIo } from "../util/sanitize.js";
+export { oneLine, stripControl, writeRows, type CliIo } from "../util/sanitize.js";
 
 /**
  * The process's real streams. The TTY flags are read from the streams
@@ -19,6 +19,7 @@ export function realCliIo(): CliIo {
     stdoutIsTTY,
     execArgv: process.execArgv,
     nodeOptions: process.env["NODE_OPTIONS"] ?? "",
+    ...(stdoutIsTTY && process.stdout.columns > 0 ? { columns: process.stdout.columns } : {}),
     async readLine(prompt) {
       if (!stdinIsTTY || !stdoutIsTTY) throw new Error("refusing to read: stdin and stdout must both be a TTY");
       const { createInterface } = await import("node:readline/promises");

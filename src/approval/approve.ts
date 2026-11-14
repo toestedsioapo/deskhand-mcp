@@ -1,7 +1,7 @@
 import type { AppContext } from "../app-context.js";
-import { oneLine, stripControl, type CliIo } from "../util/sanitize.js";
+import { oneLine, writeRows, type CliIo } from "../util/sanitize.js";
 import { getAction } from "../ledger/actions.js";
-import { hashPrefix, planHash } from "../ledger/canonical.js";
+import { canonicalJson, hashPrefix, planHash } from "../ledger/canonical.js";
 import type { ActionStatus, ErrorCode, RejectionMethod } from "../ledger/contract.js";
 import { appendEvent } from "../ledger/events.js";
 import { isoNow, last4 } from "../ledger/ids.js";
@@ -64,7 +64,9 @@ function storedPlanValid(planJson: string): boolean {
   }
   const k = typeof plan === "object" && plan !== null ? (plan as { kind?: unknown }).kind : undefined;
   const pk = typeof k === "string" ? getPlanKind(k) : undefined;
-  return pk !== undefined && pk.schema.safeParse(plan).success;
+  // plan_json must be exactly the canonical form that was hashed: duplicate keys or other spellings would let the
+  // ledger's readers (SQLite json_extract) see a different plan from the one shown and applied.
+  return pk !== undefined && pk.schema.safeParse(plan).success && canonicalJson(plan) === planJson;
 }
 
 /** INTERNAL is outcome `error`; every approve-specific refusal code is `rejected` (ledger-contract.md). */
@@ -185,10 +187,9 @@ export async function approveAction(ctx: AppContext, actionId: string, io: CliIo
 
   // 7. Show exactly what is being approved (sanitised), then read the typed last 4.
   const hash = recomputeHash(initial.plan_json)!; // equals plan_hash: checked in step 5
-  io.out(`Approve ${oneLine(initial.id, 64)} (${oneLine(initial.tool, 80)})\n`);
-  for (const line of renderDiff(JSON.parse(initial.plan_json) as unknown, ctx.config.timeZone)) {
-    for (const part of stripControl(line).split("\n")) io.out(`    ${part}\n`);
-  }
+  writeRows(io, "", `Approve ${oneLine(initial.id, 64)} (${oneLine(initial.tool, 80)})`);
+  // The CLI wraps long values itself (continuation marker), so terminal wrapping cannot forge a line.
+  for (const line of renderDiff(JSON.parse(initial.plan_json) as unknown, ctx.config.timeZone)) writeRows(io, "    ", line);
   io.out(`plan hash ${hashPrefix(hash)}\n`);
   io.out(`expires   ${oneLine(initial.expires_at, 40)}\n`);
   let typed: string;

@@ -20,7 +20,10 @@ export interface PlanKind<P> {
   execute(plan: P, idempotencyKey: string, provider: CalendarProvider): Promise<EventRef>;
 }
 
-const instant = z.iso.datetime();
+// Exactly the form the plan tools store (Date.toISOString of a validated input): UTC, milliseconds, Z.
+const instant = z.iso
+  .datetime()
+  .regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/, { message: "must be a UTC instant with milliseconds" });
 
 const newEventSchema = z
   .object({
@@ -29,10 +32,11 @@ const newEventSchema = z
     title: z.string().min(1).max(200).refine(isPlainLine, { message: "must be one line of visible text" }),
     start: instant,
     end: instant,
-    attendees: z.array(z.string().max(254).regex(VISIBLE_ASCII)).max(50),
+    // Same rule as the tool input: an address, not any visible text.
+    attendees: z.array(z.email().max(254).regex(VISIBLE_ASCII)).max(50),
     sendUpdates: z.enum(["none", "all", "externalOnly"]),
     calendarId: z.string().max(256).regex(VISIBLE_ASCII),
-    timeZone: z.string().refine(isIanaTimeZone, { message: "must be an IANA time zone name" }).optional(),
+    timeZone: z.string().max(64).refine(isIanaTimeZone, { message: "must be an IANA time zone name" }).optional(),
   })
   .strict()
   .refine((e) => Date.parse(e.end) > Date.parse(e.start), { message: "end must be after start", path: ["end"] });

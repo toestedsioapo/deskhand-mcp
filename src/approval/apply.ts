@@ -182,7 +182,13 @@ export async function applyAction(ctx: AppContext, actionId: string): Promise<Ap
   } catch {
     hash = undefined;
   }
-  if (hash === undefined || hash !== row.plan_hash || hash !== row.approved_plan_hash) {
+  // plan_json must also be exactly the canonical text that was hashed (no duplicate keys or other spellings).
+  if (
+    hash === undefined ||
+    hash !== row.plan_hash ||
+    hash !== row.approved_plan_hash ||
+    canonicalJson(plan) !== row.plan_json
+  ) {
     return fail(ctx, actionId, "PLAN_MODIFIED", "The plan changed after approval; re-plan and approve again.");
   }
   const kindName = (plan as { kind?: unknown }).kind;
