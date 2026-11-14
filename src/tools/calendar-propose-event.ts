@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { AppContext } from "../app-context.js";
 import { renderDiff, type CalendarCreateEventPlan } from "../approval/plan-kinds.js";
 import { createPlan } from "../approval/plans.js";
-import { isIanaTimeZone } from "../util/local-time.js";
+import { canonicalTimeZone } from "../util/local-time.js";
 import { isPlainLine } from "../util/sanitize.js";
 import { calendarIdSchema } from "./calendar-id.js";
 import { requireProvider } from "./provider-guard.js";
@@ -47,7 +47,8 @@ export async function calendarProposeEventHandler(
   const provider = requireProvider(ctx);
   if ("isError" in provider) return provider;
 
-  if (input.time_zone !== undefined && !isIanaTimeZone(input.time_zone)) {
+  const eventZone = input.time_zone === undefined ? ctx.config.timeZone : canonicalTimeZone(input.time_zone);
+  if (eventZone === null) {
     return toolError("INVALID_INPUT", `time_zone must be an IANA zone name such as "Europe/Berlin", got "${input.time_zone}".`);
   }
   const start = new Date(input.start);
@@ -73,8 +74,8 @@ export async function calendarProposeEventHandler(
       attendees: input.attendees,
       sendUpdates: input.send_updates,
       calendarId: input.calendar_id,
-      // Resolved at plan time (hashed): the input, else the server's zone. The Google request needs it.
-      timeZone: input.time_zone ?? ctx.config.timeZone,
+      // Resolved at plan time (hashed) and canonical: the input, else the server's zone. The Google request needs it.
+      timeZone: eventZone,
     },
     observed: { slotFree: true, etags: {} },
   };

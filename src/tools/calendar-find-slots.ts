@@ -5,7 +5,7 @@ import { requireProvider } from "./provider-guard.js";
 import { toolError, toolOk, type ToolErrorResult, type ToolOkResult } from "./result.js";
 import { loadOwnRules } from "../config/own-rules.js";
 import { findSlots, partyRulesSchema, type PartyRules, type Slot } from "../tempo/index.js";
-import { isIanaTimeZone } from "../util/local-time.js";
+import { canonicalTimeZone } from "../util/local-time.js";
 
 const clockTime = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/);
 
@@ -58,9 +58,9 @@ export async function calendarFindSlotsHandler(
   const provider = requireProvider(ctx);
   if ("isError" in provider) return provider;
 
-  const timeZone = input.time_zone ?? ctx.config.timeZone;
-  if (!isIanaTimeZone(timeZone)) {
-    return toolError("INVALID_INPUT", `time_zone must be an IANA zone name such as "Europe/Berlin", got "${timeZone}".`);
+  const timeZone = input.time_zone === undefined ? ctx.config.timeZone : canonicalTimeZone(input.time_zone);
+  if (timeZone === null) {
+    return toolError("INVALID_INPUT", `time_zone must be an IANA zone name such as "Europe/Berlin", got "${input.time_zone}".`);
   }
 
   let own: PartyRules;

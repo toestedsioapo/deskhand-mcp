@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { isIanaTimeZone } from "../util/local-time.js";
+import { canonicalTimeZone } from "../util/local-time.js";
 import { resolvePaths, type DataPaths } from "./paths.js";
 
 export interface Config {
@@ -64,17 +64,19 @@ function parseProvider(raw: string | undefined): "fixture" | null {
  */
 export function resolveTimeZone(raw: string | undefined, systemZone: string): string {
   if (raw === undefined) {
-    if (!isIanaTimeZone(systemZone)) {
+    const system = canonicalTimeZone(systemZone);
+    if (system === null) {
       throw new ConfigError(
         `the system time zone "${systemZone}" is not an IANA name; set DESKHAND_TIMEZONE to one such as "Europe/Berlin"`,
       );
     }
-    return systemZone;
+    return system;
   }
-  if (!isIanaTimeZone(raw)) {
+  const canonical = canonicalTimeZone(raw);
+  if (canonical === null) {
     throw new ConfigError(`DESKHAND_TIMEZONE must be an IANA time zone name such as "Europe/Berlin", got "${raw}"`);
   }
-  return raw;
+  return canonical;
 }
 
 export function loadConfig(

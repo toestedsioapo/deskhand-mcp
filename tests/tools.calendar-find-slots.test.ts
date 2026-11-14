@@ -170,6 +170,11 @@ describe("calendar_find_slots", () => {
     }
   });
 
+  it("a mis-cased time_zone gives the same answer as the canonical spelling", async () => {
+    const canon = await find({ ...base, time_zone: "Europe/Berlin" });
+    expect(await find({ ...base, time_zone: "europe/berlin" })).toEqual(canon);
+  });
+
   it("refuses a time_zone that is not an IANA zone name as INVALID_INPUT", async () => {
     for (const tz of ["+01:00", "EST5EDT", ""]) {
       const r = await call({ ...base, time_zone: tz });

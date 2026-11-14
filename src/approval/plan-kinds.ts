@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { CalendarProvider, EventRef } from "../providers/types.js";
-import { formatLocalRange, isIanaTimeZone } from "../util/local-time.js";
+import { canonicalTimeZone, formatLocalRange, isIanaTimeZone } from "../util/local-time.js";
 import { isPlainLine, VISIBLE_ASCII } from "../util/sanitize.js";
 
 export type RecheckResult = { ok: true } | { ok: false; reason: string };
@@ -75,7 +75,8 @@ export const calendarCreateEvent: PlanKind<CalendarCreateEventPlan> = {
     const e = plan.event;
     const n = e.attendees.length;
     const lines = [`create event: ${e.title}`, `when: ${formatLocalRange(e.start, e.end, viewerTimeZone)}`];
-    if (e.timeZone !== undefined && e.timeZone !== viewerTimeZone) {
+    // Compare canonical forms: a plan stored with `europe/berlin` (hashed that way) is not a different zone.
+    if (e.timeZone !== undefined && (canonicalTimeZone(e.timeZone) ?? e.timeZone) !== (canonicalTimeZone(viewerTimeZone) ?? viewerTimeZone)) {
       lines.push(`event zone: ${formatLocalRange(e.start, e.end, e.timeZone)}`);
     }
     lines.push(`utc: ${e.start} to ${e.end}`, `calendar: ${e.calendarId}`, attendeeCount(n));

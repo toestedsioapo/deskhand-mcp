@@ -208,6 +208,12 @@ describe("loadConfig timeZone and rulesPath", () => {
     expect(loadConfig({ ...base, DESKHAND_TIMEZONE: "Europe/Berlin" }).timeZone).toBe("Europe/Berlin");
   });
 
+  it("DESKHAND_TIMEZONE and the system zone are canonicalised", () => {
+    expect(loadConfig({ ...base, DESKHAND_TIMEZONE: "asia/manila" }).timeZone).toBe("Asia/Manila");
+    expect(resolveTimeZone("europe/berlin", "Asia/Manila")).toBe("Europe/Berlin");
+    expect(resolveTimeZone(undefined, "asia/manila")).toBe("Asia/Manila");
+  });
+
   it("an invalid DESKHAND_TIMEZONE is a ConfigError naming the variable", () => {
     for (const v of ["+01:00", "EST5EDT", "Mars/Olympus", ""]) {
       expect(() => loadConfig({ ...base, DESKHAND_TIMEZONE: v })).toThrow(ConfigError);

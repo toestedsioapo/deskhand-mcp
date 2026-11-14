@@ -164,7 +164,7 @@ Input (strict):
 | `date` | `YYYY-MM-DD` | required | local date of the requested slot in `time_zone`; a date that is not on the calendar is `INVALID_INPUT` (Tempo rejects it) |
 | `start` | `HH:mm` | required | local start, 00:00 to 23:59 |
 | `end` | `HH:mm` | required | local end |
-| `time_zone` | IANA zone name | `Config.timeZone` | `DESKHAND_TIMEZONE`, else the system zone. Offsets (`+01:00`), POSIX names (`EST5EDT`), unknown names and `""` are `INVALID_INPUT` |
+| `time_zone` | IANA zone name | `Config.timeZone` | `DESKHAND_TIMEZONE`, else the system zone. The name is used in its canonical spelling (`europe/berlin` is `Europe/Berlin`; aliases such as `Asia/Calcutta` are kept, only their case is fixed). Offsets (`+01:00`), POSIX names (`EST5EDT`), unknown names and `""` are `INVALID_INPUT` |
 | `participants` | `PartyRules[]`, 1 to 49 | required | the counterparties |
 | `own_rules` | `PartyRules` | none | the caller's rules; overrides the rules file |
 | `calendar_id` | string, 1 to 256 characters | `"primary"` | calendar checked for busy time; printable ASCII, no whitespace or control characters (`^[\x21-\x7e]+$`); anything else is `INVALID_INPUT` |
@@ -213,7 +213,7 @@ Input (strict):
 | `attendees` | email[], at most 50, each at most 254 characters | `[]` | the diff never truncates an address |
 | `send_updates` | `"none"` \| `"all"` \| `"externalOnly"` | `"none"` | whether attendees are emailed when the event is created |
 | `calendar_id` | string, 1 to 256 characters | `"primary"` | printable ASCII, no whitespace or control characters (`^[\x21-\x7e]+$`); anything else is `INVALID_INPUT` |
-| `time_zone` | IANA zone name | `Config.timeZone` | the event's own zone, always stored in the plan as `event.timeZone` (resolved at plan time: this input, else `Config.timeZone`) and shown on an `event zone:` diff line when it differs from the viewer's `Config.timeZone`. Offsets (`+01:00`), POSIX names and unknown names are `INVALID_INPUT` |
+| `time_zone` | IANA zone name | `Config.timeZone` | the event's own zone, always stored in the plan as `event.timeZone` (resolved at plan time: this input, else `Config.timeZone`, always in its canonical spelling, so `europe/berlin` and `Europe/Berlin` give the same plan hash) and shown on an `event zone:` diff line when it differs from the viewer's `Config.timeZone` (compared in canonical spelling). Offsets (`+01:00`), POSIX names and unknown names are `INVALID_INPUT` |
 | `rationale` | string, at most 500 characters | none | why the agent proposes it; stored in the plan |
 
 Output:

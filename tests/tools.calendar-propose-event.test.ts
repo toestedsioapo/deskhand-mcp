@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { z } from "zod";
+import { renderDiff } from "../src/approval/plan-kinds.js";
 import { approveAction } from "../src/approval/approve.js";
 import { runCli } from "../src/cli/index.js";
 import type { CliIo } from "../src/cli/io.js";
@@ -154,6 +155,26 @@ describe("calendar_propose_event", () => {
     expect(out.diff[1]).toBe("when: Thu 12 Nov 2026, 18:00 to 18:30 GMT+8 (Asia/Manila)");
     expect(out.diff[2]).toBe("event zone: Thu 12 Nov 2026, 11:00 to 11:30 CET (Europe/Berlin)");
     expect(storedPlan(hh, out.action_id).event.timeZone).toBe("Europe/Berlin");
+  });
+
+  it("time_zone europe/berlin is stored as Europe/Berlin, has the same hash as Europe/Berlin and no redundant event zone line", async () => {
+    const hh = await harness({ DESKHAND_TIMEZONE: "Europe/Berlin" });
+    const lower = await propose(hh, { ...base, time_zone: "europe/berlin" });
+    expect(storedPlan(hh, lower.action_id).event.timeZone).toBe("Europe/Berlin");
+    expect(lower.diff.filter((l) => l.startsWith("event zone:"))).toEqual([]);
+    const canon = await propose(hh, { ...base, time_zone: "Europe/Berlin" });
+    expect(lower.plan_hash).toBe(canon.plan_hash);
+  });
+
+  it("a stored plan with a non-canonical zone stays valid and its diff has no redundant event zone line", () => {
+    const plan = {
+      kind: "calendar.create_event",
+      event: { title: "Sync", ...SLOT, attendees: [], sendUpdates: "none", calendarId: "primary", timeZone: "europe/berlin" },
+      observed: { slotFree: true, etags: {} },
+    };
+    const diff = renderDiff(plan, "Europe/Berlin");
+    expect(diff[0]).toBe("create event: Sync");
+    expect(diff.filter((l) => l.startsWith("event zone:"))).toEqual([]);
   });
 
   it("3 attendees: all three in diff, in `deskhand pending` and in `deskhand approve`", async () => {

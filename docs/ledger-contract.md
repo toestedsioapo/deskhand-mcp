@@ -298,7 +298,7 @@ Every `tools/call` writes exactly one `tool_call` row, including calls rejected 
 
 ## Plan shape: `calendar.create_event`
 
-`actions.plan_json` for this kind (strict): `{ kind, rationale?, event, observed: { slotFree: true, etags } }`. `event` is `{ title, start, end, attendees: string[], sendUpdates, calendarId, timeZone? }`. `start` and `end` are UTC instants (ISO 8601, `Z`). `timeZone` is optional, an IANA name (`Europe/Berlin`, `UTC`; offsets and POSIX names are an invalid plan), and part of the plan hash; it is the zone the event was proposed in and is passed to the provider on create. `calendar_propose_event` always sets it (its `time_zone` input, else the server's `Config.timeZone`); it stays optional in the schema so plans stored before M3a remain valid.
+`actions.plan_json` for this kind (strict): `{ kind, rationale?, event, observed: { slotFree: true, etags } }`. `event` is `{ title, start, end, attendees: string[], sendUpdates, calendarId, timeZone? }`. `start` and `end` are UTC instants (ISO 8601, `Z`). `timeZone` is optional, an IANA name (`Europe/Berlin`, `UTC`; offsets and POSIX names are an invalid plan), and part of the plan hash; it is the zone the event was proposed in and is passed to the provider on create. `calendar_propose_event` always sets it, in canonical spelling (its `time_zone` input, else the server's `Config.timeZone`; `europe/berlin` is stored as `Europe/Berlin`, aliases keep their own name); it stays optional in the schema so plans stored before M3a remain valid.
 
 **Display equals write.** The plan schema only accepts values the diff can print verbatim, so the text a human approves is exactly the text that is stored and written: `title` is 1 to 200 characters, one line of visible text (no control, format, bidirectional, zero-width or blank filler characters, no line breaks or tabs, single ASCII spaces between words only, none at either end); `calendarId` is 1 to 256 printable ASCII characters with no space; `attendees` is at most 50 email addresses, each 1 to 254 printable ASCII characters with no space; `start` and `end` are in the stored form `YYYY-MM-DDTHH:mm:ss.sssZ`; `timeZone` is at most 64 characters. A stored row that breaks any of these is an invalid plan: `pending` shows `(invalid plan)`, `approve` refuses it with `INTERNAL` before the prompt (check 5b) and `action_apply` does not write it.
 
@@ -306,7 +306,7 @@ The human diff (`deskhand pending`, `deskhand approve`, `action_explain.diff`) i
 
 1. `create event: <title>`, verbatim
 2. `when: <start> to <end>` in the viewer's zone, e.g. `Thu 12 Nov 2026, 18:00 to 18:30 GMT+8 (Asia/Manila)`; a range across midnight or a zone change names both ends in full
-3. `event zone: <range in event.timeZone>`, only when `event.timeZone` is set and differs from the viewer zone
+3. `event zone: <range in event.timeZone>`, only when `event.timeZone` is set and differs from the viewer zone (both compared in canonical spelling, so a plan stored before canonicalisation as `europe/berlin` is still valid and shows no redundant line)
 4. `utc: <start> to <end>` (always)
 5. `calendar: <calendarId>`, verbatim
 6. `<n> attendees` (`1 attendee` when there is one)
