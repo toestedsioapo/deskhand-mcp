@@ -24,9 +24,12 @@ export interface OAuthDeps {
 
 /** The message is always one of our fixed sentences, never Google's response. */
 export class OAuthError extends Error {
-  constructor(message: string) {
+  /** AUTH_REQUIRED: the user must sign in again. PROVIDER_ERROR: Google or the network failed. */
+  readonly code: "AUTH_REQUIRED" | "PROVIDER_ERROR";
+  constructor(message: string, code: "AUTH_REQUIRED" | "PROVIDER_ERROR" = "AUTH_REQUIRED") {
     super(message);
     this.name = "OAuthError";
+    this.code = code;
   }
 }
 
@@ -51,7 +54,7 @@ async function postToken(deps: OAuthDeps, params: Record<string, string>): Promi
       body: new URLSearchParams(params).toString(),
     });
   } catch {
-    throw new OAuthError("Google sign-in failed: could not reach the token endpoint.");
+    throw new OAuthError("Google sign-in failed: could not reach the token endpoint.", "PROVIDER_ERROR");
   }
   let body: TokenResponse = {};
   try {
@@ -62,7 +65,7 @@ async function postToken(deps: OAuthDeps, params: Record<string, string>): Promi
   }
   if (!res.ok) {
     if (body.error === "invalid_grant") throw new OAuthError(EXPIRED_MESSAGE);
-    throw new OAuthError(`Google sign-in failed: the token endpoint returned HTTP ${res.status}.`);
+    throw new OAuthError(`Google sign-in failed: the token endpoint returned HTTP ${res.status}.`, "PROVIDER_ERROR");
   }
   return body;
 }
@@ -131,7 +134,7 @@ export function runLoopbackLogin(
       exchange(code).then(
         (token) => finish(token),
         (err: unknown) =>
-          finish(err instanceof OAuthError ? err : new OAuthError("Google sign-in failed: the code exchange did not complete.")),
+          finish(err instanceof OAuthError ? err : new OAuthError("Google sign-in failed: the code exchange did not complete.", "PROVIDER_ERROR")),
       );
     });
 
@@ -156,7 +159,7 @@ export function runLoopbackLogin(
         code_verifier: verifier,
       });
       if (typeof body.access_token !== "string" || body.access_token === "") {
-        throw new OAuthError("Google sign-in failed: the token response had no access token.");
+        throw new OAuthError("Google sign-in failed: the token response had no access token.", "PROVIDER_ERROR");
       }
       if (typeof body.refresh_token !== "string" || body.refresh_token === "") {
         throw new OAuthError(
@@ -184,7 +187,7 @@ export function runLoopbackLogin(
       };
     }
 
-    server.once("error", () => finish(new OAuthError("Google sign-in failed: could not start the local callback listener.")));
+    server.once("error", () => finish(new OAuthError("Google sign-in failed: could not start the local callback listener.", "PROVIDER_ERROR")));
     server.listen(0, "127.0.0.1", () => {
       const port = (server.address() as AddressInfo).port;
       redirectUri = `http://127.0.0.1:${port}${CALLBACK_PATH}`;
@@ -206,7 +209,7 @@ export function runLoopbackLogin(
       try {
         onUrl(auth.toString());
       } catch {
-        finish(new OAuthError("Google sign-in failed: could not show the sign-in link."));
+        finish(new OAuthError("Google sign-in failed: could not show the sign-in link.", "PROVIDER_ERROR"));
       }
     });
   });
@@ -220,7 +223,7 @@ export async function refreshAccessToken(client: OAuthClient, token: StoredToken
     client_secret: client.clientSecret,
   });
   if (typeof body.access_token !== "string" || body.access_token === "") {
-    throw new OAuthError("Google sign-in failed: the token response had no access token.");
+    throw new OAuthError("Google sign-in failed: the token response had no access token.", "PROVIDER_ERROR");
   }
   const refreshed = typeof body.refresh_token === "string" && body.refresh_token !== "" ? body.refresh_token : token.refresh_token;
   return { ...token, refresh_token: refreshed, access_token: body.access_token, expires_at: expiresAt(body, deps.now()) };

@@ -74,8 +74,12 @@ describe("safety structure", () => {
   });
 
   it("nothing in src/tools or src/cli imports provider implementations or calls provider writes", () => {
+    // src/cli/auth.ts is the one CLI file allowed to import src/providers/google (OAuth login; it never calls provider writes).
     const offenders = FILES.filter((f) => /^src\/(tools|cli)\//.test(f.path)).flatMap((f) => {
-      const bad = importSpecifiers(f.text).filter((s) => /providers\//.test(s) && !/providers\/types(\.js)?$/.test(s));
+      const google = f.path === "src/cli/auth.ts" ? /providers\/google\/(client-file|oauth|token-store)(\.js)?$/ : /(?!)/;
+      const bad = importSpecifiers(f.text).filter(
+        (s) => /providers\//.test(s) && !/providers\/types(\.js)?$/.test(s) && !google.test(s),
+      );
       if (/\bcreateEvent\b|\.\s*execute\s*\(/.test(f.text)) bad.push("<provider write call>");
       return bad.map((b) => `${f.path}: ${b}`);
     });

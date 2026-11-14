@@ -337,3 +337,5 @@ Shape: `{"v":1,"input":<redacted>,"output":<redacted|null>,"note":<string|null>}
 ## CLI-originated rows
 
 `cli_command` rows have `tool = cli:<command>` and `preview.input` holding the command's arguments (action id, reason; never the typed confirmation). Typed confirmation text is never stored.
+
+`cli:auth` rows (`deskhand auth login | status | upgrade`) have `preview = { v: 1, input: { subcommand }, output: { scopes } | null, note }`. `subcommand` is `login`, `status`, `upgrade`, or null for a usage error. `output.scopes` lists the granted scopes (login/upgrade success, or status with a token); `note` is NULL on success, else the one-line failure message. Failures use `outcome = error` with `AUTH_REQUIRED` (denied, expired, no token), `INVALID_INPUT` (bad or missing client file, usage, `upgrade` without `DESKHAND_ALLOW_WRITES=1`) or `PROVIDER_ERROR` (token endpoint failure). A row never contains a token, the client secret, the authorization code or the OAuth `state`.
