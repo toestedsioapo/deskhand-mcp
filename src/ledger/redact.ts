@@ -85,7 +85,12 @@ export function redactInput(value: unknown): unknown {
  * plain text: encoded or escaped text that looks secret never reaches it (scrubSecrets step a), and anything it misses
  * is caught by the predicate on its output (step c). A replacement keeps a `key=` or `code=` prefix.
  */
-const SECRET_PATTERNS: readonly (readonly [RegExp, string])[] = [
+/**
+ * Order matters: the keyed, `code`, `Bearer` and `Authorization` rules run before the JWT step (BEFORE_JWT), so a
+ * `eyJx.y.` prefix glued to a key word cannot swallow the key and leave its value (RT11-1); the token rules after it
+ * (AFTER_JWT) also consume a `[redacted]` the JWT step left inside them (`ya29.eyJa.b.c.TAIL`).
+ */
+const BEFORE_JWT: readonly (readonly [RegExp, string])[] = [
   // A value named by a secret key: `"access_token":"..."`, `client_secret = '...'` (quoted, up to the closing quote).
   [/(?<![A-Za-z])((?:access|refresh|id)_?token|client_?secret)(["']?\s*[=:]\s*)(["'])(?:(?!\3)[^\n])*\3?/gi, "$1$2$3[redacted]$3"],
   // The same, unquoted: `refresh_token=...`, `accessToken: ...` (up to a separator).
@@ -93,9 +98,13 @@ const SECRET_PATTERNS: readonly (readonly [RegExp, string])[] = [
   // An OAuth authorization code: `code=4/0Aean...`, `"code":"4/0Aean..."`.
   [/(?<![A-Za-z])(code["']?\s*[=:]\s*["']?)4\/[\w.-]+/gi, "$1[redacted]"],
   [/Bearer\s+\S+/gi, "[redacted]"],
-  // JWTs are not a regex here (`eyJ[\w-]+\.` backtracks quadratically on dot-less `eyJ` runs): see jwtSpans.
-  [/ya29\.[\w.-]+/g, "[redacted]"],
-  [/(?<![\w/])1\/\/[\w./-]+/g, "[redacted]"],
+  // An Authorization header value (after Bearer, so `Authorization: Bearer x` is already `Authorization: [redacted]`).
+  [/(?<![A-Za-z])(authorization["']?\s*[=:]\s*["']?)(?!\[redacted\])[^\s"',;&}]+/gi, "$1[redacted]"],
+];
+// Then the JWT step (not a regex: `eyJ[\w-]+\.` backtracks quadratically on dot-less `eyJ` runs; see jwtSpans).
+const SECRET_PATTERNS: readonly (readonly [RegExp, string])[] = [
+  [/ya29\.(?:[\w.-]|\[redacted\])+/g, "[redacted]"],
+  [/(?<![\w/])1\/\/(?:[\w./-]|\[redacted\])+/g, "[redacted]"],
   // A refresh token as a URL path segment (`.../1//0gAB...`); a short `1//x` stays, it is not a token.
   [/(?<=\/)1\/\/[\w-]{10,}[\w./-]*/g, "[redacted]"],
   [/GOCSPX-[\w-]+/g, "[redacted]"],
@@ -112,7 +121,7 @@ export const SECRET_LIKE = "[redacted: text contained secret-like data]";
  * it can never be re-tried shorter; the run class and the value character are disjoint anyway. JWTs: see jwtSpans.
  */
 const SECRET_SHAPE =
-  /ya29\.[\w-]{10,}|1\/\/[\w-]{10,}|gocspx-[\w-]{6,}|4\/0[\w-]{10,}|(?:access_?token|refresh_?token|id_?token|client_?secret|authorization|bearer)(?=([\s"':=]*))\1(?!\[redacted\])[^\s"':=]|code(?=([\s"':=]*))(?:\2)4\//i;
+  /ya29\.[\w-]{10,}|1\/\/[\w-]{10,}|gocspx-[\w-]{6,}|4\/0[\w-]{10,}|(?:access_?token|refresh_?token|id_?token|client_?secret|authorization|bearer)(?=([\s"':=]*))\1(?!\[redacted\](?:$|[\s"',;&}\]]|\[redacted: ))[^\s"':=]|code(?=([\s"':=]*))(?:\2)4\//i;
 
 const WORD_RUN = /[\w.-]+/g;
 
@@ -192,7 +201,9 @@ export function normaliseForCheck(text: string): string {
 export function scrubSecrets(text: string): string {
   const decoded = normaliseForCheck(text);
   if (decoded !== text && looksSecret(decoded)) return SECRET_LIKE;
-  let out = redactJwts(text);
+  let out = text;
+  for (const [p, r] of BEFORE_JWT) out = out.replace(p, r);
+  out = redactJwts(out);
   for (const [p, r] of SECRET_PATTERNS) out = out.replace(p, r);
   return looksSecret(out) ? SECRET_LIKE : out;
 }

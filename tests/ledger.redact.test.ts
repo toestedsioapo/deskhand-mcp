@@ -485,6 +485,52 @@ describe("scrubSecrets, Ruling 17", () => {
     expect(scrubSecrets(text)).toBe(FIXED);
   });
 
+  it.each([
+    ["eyJa.b.access_token=SEKRIT", "[redacted]=[redacted]"],
+    ["eyJa.b.client_secret: SEKRIT", "[redacted]: [redacted]"],
+    ["x eyJhbGc.eyJzdWI.refresh_token=SEKRIT&y=1", "x [redacted]=[redacted]&y=1"],
+    ['eyJa.b.access_token":"SEKRIT"', '[redacted]":"[redacted]"'],
+    ["eyJa.b.Bearer SEKRIT", "eyJa.b.[redacted]"],
+    ["eyJa.b.code=4/SEKRIT", "[redacted]=[redacted]"],
+  ])("RT11-1 repro: the key, code and Bearer rules run before the JWT step: %s", (text, expected) => {
+    const out = scrubSecrets(text);
+    expect(out).not.toContain("SEKRIT");
+    expect(out).toBe(expected);
+  });
+
+  it.each([
+    // An encoded key with a value that only starts with the literal `[redacted]`.
+    ["%61ccess_token=[redacted]SEKRIT"],
+    ["%61ccess_token=" + " ".repeat(20) + "[redacted]SEKRIT"],
+    ["%61ccess_token=[redacted].SEKRIT"],
+  ])("a value that merely starts with [redacted] is not exempt: %s -> the fixed sentence", (text) => {
+    expect(scrubSecrets(text)).toBe(FIXED);
+  });
+
+  it("[redacted] followed by a delimiter (or the fixed sentence) stays exempt", () => {
+    for (const t of [
+      'q {"access_token":"[redacted]","x":"KEEP"} end',
+      "q access_token=[redacted]&x=1 end",
+      "q access_token=[redacted] end",
+      "q access_token=[redacted]",
+      "q {access_token: [redacted]} end",
+      "q access_token=[redacted]; x",
+    ]) {
+      expect(scrubSecrets(t), t).toBe(t);
+    }
+  });
+
+  it("other round-11 leaks: a JWT prefix glued to a key word or a token prefix", () => {
+    const out1 = scrubSecrets("eyJa.b.authorization: SEKRIT");
+    expect(out1).not.toContain("SEKRIT");
+    const out2 = scrubSecrets("ya29.eyJa.b.c.TAILSEKRIT");
+    expect(out2).not.toContain("SEKRIT");
+    const out3 = scrubSecrets("rt 1//eyJa.b.c.TAILSEKRIT end");
+    expect(out3).not.toContain("SEKRIT");
+    expect(scrubSecrets("Authorization: Bearer opaqueSEKRIT end")).not.toContain("SEKRIT");
+    expect(scrubSecrets("Authorization: opaqueSEKRIT end")).toBe("Authorization: [redacted] end");
+  });
+
   it("JWTs: the exact span is redacted in plain text; case variants are caught by the predicate", () => {
     const jwt = "eyJhbGciOi.eyJzdWIiOiIx.c2lnX25hdHVyZS0x";
     expect(scrubSecrets(`tok ${jwt} end`)).toBe("tok [redacted] end");
@@ -666,6 +712,12 @@ describe("scrubSecrets, Ruling 17", () => {
       "%61ccess_token=" + " ".repeat(100_000),
       "code" + ":".repeat(100_000) + "x",
       "bearer".repeat(16_000),
+      // RT11: runs of the literal `[redacted]` after a key, a token prefix or a JWT.
+      "authorization:" + "[redacted]".repeat(9_000),
+      "ya29." + "[redacted]".repeat(9_000),
+      "1//" + "[redacted]x".repeat(9_000),
+      "%61ccess_token=" + "[redacted]".repeat(9_000),
+      "eyJa.b." + "access_token=".repeat(7_000),
     ];
     for (const s of inputs) {
       const t = performance.now();

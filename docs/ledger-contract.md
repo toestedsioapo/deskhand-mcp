@@ -344,13 +344,19 @@ Shape: `{"v":1,"input":<redacted>,"output":<redacted|null>,"note":<string|null>}
 
 - **The predicate `looksSecret`.** It is deliberately simple and broad, and case-insensitive. It matches:
   - the token shapes `ya29.` followed by 10 or more of `[\w-]`, `1//` followed by 10 or more of `[\w-]`, `gocspx-` followed by 6 or more, a three-part JWT (`eyJ` with at least one character after it, then two more `.`-separated non-empty parts), and the auth code `4/0` followed by 10 or more;
-  - a key word (`access_token`, `refresh_token`, `id_token`, `client_secret`, their spellings without the underscore, `authorization`, `bearer`) followed by any number of separator characters from whitespace, quotes, `:` and `=`, and then a value character that does not begin the literal `[redacted]`;
+  - a key word (`access_token`, `refresh_token`, `id_token`, `client_secret`, their spellings without the underscore, `authorization`, `bearer`) followed by any number of separator characters from whitespace, quotes, `:` and `=`, and then a value character. The one exemption is a value that is exactly the literal `[redacted]`, followed by the end of the text, whitespace, one of `"',;&}]`, or the fixed sentence. A value that only starts with `[redacted]` (`[redacted]SEKRIT`) counts as a value;
   - `code` followed the same way by a value that starts with `4/`.
 - **The decoder `normaliseForCheck`.** It percent-decodes up to 4 times, stopping as soon as nothing changes (a malformed `%` is left in place, and it never throws). It then reads `+` as a space and deletes every backslash, interpreting no escape at all.
 
 The steps:
 1. If the decoded input differs from the input and the decoded input looks secret, the whole text becomes the fixed sentence `[redacted: text contained secret-like data]`. So any encoded or escaped secret fails closed. The check runs on the original input, not on the output of the pattern pass.
-2. Otherwise the pattern pass runs. It replaces plain secret shapes with `[redacted]` and keeps the surrounding words: `Bearer …`, a JWT, `ya29.`, `1//` (also as a URL path segment), `GOCSPX-`, the value of a secret key (quoted up to its closing quote, or unquoted up to a separator), and `code=4/…`.
+2. Otherwise the pattern pass runs. It replaces plain secret shapes with `[redacted]` and keeps the surrounding words. The order is fixed:
+   - first the value of a secret key (quoted up to its closing quote, or unquoted up to a separator), `code=4/…`, `Bearer …` and an `Authorization:` value;
+   - then JWTs;
+   - then `ya29.` and `1//` (also as a URL path segment); these also take in a `[redacted]` that the JWT step left inside them;
+   - then `GOCSPX-`.
+
+   The keyed rules come before the JWT step so that a `eyJx.y.` prefix stuck to a key word cannot swallow the key and leave its value.
 3. If the result still looks secret, which means a plain shape the pattern pass missed, the result is the fixed sentence. Otherwise the result is returned.
 
 **Accepted over-redaction.** Text whose decoded form looks secret is replaced whole. That covers prose with a key word followed by a word: "the bearer of good news" is redacted, and "missing access_token in the response" becomes the fixed sentence. It also covers `access_token=` followed by `&`, and `zip code + 4/5`.
