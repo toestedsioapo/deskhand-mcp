@@ -343,8 +343,8 @@ Shape: `{"v":1,"input":<redacted>,"output":<redacted|null>,"note":<string|null>}
 **Free-text secret scrubbing (`scrubSecrets`, Ruling 17, M3b fix wave 9).** Provider and OAuth error text that reaches `actions.error`, a preview note or tool output passes through `scrubSecrets` before the redactor above. The function uses two pieces:
 
 - **The predicate `looksSecret`.** It is deliberately simple and broad, and case-insensitive. It matches:
-  - the token shapes `ya29.` followed by 10 or more of `[\w-]`, `1//` followed by 10 or more of `[\w-]`, `gocspx-` followed by 6 or more, a three-part JWT `eyJ…`, and the auth code `4/0` followed by 10 or more;
-  - a key word (`access_token`, `refresh_token`, `id_token`, `client_secret`, their spellings without the underscore, `authorization`, `bearer`) followed by up to 12 separator characters from whitespace, quotes, `:` and `=`, and then a value character that does not begin the literal `[redacted]`;
+  - the token shapes `ya29.` followed by 10 or more of `[\w-]`, `1//` followed by 10 or more of `[\w-]`, `gocspx-` followed by 6 or more, a three-part JWT (`eyJ` with at least one character after it, then two more `.`-separated non-empty parts), and the auth code `4/0` followed by 10 or more;
+  - a key word (`access_token`, `refresh_token`, `id_token`, `client_secret`, their spellings without the underscore, `authorization`, `bearer`) followed by any number of separator characters from whitespace, quotes, `:` and `=`, and then a value character that does not begin the literal `[redacted]`;
   - `code` followed the same way by a value that starts with `4/`.
 - **The decoder `normaliseForCheck`.** It percent-decodes up to 4 times, stopping as soon as nothing changes (a malformed `%` is left in place, and it never throws). It then reads `+` as a space and deletes every backslash, interpreting no escape at all.
 
@@ -355,7 +355,7 @@ The steps:
 
 **Accepted over-redaction.** Text whose decoded form looks secret is replaced whole. That covers prose with a key word followed by a word: "the bearer of good news" is redacted, and "missing access_token in the response" becomes the fixed sentence. It also covers `access_token=` followed by `&`, and `zip code + 4/5`.
 
-**Cost.** Every step is a single linear pass. A fixed prefix that apply places before the scrubbed text (for example `Provider write failed: `) sits outside the scrub and survives. Deskhand's own fixed error sentences pass through unchanged (a test lists them).
+**Cost.** Every step runs in linear time in the text length: the decoder is at most 4 passes plus two replacements, the separator run in the predicate is matched atomically (it is never re-tried shorter, and the run class and the value character are disjoint), and JWTs are found by a scan over the runs of `[\w.-]` split on `.` instead of a regex (`eyJ[\w-]+\.` alone backtracks quadratically on long dot-less `eyJ` runs). The test suite holds every step to 50 ms on about 100 KB of adversarial input. A fixed prefix that apply places before the scrubbed text (for example `Provider write failed: `) sits outside the scrub and survives. Deskhand's own fixed error sentences pass through unchanged (a test lists them).
 
 `actions.input_json` follows the same redaction. `plan_json` and `result_json` are stored in full because the hash and the apply need them, but they never contain mailbox bodies (plans hold only what the write needs; the plan tools are responsible for not copying bodies into `plan_json`).
 

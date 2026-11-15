@@ -93,7 +93,7 @@ const SECRET_PATTERNS: readonly (readonly [RegExp, string])[] = [
   // An OAuth authorization code: `code=4/0Aean...`, `"code":"4/0Aean..."`.
   [/(?<![A-Za-z])(code["']?\s*[=:]\s*["']?)4\/[\w.-]+/gi, "$1[redacted]"],
   [/Bearer\s+\S+/gi, "[redacted]"],
-  [/eyJ[\w-]+\.[\w-]+\.[\w-]+/g, "[redacted]"],
+  // JWTs are not a regex here (`eyJ[\w-]+\.` backtracks quadratically on dot-less `eyJ` runs): see jwtSpans.
   [/ya29\.[\w.-]+/g, "[redacted]"],
   [/(?<![\w/])1\/\/[\w./-]+/g, "[redacted]"],
   // A refresh token as a URL path segment (`.../1//0gAB...`); a short `1//x` stays, it is not a token.
@@ -105,15 +105,62 @@ const SECRET_PATTERNS: readonly (readonly [RegExp, string])[] = [
 export const SECRET_LIKE = "[redacted: text contained secret-like data]";
 
 /**
- * Ruling 17's predicate: deliberately simple and broad, case-insensitive. Token shapes (`ya29.`, `1//`, `GOCSPX-`,
- * three-part JWT, auth code `4/0...`), or a secret key word followed by up to 12 separator characters (whitespace,
+ * Ruling 17's predicate, regex part: deliberately simple and broad, case-insensitive. Token shapes (`ya29.`, `1//`,
+ * `GOCSPX-`, auth code `4/0...`), or a secret key word followed by any number of separator characters (whitespace,
  * quotes, `:`, `=`) and then a value character that does not begin `[redacted]`, or `code` followed that way by `4/`.
+ * The separator run is atomic (`(?=(run))\1`: a lookahead captures the whole run, the backreference consumes it), so
+ * it can never be re-tried shorter; the run class and the value character are disjoint anyway. JWTs: see jwtSpans.
  */
 const SECRET_SHAPE =
-  /ya29\.[\w-]{10,}|1\/\/[\w-]{10,}|gocspx-[\w-]{6,}|eyJ[\w-]+\.[\w-]+\.[\w-]+|4\/0[\w-]{10,}|(?:access_?token|refresh_?token|id_?token|client_?secret|authorization|bearer)[\s"':=]{0,12}(?!\[redacted\])[^\s"':=]|code[\s"':=]{0,12}4\//i;
+  /ya29\.[\w-]{10,}|1\/\/[\w-]{10,}|gocspx-[\w-]{6,}|4\/0[\w-]{10,}|(?:access_?token|refresh_?token|id_?token|client_?secret|authorization|bearer)(?=([\s"':=]*))\1(?!\[redacted\])[^\s"':=]|code(?=([\s"':=]*))(?:\2)4\//i;
+
+const WORD_RUN = /[\w.-]+/g;
+
+/**
+ * The spans of three-part JWTs, as the regex `eyJ[\w-]+\.[\w-]+\.[\w-]+` (global, leftmost) would find them, by one
+ * linear scan: each maximal run of `[\w.-]` is split on `.`; segments i, i+1 and i+2 form a JWT when all three are
+ * non-empty and segment i holds `eyJ` with at least one character after it (the span starts at that `eyJ` and ends
+ * with segment i+2). `ignoreCase` matches `eyj`, `EYJ`, ... (for the predicate).
+ */
+function jwtSpans(text: string, ignoreCase: boolean): [number, number][] {
+  const spans: [number, number][] = [];
+  const has = ignoreCase ? (s: string) => /eyj/i.test(s) : (s: string) => s.includes("eyJ");
+  if (!has(text)) return spans;
+  for (const run of text.matchAll(WORD_RUN)) {
+    if (!has(run[0])) continue;
+    const segs = run[0].split(".");
+    const starts: number[] = [];
+    let at = run.index;
+    for (const s of segs) {
+      starts.push(at);
+      at += s.length + 1;
+    }
+    for (let i = 0; i + 2 < segs.length; i++) {
+      const seg = segs[i]!;
+      const p = (ignoreCase ? seg.toLowerCase() : seg).indexOf(ignoreCase ? "eyj" : "eyJ");
+      if (p < 0 || p + 3 >= seg.length || segs[i + 1] === "" || segs[i + 2] === "") continue;
+      spans.push([starts[i]! + p, starts[i + 2]! + segs[i + 2]!.length]);
+      i += 2; // the next match can start no earlier than the segment after this JWT
+    }
+  }
+  return spans;
+}
+
+/** Replaces each JWT span with `[redacted]`. */
+function redactJwts(text: string): string {
+  const spans = jwtSpans(text, false);
+  if (spans.length === 0) return text;
+  let out = "";
+  let last = 0;
+  for (const [a, b] of spans) {
+    out += `${text.slice(last, a)}[redacted]`;
+    last = b;
+  }
+  return out + text.slice(last);
+}
 
 export function looksSecret(text: string): boolean {
-  return SECRET_SHAPE.test(text);
+  return SECRET_SHAPE.test(text) || jwtSpans(text, true).length > 0;
 }
 
 const PERCENT = /%([0-9A-Fa-f]{2})/g;
@@ -145,7 +192,7 @@ export function normaliseForCheck(text: string): string {
 export function scrubSecrets(text: string): string {
   const decoded = normaliseForCheck(text);
   if (decoded !== text && looksSecret(decoded)) return SECRET_LIKE;
-  let out = text;
+  let out = redactJwts(text);
   for (const [p, r] of SECRET_PATTERNS) out = out.replace(p, r);
   return looksSecret(out) ? SECRET_LIKE : out;
 }

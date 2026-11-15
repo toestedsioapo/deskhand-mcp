@@ -474,6 +474,27 @@ describe("scrubSecrets, Ruling 17", () => {
     expect(scrubSecrets(text)).toBe(FIXED);
   });
 
+  it.each([
+    ["encoded underscore, = and 12 encoded spaces", "access%5Ftoken%3D" + "%20".repeat(12) + "SEKRIT"],
+    ["encoded underscore, : and 13 encoded spaces", "client%5Fsecret%3A" + "%20".repeat(13) + "SEKRIT"],
+    ["encoded underscore, = and 13 plus signs", "refresh%5Ftoken=" + "+".repeat(13) + "SEKRIT"],
+    ["encoded key letter and 13 raw spaces", "%61ccess_token=" + " ".repeat(13) + "SEKRIT"],
+    ["every byte percent-encoded, YAML style", [..."access_token:\n" + " ".repeat(14) + "SEKRIT"].map((c) => "%" + c.charCodeAt(0).toString(16).padStart(2, "0")).join("")],
+    ["encoded key, 10 000 separators", "%61ccess_token=" + " ".repeat(10_000) + "SEKRIT"],
+  ])("RT10-1 repro: %s -> the fixed sentence (the separator run is unbounded)", (_name, text) => {
+    expect(scrubSecrets(text)).toBe(FIXED);
+  });
+
+  it("JWTs: the exact span is redacted in plain text; case variants are caught by the predicate", () => {
+    const jwt = "eyJhbGciOi.eyJzdWIiOiIx.c2lnX25hdHVyZS0x";
+    expect(scrubSecrets(`tok ${jwt} end`)).toBe("tok [redacted] end");
+    expect(scrubSecrets(`a=${jwt}.more x`)).toBe("a=[redacted].more x");
+    expect(scrubSecrets(`ab${jwt} x`)).toBe("ab[redacted] x");
+    expect(scrubSecrets(`x eyJ.a.b eyJa..b eyJa.b end`)).toBe("x eyJ.a.b eyJa..b eyJa.b end");
+    expect(scrubSecrets(`two ${jwt} and ${jwt} end`)).toBe("two [redacted] and [redacted] end");
+    expect(scrubSecrets("x EYJHBGCIOI.EYJZDWIIOIIX.C2LNX25HDHVYZS0X end")).toBe(FIXED);
+  });
+
   it("plain shapes keep their surrounding words (the pattern pass still runs)", () => {
     expect(scrubSecrets("401 Bearer ya29.A0AbC-d_e refresh 1//0gXyZ-ab_c end")).toBe("401 [redacted] refresh [redacted] end");
     expect(scrubSecrets('q {"access_token":"abc","x":"KEEPME"} end')).toBe('q {"access_token":"[redacted]","x":"KEEPME"} end');
@@ -631,6 +652,20 @@ describe("scrubSecrets, Ruling 17", () => {
       "ya29." + "-".repeat(100_000),
       "access_token=".repeat(8_000),
       "+%20".repeat(25_000),
+      // RT10-2: JWT detection on runs of `eyJ` and its case variants, with and without dots.
+      "eyJ".repeat(33_000),
+      "EYJ".repeat(33_000),
+      "eyj".repeat(33_000),
+      "Eyj".repeat(33_000),
+      "eyJ.".repeat(25_000),
+      "eyJa.".repeat(20_000),
+      "EYJa.b".repeat(16_000),
+      "eyJ" + "a".repeat(100_000) + ".",
+      // RT10-1: unbounded separator runs.
+      "access_token" + " ".repeat(100_000) + "[redacted]",
+      "%61ccess_token=" + " ".repeat(100_000),
+      "code" + ":".repeat(100_000) + "x",
+      "bearer".repeat(16_000),
     ];
     for (const s of inputs) {
       const t = performance.now();
