@@ -12,6 +12,7 @@ import { z } from "zod";
 import { loadConfig } from "../src/config/env.js";
 import { LedgerDb } from "../src/ledger/db.js";
 import { classifyResponse, LoggingTransport } from "../src/ledger/logging-transport.js";
+import { SECRET_LIKE } from "../src/ledger/redact.js";
 import { createServer } from "../src/server.js";
 import { toolError, toolOk } from "../src/tools/result.js";
 import { makeTempHome } from "./helpers/home.js";
@@ -559,6 +560,40 @@ describe("LoggingTransport", () => {
     const c = await setup();
     await c.client.callTool({ name: "no_such_tool", arguments: {} });
     expect(c.preview(c.rows()[0])).toMatchObject({ note: "MCP error -32602: Tool no_such_tool not found" });
+  });
+
+  it("scrubs a thrown handler's message (text Deskhand did not write) before storing it in preview.note", async () => {
+    const c = await setup((s) => {
+      s.registerTool("leaks", { inputSchema: z.object({}) }, () => {
+        throw new Error("request failed: access_token=ya29.abcdefghijklmnop");
+      });
+      s.registerTool("plain", { inputSchema: z.object({}) }, () => {
+        throw new Error("boom");
+      });
+      s.registerTool("ours", { inputSchema: z.object({}) }, () => toolError("PLAN_MODIFIED", "the password changed"));
+    });
+    await c.client.callTool({ name: "leaks", arguments: {} });
+    await c.client.callTool({ name: "plain", arguments: {} });
+    await c.client.callTool({ name: "ours", arguments: {} });
+    const notes = c.rows().map((r) => (c.preview(r) as { note: unknown }).note);
+    expect(notes).toEqual([SECRET_LIKE, "boom", "PLAN_MODIFIED: the password changed"]);
+    expect(c.rows().map((r) => r.preview_json).join("\n")).not.toContain("ya29");
+  });
+
+  it("scrubs a JSON-RPC error message before storing it in preview.note", async () => {
+    const c = await setup((s, logging) => {
+      void logging;
+      s.server.setRequestHandler(
+        z.object({ method: z.literal("tools/call"), params: z.object({}).passthrough() }) as never,
+        () => {
+          throw new Error("client_secret: GOCSPX-abcdefghijk");
+        },
+      );
+    });
+    await c.client.request({ method: "tools/call", params: { name: "x", arguments: {} } }, CallToolResultSchema).catch(() => undefined);
+    const raw = c.rows().map((r) => r.preview_json).join("\n");
+    expect(raw).not.toContain("GOCSPX");
+    expect(c.preview(c.rows()[0])).toMatchObject({ note: SECRET_LIKE });
   });
 
   it("replaces the response with INTERNAL and writes stderr when the ledger write fails", async () => {

@@ -11,6 +11,7 @@ import { ERROR_CODES, type ErrorCode, type EventOutcome } from "./contract.js";
 import type { LedgerDb } from "./db.js";
 import { appendEvent } from "./events.js";
 import { isoNow, type Clock } from "./ids.js";
+import { scrubSecrets } from "./redact.js";
 
 export interface LoggingTransportDeps {
   db: LedgerDb;
@@ -308,10 +309,13 @@ export class LoggingTransport implements Transport {
     // Error rows store no output; ok rows store the structured result.
     const structured = outcome === "ok" ? result?.["structuredContent"] : undefined;
     const output = isRecord(structured) ? structured : null;
-    // Error rows keep the message in preview.note (redacted by appendEvent).
+    // Error rows keep the message in preview.note (redacted by appendEvent). Text Deskhand did not write (a JSON-RPC
+    // error, or a thrown handler's message the SDK turned into an error result: no valid _meta.deskhand) may hold
+    // anything, so it passes through scrubSecrets first; our own toolError text is fixed and stored as is.
     let note: string | null = null;
     if (outcome !== "ok") {
       note = error ? String(error.message) : result ? (firstText(result) ?? null) : null;
+      if (note !== null && !(meta?.valid && meta.errorCode !== undefined)) note = scrubSecrets(note);
     }
     this.writeRow(call, outcome, errorCode, output, actionId, note);
   }
