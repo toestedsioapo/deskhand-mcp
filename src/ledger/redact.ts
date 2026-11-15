@@ -125,18 +125,21 @@ export function looksSecret(text: string): boolean {
 const PERCENT = /%([0-9A-Fa-f]{2})/g;
 
 /**
- * Percent-decoded repeatedly (at most 4 rounds, stopping when nothing changes; a malformed `%` stays; each byte
- * becomes one character, enough for matching), then `+` as a space, then every backslash deleted (no escape is
- * interpreted). Linear, never throws.
+ * Every backslash deleted (no escape is interpreted), then percent-decoded repeatedly with the backslashes deleted
+ * again after each round (at most 4 rounds, stopping when nothing changes; a malformed `%` stays; each byte becomes
+ * one character, enough for matching), then `+` as a space. Linear, never throws.
  */
 export function normaliseForCheck(text: string): string {
-  let cur = text;
+  // Backslashes are deleted before every decode round and once after the last, so a backslash inside a `%XX`
+  // triplet (`%\61`, or every character escaped) cannot stop the triplet from decoding (RT13-1).
+  const strip = (s: string): string => s.replace(/\\/g, "");
+  let cur = strip(text);
   for (let i = 0; i < 4; i++) {
-    const next = cur.replace(PERCENT, (_m, hex: string) => String.fromCharCode(parseInt(hex, 16)));
+    const next = strip(cur.replace(PERCENT, (_m, hex: string) => String.fromCharCode(parseInt(hex, 16))));
     if (next === cur) break;
     cur = next;
   }
-  return cur.replace(/\+/g, " ").replace(/\\/g, "");
+  return cur.replace(/\+/g, " ");
 }
 
 /**

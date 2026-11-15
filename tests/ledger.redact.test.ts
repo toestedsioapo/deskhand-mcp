@@ -865,3 +865,36 @@ describe("scrubSecrets, Ruling 18", () => {
     }
   });
 });
+
+/** RT13-1 (fix wave 13): a backslash inside a percent triplet must not hide an encoded secret. */
+describe("scrubSecrets, backslashes around percent-decoding", () => {
+  const pctAll = (s: string) => [...s].map((c) => "%" + c.charCodeAt(0).toString(16).padStart(2, "0")).join("");
+  const escAll = (s: string) => [...s].map((c) => String.fromCharCode(92) + c).join("");
+  const secrets = ["access_token=SEKRIT", "ya29.a0AfB_byCSEKRITSEKRIT", "Authorization: Basic dXNlcjpwYXNz", "GOCSPX-SEKRITSEKRIT"];
+
+  it.each([
+    ["backslash after %", "%" + String.fromCharCode(92) + "61ccess_token=SEKRIT"],
+    ["backslash between the hex digits", "%6" + String.fromCharCode(92) + "1ccess_token=SEKRIT"],
+  ])("%s -> the fixed sentence", (_name, text) => {
+    expect(scrubSecrets(text)).toBe(SECRET_LIKE);
+  });
+
+  it.each(secrets.map((s) => [s]))("every character of the percent-encoded secret backslash-escaped: %s", (s) => {
+    const once = escAll(pctAll(s));
+    expect(scrubSecrets(once)).toBe(SECRET_LIKE);
+    expect(scrubSecrets(encodeURIComponent(once))).toBe(SECRET_LIKE);
+    expect(scrubSecrets(encodeURIComponent(once).toLowerCase())).toBe(SECRET_LIKE);
+  });
+
+  it("stays linear and never throws on backslash and percent mixes", () => {
+    for (const s of [
+      ("%" + String.fromCharCode(92)).repeat(50_000),
+      (String.fromCharCode(92) + "%2").repeat(33_000),
+      escAll("%25".repeat(16_000)),
+    ]) {
+      const t = performance.now();
+      expect(() => scrubSecrets(s)).not.toThrow();
+      expect(performance.now() - t, `${s.slice(0, 20)}... (${s.length})`).toBeLessThan(50);
+    }
+  });
+});
