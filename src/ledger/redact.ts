@@ -124,30 +124,44 @@ export function looksSecret(text: string): boolean {
 
 const PERCENT = /%([0-9A-Fa-f]{2})/g;
 
+const strip = (s: string): string => s.replace(/\\/g, "");
+const decode = (s: string): string => s.replace(PERCENT, (_m, hex: string) => String.fromCharCode(parseInt(hex, 16)));
+
 /**
- * Every backslash deleted (no escape is interpreted), then percent-decoded repeatedly with the backslashes deleted
- * again after each round (at most 4 rounds, stopping when nothing changes; a malformed `%` stays; each byte becomes
- * one character, enough for matching), then `+` as a space. Linear, never throws.
+ * Every intermediate form of the text, in order: as written; with every backslash deleted (no escape is
+ * interpreted); then, for each percent-decode round (at most 4, stopping when nothing changes; a malformed `%`
+ * stays; each byte becomes one character, enough for matching), the decoded form and that form with its backslashes
+ * deleted. Deleting backslashes before and after each round means a backslash inside a `%XX` triplet (`%\61`)
+ * cannot stop it from decoding (RT13-1); yielding every form means a later round cannot decode a key word away
+ * (`%a\ccess_token` is `%access_token` before `%ac` becomes one character, RT14-2). At most 10 forms, each one
+ * linear pass; never throws.
  */
-export function normaliseForCheck(text: string): string {
-  // Backslashes are deleted before every decode round and once after the last, so a backslash inside a `%XX`
-  // triplet (`%\61`, or every character escaped) cannot stop the triplet from decoding (RT13-1).
-  const strip = (s: string): string => s.replace(/\\/g, "");
-  let cur = strip(text);
+export function* decodeStages(text: string): Generator<string> {
+  let cur = text;
+  yield cur;
+  const stripped = strip(cur);
+  if (stripped !== cur) yield (cur = stripped);
   for (let i = 0; i < 4; i++) {
-    const next = strip(cur.replace(PERCENT, (_m, hex: string) => String.fromCharCode(parseInt(hex, 16))));
-    if (next === cur) break;
+    const decoded = decode(cur);
+    if (decoded === cur) return;
+    yield decoded;
+    const next = strip(decoded);
+    if (next !== decoded) yield next;
     cur = next;
   }
-  return cur.replace(/\+/g, " ");
 }
 
 /**
  * Free text (error messages) before it is stored or shown, all-or-nothing (Ruling 18; docs/ledger-contract.md,
- * "Free-text secret scrubbing"): if the text, or its decoded form, looks secret, the result is SECRET_LIKE; otherwise
- * the text is returned unchanged. Nothing is rewritten in place, so no partial redaction can leave a secret behind.
- * Over-redaction is accepted: a key word followed by any character ("the bearer of good news") fails closed.
+ * "Free-text secret scrubbing"): if any form of the text (see decodeStages; each also with `+` read as a space)
+ * looks secret, the result is SECRET_LIKE, at the first match; otherwise the text is returned unchanged. Nothing is
+ * rewritten in place, so no partial redaction can leave a secret behind. Over-redaction is accepted: a key word
+ * followed by any character ("the bearer of good news") fails closed.
  */
 export function scrubSecrets(text: string): string {
-  return looksSecret(text) || looksSecret(normaliseForCheck(text)) ? SECRET_LIKE : text;
+  for (const form of decodeStages(text)) {
+    if (looksSecret(form)) return SECRET_LIKE;
+    if (form.includes("+") && looksSecret(form.replace(/\+/g, " "))) return SECRET_LIKE;
+  }
+  return text;
 }

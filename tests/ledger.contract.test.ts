@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import * as contract from "../src/ledger/contract.js";
@@ -52,6 +52,50 @@ const insertAction = (id: string, status = "planned"): void => {
     [id, "t", "x", "{}", "{}", "h", "t", status],
   );
 };
+
+/** `#` and `##` headings outside fenced code blocks. */
+function topHeadings(text: string): string[] {
+  let fenced = false;
+  const out: string[] = [];
+  for (const line of text.split("\n")) {
+    if (line.startsWith("```")) fenced = !fenced;
+    else if (!fenced && /^#{1,2} /.test(line)) out.push(line);
+  }
+  return out;
+}
+
+describe("contract doc is whole", () => {
+  it("docs/ledger-contract.md has each top-level heading exactly once, in order (no duplicated copy)", () => {
+    expect(topHeadings(doc)).toEqual([
+      "# Ledger contract (v3)",
+      "## Conventions",
+      "## Value sets (machine-read by tests)",
+      "## DDL v1",
+      "## DDL v2",
+      "## DDL v3",
+      "## Status transitions",
+      "## Apply gate order",
+      "## Approve and reject refusals (CLI)",
+      "## Row sequences",
+      "## Plan shape: `calendar.create_event`",
+      "## `preview_json`",
+      "## CLI-originated rows",
+    ]);
+    expect(doc.split("\n").length).toBeLessThan(500);
+  });
+
+  it("no doc under docs/ repeats a top-level heading", () => {
+    const dirs = ["docs", join("docs", "adr")];
+    const dupes: string[] = [];
+    for (const d of dirs) {
+      for (const f of readdirSync(d).filter((n) => n.endsWith(".md"))) {
+        const hs = topHeadings(readFileSync(join(d, f), "utf8"));
+        for (const h of new Set(hs)) if (hs.filter((x) => x === h).length > 1) dupes.push(`${f}: ${h}`);
+      }
+    }
+    expect(dupes).toEqual([]);
+  });
+});
 
 describe("contract doc and code agree", () => {
   it("every tuple equals the doc's value-set line", () => {

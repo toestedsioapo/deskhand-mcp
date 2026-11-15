@@ -886,6 +886,24 @@ describe("scrubSecrets, backslashes around percent-decoding", () => {
     expect(scrubSecrets(encodeURIComponent(once).toLowerCase())).toBe(SECRET_LIKE);
   });
 
+  // RT14-2: a literal `%` before a key word that starts with two hex letters (`ac`cess, `Ac`cess, `be`arer) must be
+  // seen before a later round decodes `%ac` / `%be` away: every intermediate form is checked.
+  it.each([
+    ["%a" + String.fromCharCode(92) + "ccess_token=SEKRIT"],
+    ["%" + String.fromCharCode(92) + "a" + String.fromCharCode(92) + "ccess_token=SEKRIT"],
+    ["50%a" + String.fromCharCode(92) + "ccess_token=SEKRIT"],
+    [escAll("%access_token=SEKRIT")],
+    ["%A" + String.fromCharCode(92) + "ccessToken: v"],
+    ["%b" + String.fromCharCode(92) + "earer abcdef"],
+    [escAll("%Bearer abcdef")],
+    ["%25%61ccess_token=SEKRIT"],
+    ["%25%62earer abcdef"],
+    [pctAll("%access_token=SEKRIT")],
+    [pctAll(pctAll("%access_token=SEKRIT"))],
+  ])("RT14-2 repro: %s -> the fixed sentence", (text) => {
+    expect(scrubSecrets(text)).toBe(SECRET_LIKE);
+  });
+
   it("stays linear and never throws on backslash and percent mixes", () => {
     for (const s of [
       ("%" + String.fromCharCode(92)).repeat(50_000),
