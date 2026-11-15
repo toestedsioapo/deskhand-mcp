@@ -156,18 +156,30 @@ const plus = (s: string): string => (s.includes("+") ? s.replace(/\+/g, " ") : s
 const MAX_DECODES = 4;
 const MAX_FORMS = 64;
 
+/** The outcome of a decode search: the forms found (in order), and whether the search finished. */
+export interface FormSearch {
+  forms: string[];
+  /** False when the search hit its form cap or its decode depth with forms still changing (Ruling 20). */
+  complete: boolean;
+  /** True when `stop` returned true for a form (the search ended there). */
+  stopped: boolean;
+}
+
 /**
  * Ruling 19: every form the text can take under any order of three operations, by a bounded breadth-first search
  * from the text as written: strip (delete every backslash; no escape is interpreted), one percent-decode round (a
- * malformed `%` stays; each byte becomes one character, enough for matching) and plus (`+` read as a space). A path
- * may hold at most 4 decode rounds; forms are deduplicated, and the search stops after 64 distinct forms. An
- * operation that changes nothing adds no form. The forms come out in BFS order (fewest operations first), so a
- * caller can stop at the first that matters. Each form costs one linear pass; never throws.
+ * malformed `%` stays; each byte becomes one character, enough for matching) and plus (`+` read as a space). Forms are
+ * deduplicated; an operation that changes nothing adds no form; forms come in BFS order (fewest operations first).
+ *
+ * Ruling 20: the search is incomplete (`complete: false`) when it would need a 65th distinct form, or when a form
+ * that already took 4 decode rounds would still change under a fifth. `stop` ends the search early (for example at
+ * the first secret-like form). Each form costs one linear pass; never throws.
  */
-export function* decodeStages(text: string): Generator<string> {
-  const seen = new Set<string>([text]);
+function explore(text: string, stop: (form: string) => boolean): FormSearch {
+  const forms = [text];
+  const seen = new Set<string>(forms);
+  if (stop(text)) return { forms, complete: true, stopped: true };
   let level: { form: string; decodes: number }[] = [{ form: text, decodes: 0 }];
-  yield text;
   while (level.length > 0) {
     const next: { form: string; decodes: number }[] = [];
     for (const { form, decodes } of level) {
@@ -175,27 +187,36 @@ export function* decodeStages(text: string): Generator<string> {
         [strip(form), decodes],
         [plus(form), decodes],
       ];
-      if (decodes < MAX_DECODES) steps.push([decode(form), decodes + 1]);
+      const decoded = decode(form);
+      if (decodes < MAX_DECODES) steps.push([decoded, decodes + 1]);
+      else if (decoded !== form) return { forms, complete: false, stopped: false };
       for (const [out, d] of steps) {
         if (seen.has(out)) continue;
+        if (seen.size >= MAX_FORMS) return { forms, complete: false, stopped: false };
         seen.add(out);
-        yield out;
-        if (seen.size >= MAX_FORMS) return;
+        forms.push(out);
+        if (stop(out)) return { forms, complete: true, stopped: true };
         next.push({ form: out, decodes: d });
       }
     }
     level = next;
   }
+  return { forms, complete: true, stopped: false };
+}
+
+/** Every form of the text (see explore), and whether the search finished. For tests and diagnostics. */
+export function searchForms(text: string): FormSearch {
+  return explore(text, () => false);
 }
 
 /**
  * Free text (error messages) before it is stored or shown, all-or-nothing (Ruling 18; docs/ledger-contract.md,
- * "Free-text secret scrubbing"): if any form of the text (see decodeStages) looks secret, the result is SECRET_LIKE,
- * at the first match; otherwise the text is returned unchanged. Nothing is rewritten in place, so no partial
- * redaction can leave a secret behind. Over-redaction is accepted: a key word followed by any character ("the bearer
- * of good news") fails closed.
+ * "Free-text secret scrubbing"): if any form of the text (see explore) looks secret, or the search cannot finish
+ * (Ruling 20: too many distinct forms, or still decoding after 4 rounds), the result is SECRET_LIKE; otherwise the
+ * text is returned unchanged. Nothing is rewritten in place, so no partial redaction can leave a secret behind.
+ * Over-redaction is accepted: a key word followed by any character ("the bearer of good news") fails closed.
  */
 export function scrubSecrets(text: string): string {
-  for (const form of decodeStages(text)) if (looksSecret(form)) return SECRET_LIKE;
-  return text;
+  const r = explore(text, looksSecret);
+  return r.stopped || !r.complete ? SECRET_LIKE : text;
 }

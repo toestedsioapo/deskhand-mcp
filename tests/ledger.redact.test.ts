@@ -1,11 +1,37 @@
 import { createHash, randomBytes } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { canonicalJson } from "../src/ledger/canonical.js";
-import { decodeStages, redactPreview, SECRET_LIKE, scrubSecrets } from "../src/ledger/redact.js";
+import { redactPreview, searchForms, SECRET_LIKE, scrubSecrets } from "../src/ledger/redact.js";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { AuthRequiredError, EVENT_DELETED, ProviderError } from "../src/providers/errors.js";
+
+/**
+ * Machine-independent growth check (RT16-2). Builds each input at about 10 KB and about 100 KB (`k` scales a repeat
+ * count), times scrubSecrets (median of 3 runs each), and asserts t100 < 25 * t10 + 5 ms: linear work grows about
+ * 10x, quadratic about 100x. A 2000 ms ceiling per 100 KB input guards against a hang.
+ */
+function expectLinear(inputs: (k: (n: number) => number) => string[]): void {
+  const small = inputs((n) => Math.max(1, Math.round(n / 10)));
+  const big = inputs((n) => n);
+  const median = (s: string): number => {
+    const ts: number[] = [];
+    for (let r = 0; r < 3; r++) {
+      const t = performance.now();
+      scrubSecrets(s);
+      ts.push(performance.now() - t);
+    }
+    return ts.sort((a, b) => a - b)[1]!;
+  };
+  big.forEach((s, i) => {
+    const t10 = median(small[i]!);
+    const t100 = median(s);
+    const label = `${s.slice(0, 24)}... (${small[i]!.length} -> ${s.length} chars): ${t10.toFixed(2)} -> ${t100.toFixed(2)} ms`;
+    expect(t100, label).toBeLessThan(25 * t10 + 5);
+    expect(t100, label).toBeLessThan(2000);
+  });
+}
 
 type Loose = Record<string, any>;
 const sha8 = (s: string) => createHash("sha256").update(s, "utf8").digest("hex").slice(0, 8);
@@ -300,33 +326,29 @@ describe("scrubSecrets", () => {
   });
 
   it("stays linear on long backslash and escape runs inside a quoted value", () => {
-    const inputs = [
-      "access_token%3A" + "%20".repeat(33_000),
-      "code%3A" + "%20".repeat(33_000),
-      "access_token%3A" + "+".repeat(100_000),
-      "access_token%253A" + "%2520".repeat(20_000),
-      "access_token%22" + "%0A".repeat(33_000),
-      "access_token%3A" + "%5C".repeat(33_000),
-      "code%3A" + "%5C".repeat(33_000),
-      "access_token%253A" + "%255C".repeat(20_000),
-      "access_token%3A%5C%22" + "%5C".repeat(33_000),
-      "access_token%3A%5C%5C%5C%22" + "%5C%5C%22".repeat(10_000),
-      'access_token\\\\\\":' + "\\".repeat(100_000),
-      "access_token:" + "\\".repeat(100_000) + '"' + "x".repeat(100_000),
-      "access_token:" + "\\".repeat(50_000) + '"' + ("\\".repeat(49_999) + "y").repeat(2),
-      "code" + "\\".repeat(100_000),
-      "x" + "\\".repeat(100_000) + "code",
-      "access_token" + "\\".repeat(100_000),
-      'access_token:\\"' + "\\".repeat(100_000),
-      'access_token:"' + "\\".repeat(100_000),
-      "access_token%22%3A%22" + "%5C".repeat(30_000),
-      'access_token:\\"' + '\\\\\\"'.repeat(25_000),
+    const inputs = (k: (n: number) => number) => [
+      "access_token%3A" + "%20".repeat(k(33_000)),
+      "code%3A" + "%20".repeat(k(33_000)),
+      "access_token%3A" + "+".repeat(k(100_000)),
+      "access_token%253A" + "%2520".repeat(k(20_000)),
+      "access_token%22" + "%0A".repeat(k(33_000)),
+      "access_token%3A" + "%5C".repeat(k(33_000)),
+      "code%3A" + "%5C".repeat(k(33_000)),
+      "access_token%253A" + "%255C".repeat(k(20_000)),
+      "access_token%3A%5C%22" + "%5C".repeat(k(33_000)),
+      "access_token%3A%5C%5C%5C%22" + "%5C%5C%22".repeat(k(10_000)),
+      'access_token\\\\\\":' + "\\".repeat(k(100_000)),
+      "access_token:" + "\\".repeat(k(100_000)) + '"' + "x".repeat(k(100_000)),
+      "access_token:" + "\\".repeat(k(50_000)) + '"' + ("\\".repeat(k(49_999)) + "y").repeat(2),
+      "code" + "\\".repeat(k(100_000)),
+      "x" + "\\".repeat(k(100_000)) + "code",
+      "access_token" + "\\".repeat(k(100_000)),
+      'access_token:\\"' + "\\".repeat(k(100_000)),
+      'access_token:"' + "\\".repeat(k(100_000)),
+      "access_token%22%3A%22" + "%5C".repeat(k(30_000)),
+      'access_token:\\"' + '\\\\\\"'.repeat(k(25_000)),
     ];
-    for (const s of inputs) {
-      const t = performance.now();
-      scrubSecrets(s);
-      expect(performance.now() - t, `${s.slice(0, 20)}... (${s.length})`).toBeLessThan(50);
-    }
+    expectLinear(inputs);
   });
 
   it("leaves ordinary text and URLs alone", () => {
@@ -424,22 +446,18 @@ describe("scrubSecrets fails closed", () => {
   });
 
   it("stays linear on ~100 KB inputs, including long %25 chains", () => {
-    const inputs = [
-      "%25".repeat(33_000),
-      "x " + "%2525".repeat(20_000) + "2E",
-      "ya29" + "%25".repeat(33_000) + "2E",
-      "access_token%3A" + "%2B".repeat(33_000),
-      "access_token%253A" + "%2B".repeat(33_000),
-      "+".repeat(100_000),
-      "\\".repeat(100_000) + '"',
-      "%5C".repeat(33_000) + "%22",
-      "a%20".repeat(25_000),
+    const inputs = (k: (n: number) => number) => [
+      "%25".repeat(k(33_000)),
+      "x " + "%2525".repeat(k(20_000)) + "2E",
+      "ya29" + "%25".repeat(k(33_000)) + "2E",
+      "access_token%3A" + "%2B".repeat(k(33_000)),
+      "access_token%253A" + "%2B".repeat(k(33_000)),
+      "+".repeat(k(100_000)),
+      "\\".repeat(k(100_000)) + '"',
+      "%5C".repeat(k(33_000)) + "%22",
+      "a%20".repeat(k(25_000)),
     ];
-    for (const s of inputs) {
-      const t = performance.now();
-      scrubSecrets(s);
-      expect(performance.now() - t, `${s.slice(0, 20)}... (${s.length})`).toBeLessThan(50);
-    }
+    expectLinear(inputs);
   });
 });
 
@@ -728,42 +746,38 @@ describe("scrubSecrets, Ruling 17", () => {
   });
 
   it("stays linear on ~100 KB adversarial inputs", () => {
-    const inputs = [
-      "%25".repeat(33_000),
-      "%2525".repeat(20_000) + "2E",
-      "\\".repeat(100_000),
-      "access_token" + "\\".repeat(100_000),
-      "bearer" + " ".repeat(100_000),
-      "code" + ":".repeat(100_000),
-      "ya29." + "-".repeat(100_000),
-      "access_token=".repeat(8_000),
-      "+%20".repeat(25_000),
+    const inputs = (k: (n: number) => number) => [
+      "%25".repeat(k(33_000)),
+      "%2525".repeat(k(20_000)) + "2E",
+      "\\".repeat(k(100_000)),
+      "access_token" + "\\".repeat(k(100_000)),
+      "bearer" + " ".repeat(k(100_000)),
+      "code" + ":".repeat(k(100_000)),
+      "ya29." + "-".repeat(k(100_000)),
+      "access_token=".repeat(k(8_000)),
+      "+%20".repeat(k(25_000)),
       // RT10-2: JWT detection on runs of `eyJ` and its case variants, with and without dots.
-      "eyJ".repeat(33_000),
-      "EYJ".repeat(33_000),
-      "eyj".repeat(33_000),
-      "Eyj".repeat(33_000),
-      "eyJ.".repeat(25_000),
-      "eyJa.".repeat(20_000),
-      "EYJa.b".repeat(16_000),
-      "eyJ" + "a".repeat(100_000) + ".",
+      "eyJ".repeat(k(33_000)),
+      "EYJ".repeat(k(33_000)),
+      "eyj".repeat(k(33_000)),
+      "Eyj".repeat(k(33_000)),
+      "eyJ.".repeat(k(25_000)),
+      "eyJa.".repeat(k(20_000)),
+      "EYJa.b".repeat(k(16_000)),
+      "eyJ" + "a".repeat(k(100_000)) + ".",
       // RT10-1: unbounded separator runs.
-      "access_token" + " ".repeat(100_000) + "[redacted]",
-      "%61ccess_token=" + " ".repeat(100_000),
-      "code" + ":".repeat(100_000) + "x",
-      "bearer".repeat(16_000),
+      "access_token" + " ".repeat(k(100_000)) + "[redacted]",
+      "%61ccess_token=" + " ".repeat(k(100_000)),
+      "code" + ":".repeat(k(100_000)) + "x",
+      "bearer".repeat(k(16_000)),
       // RT11: runs of the literal `[redacted]` after a key, a token prefix or a JWT.
-      "authorization:" + "[redacted]".repeat(9_000),
-      "ya29." + "[redacted]".repeat(9_000),
-      "1//" + "[redacted]x".repeat(9_000),
-      "%61ccess_token=" + "[redacted]".repeat(9_000),
-      "eyJa.b." + "access_token=".repeat(7_000),
+      "authorization:" + "[redacted]".repeat(k(9_000)),
+      "ya29." + "[redacted]".repeat(k(9_000)),
+      "1//" + "[redacted]x".repeat(k(9_000)),
+      "%61ccess_token=" + "[redacted]".repeat(k(9_000)),
+      "eyJa.b." + "access_token=".repeat(k(7_000)),
     ];
-    for (const s of inputs) {
-      const t = performance.now();
-      scrubSecrets(s);
-      expect(performance.now() - t, `${s.slice(0, 20)}... (${s.length})`).toBeLessThan(50);
-    }
+    expectLinear(inputs);
   });
 });
 
@@ -858,11 +872,8 @@ describe("scrubSecrets, Ruling 18", () => {
   });
 
   it("stays linear on ~100 KB inputs for the new key words", () => {
-    for (const s of ["password".repeat(12_500), "api_key" + " ".repeat(100_000), "xapikey".repeat(14_000), "%70assword=".repeat(9_000)]) {
-      const t = performance.now();
-      scrubSecrets(s);
-      expect(performance.now() - t, `${s.slice(0, 20)}... (${s.length})`).toBeLessThan(50);
-    }
+    const inputs = (k: (n: number) => number) => ["password".repeat(k(12_500)), "api_key" + " ".repeat(k(100_000)), "xapikey".repeat(k(14_000)), "%70assword=".repeat(k(9_000))];
+    expectLinear(inputs);
   });
 });
 
@@ -905,15 +916,12 @@ describe("scrubSecrets, backslashes around percent-decoding", () => {
   });
 
   it("stays linear and never throws on backslash and percent mixes", () => {
-    for (const s of [
-      ("%" + String.fromCharCode(92)).repeat(50_000),
-      (String.fromCharCode(92) + "%2").repeat(33_000),
-      escAll("%25".repeat(16_000)),
-    ]) {
-      const t = performance.now();
-      expect(() => scrubSecrets(s)).not.toThrow();
-      expect(performance.now() - t, `${s.slice(0, 20)}... (${s.length})`).toBeLessThan(50);
-    }
+    const inputs = (k: (n: number) => number) => [
+      ("%" + String.fromCharCode(92)).repeat(k(50_000)),
+      (String.fromCharCode(92) + "%2").repeat(k(33_000)),
+      escAll("%25".repeat(k(16_000))),
+    ];
+    expectLinear(inputs);
   });
 });
 
@@ -960,28 +968,120 @@ describe("scrubSecrets, every decode order (Ruling 19)", () => {
     expect(leaks).toEqual([]);
   });
 
-  it("the search is capped at 64 forms; the worst case (cap reached) at ~100 KB stays within 100 ms", () => {
-    // A unit found by a random search to reach the cap; every form costs one linear pass, so 64 forms cost about
-    // 64 passes (measured ~21-25 ms at 100 KB on a dev machine, ~43 ms at 200 KB). The bound allows parallel-run load.
+  it("hitting the 64-form cap fails closed (Ruling 20); the capped search still grows linearly", () => {
+    // A unit found by a random search to reach the cap.
     const unit = "%25255C%25252B%5C%2%25252525%2B%252525%255C+" + BS + "%%25252B";
     const s = unit.repeat(Math.ceil(100_000 / unit.length));
-    expect([...decodeStages(s)]).toHaveLength(64);
-    const t = performance.now();
-    expect(scrubSecrets(s)).toBe(s);
-    expect(performance.now() - t).toBeLessThan(100);
+    const r = searchForms(s);
+    expect(r.forms).toHaveLength(64);
+    expect(r.complete).toBe(false);
+    expect(scrubSecrets(s)).toBe(SECRET_LIKE);
+    expectLinear((k) => [unit.repeat(Math.ceil(k(100_000) / unit.length))]);
   });
 
   it("stays linear on ~100 KB inputs that mix every operation", () => {
-    for (const s of [
-      ("%25" + BS + "+").repeat(20_000),
-      ("%a" + BS + "c%63").repeat(10_000),
-      ("+%2B" + BS + "%5c").repeat(10_000),
-      (BS + "%2" + BS + "5").repeat(16_000),
-      "%25".repeat(33_000) + BS + "+",
-    ]) {
-      const t = performance.now();
-      expect(() => scrubSecrets(s)).not.toThrow();
-      expect(performance.now() - t, `${s.slice(0, 20)}... (${s.length})`).toBeLessThan(50);
+    const inputs = (k: (n: number) => number) => [
+      ("%25" + BS + "+").repeat(k(20_000)),
+      ("%a" + BS + "c%63").repeat(k(10_000)),
+      ("+%2B" + BS + "%5c").repeat(k(10_000)),
+      (BS + "%2" + BS + "5").repeat(k(16_000)),
+      "%25".repeat(k(33_000)) + BS + "+",
+    ];
+    expectLinear(inputs);
+  });
+});
+
+/** Ruling 20 (fix wave 16): a search that cannot finish (cap, or depth with forms still changing) fails closed. */
+describe("scrubSecrets, incomplete search fails closed (Ruling 20)", () => {
+  const B = String.fromCharCode(92);
+  const PAD = "+%" + B + "25%35%63%5c%2%62%2b ";
+  // One round of the round-16 encoding: only `%` and `\` are encoded.
+  const encPctBs = (s: string) => s.replace(/%/g, "%25").replace(new RegExp(B + B, "g"), "%5c");
+  const enc4 = (s: string) => encPctBs(encPctBs(encPctBs(encPctBs(s))));
+
+  it("the round-16 repro is the fixed sentence", () => {
+    const text = "+%" + B + "25%35%63%5c%2%62%2b acc%2525255cess_token=SEKRIT";
+    expect(text).toBe(PAD + enc4("acc" + B + "ess_token=SEKRIT"));
+    expect(scrubSecrets(text)).toBe(SECRET_LIKE);
+  });
+
+  it.each([
+    ["bearer", "bear" + B + "er abcdef"],
+    ["ya29", "ya2" + B + "9.a0AfH6SEKRITxyz"],
+    ["JWT", "eyJhbGc" + B + "iOiJ.eyJzdWIi.c2ln"],
+    ["client_secret", "client_sec" + B + "ret=SEKRIT"],
+  ])("the padded %s variant is the fixed sentence", (_name, secret) => {
+    expect(scrubSecrets(PAD + enc4(secret))).toBe(SECRET_LIKE);
+    expect(scrubSecrets(PAD.repeat(10) + enc4(secret))).toBe(SECRET_LIKE);
+  });
+
+  it("every interleaving of encode, escape and plus, behind the padding, is the fixed sentence", () => {
+    const enc: Record<string, (s: string) => string> = {
+      E: (s) => [...s].map((c) => "%" + c.charCodeAt(0).toString(16).padStart(2, "0")).join(""),
+      S: (s) => [...s].map((c) => B + c).join(""),
+      P: (s) => s.replace(/ /g, "+"),
+    };
+    const seqs: string[] = [];
+    const grow = (seq: string) => {
+      if (seq.length > 0) seqs.push(seq);
+      if (seq.length === 5) return;
+      for (const op of "ESP") if (op !== "E" || [...seq].filter((c) => c === "E").length < 4) grow(seq + op);
+    };
+    grow("");
+    const leaks: string[] = [];
+    for (const secret of ["access_token=SEKRIT", "Bearer abcdef"]) {
+      for (const seq of seqs) {
+        let t = secret;
+        for (const op of seq) t = enc[op]!(t);
+        if (scrubSecrets(PAD + t) !== SECRET_LIKE) leaks.push(`${seq}: ${secret}`);
+      }
     }
+    expect(leaks).toEqual([]);
+  });
+
+  it("five decode rounds with forms still changing fail closed", () => {
+    const five = (s: string) => {
+      let t = s;
+      for (let i = 0; i < 5; i++) t = encodeURIComponent(t);
+      return t;
+    };
+    const r = searchForms(five("x %y"));
+    expect(r.complete).toBe(false);
+    expect(scrubSecrets(five("access_token=SEKRIT"))).toBe(SECRET_LIKE);
+    expect(scrubSecrets("100" + "%25".repeat(1) + "2525252525 off")).toBe(SECRET_LIKE);
+  });
+
+  it("benign text never comes near the cap: own messages, prose and URLs search completely and come back unchanged", () => {
+    const root = fileURLToPath(new URL("../src/", import.meta.url));
+    const walk = (d: string): string[] =>
+      readdirSync(d, { withFileTypes: true }).flatMap((e) =>
+        e.isDirectory() ? walk(join(d, e.name)) : e.name.endsWith(".ts") ? [join(d, e.name)] : [],
+      );
+    const LIT = new RegExp('"(?:[^"' + B + B + '\n]|' + B + B + '.)*"', "g");
+    const texts: string[] = [
+      "Error code: 4 retries left",
+      "HTTP 503 backendError at https://www.googleapis.com/calendar/v3/calendars/primary/events?q=a+b%20c&maxResults=50",
+      "search?q=access+token+docs&lang=en",
+      "the code%20is%204%2F5 and 100%25 sure",
+      "a+b=c, 50% off, %zz and %2 are malformed",
+      'He said "hi" and C:' + B + "temp" + B + "new is a path",
+      "https://example.com/a%2Fb?x=1+2&y=%E2%82%AC#frag",
+    ];
+    for (const f of walk(root)) {
+      if (f.endsWith("redact.ts")) continue;
+      for (const m of readFileSync(f, "utf8").matchAll(LIT)) texts.push(m[0].slice(1, -1));
+    }
+    const notMessages = new Set(["client_secret.json", "Bearer ${token.access_token}", "authorization_code"]);
+    let worst = 0;
+    const bad: string[] = [];
+    for (const t of texts) {
+      const r = searchForms(t);
+      worst = Math.max(worst, r.forms.length);
+      if (!r.complete) bad.push(`incomplete: ${t}`);
+      else if (scrubSecrets(t) !== t && !notMessages.has(t) && !t.startsWith("client_secret.json:")) bad.push(`changed: ${t}`);
+    }
+    expect(texts.length).toBeGreaterThan(500);
+    expect(bad).toEqual([]);
+    expect(worst).toBeLessThan(32);
   });
 });
