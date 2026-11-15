@@ -122,46 +122,80 @@ export function looksSecret(text: string): boolean {
   return SECRET_SHAPE.test(text) || hasJwt(text);
 }
 
-const PERCENT = /%([0-9A-Fa-f]{2})/g;
 
-const strip = (s: string): string => s.replace(/\\/g, "");
-const decode = (s: string): string => s.replace(PERCENT, (_m, hex: string) => String.fromCharCode(parseInt(hex, 16)));
+const strip = (s: string): string => (s.includes("\\") ? s.replace(/\\/g, "") : s);
+
+/** The value of one hex digit's char code, or -1. */
+function hexValue(c: number): number {
+  if (c >= 48 && c <= 57) return c - 48; // 0-9
+  if (c >= 65 && c <= 70) return c - 55; // A-F
+  if (c >= 97 && c <= 102) return c - 87; // a-f
+  return -1;
+}
 
 /**
- * Every intermediate form of the text, in order: as written; with every backslash deleted (no escape is
- * interpreted); then, for each percent-decode round (at most 4, stopping when nothing changes; a malformed `%`
- * stays; each byte becomes one character, enough for matching), the decoded form and that form with its backslashes
- * deleted. Deleting backslashes before and after each round means a backslash inside a `%XX` triplet (`%\61`)
- * cannot stop it from decoding (RT13-1); yielding every form means a later round cannot decode a key word away
- * (`%a\ccess_token` is `%access_token` before `%ac` becomes one character, RT14-2). At most 10 forms, each one
- * linear pass; never throws.
+ * One percent-decode round, the same as `s.replace(/%([0-9A-Fa-f]{2})/g, byte as a character)` (non-overlapping,
+ * left to right; a malformed `%` stays) but as a plain scan: the regex-callback version dominated the check's cost.
+ */
+function decode(s: string): string {
+  let out = "";
+  let last = 0;
+  for (let i = s.indexOf("%"); i !== -1 && i + 2 < s.length; i = s.indexOf("%", i + 1)) {
+    const hi = hexValue(s.charCodeAt(i + 1));
+    const lo = hexValue(s.charCodeAt(i + 2));
+    if (hi < 0 || lo < 0) continue;
+    out += s.slice(last, i) + String.fromCharCode(hi * 16 + lo);
+    last = i + 3;
+    i += 2;
+  }
+  return last === 0 ? s : out + s.slice(last);
+}
+
+const plus = (s: string): string => (s.includes("+") ? s.replace(/\+/g, " ") : s);
+
+const MAX_DECODES = 4;
+const MAX_FORMS = 64;
+
+/**
+ * Ruling 19: every form the text can take under any order of three operations, by a bounded breadth-first search
+ * from the text as written: strip (delete every backslash; no escape is interpreted), one percent-decode round (a
+ * malformed `%` stays; each byte becomes one character, enough for matching) and plus (`+` read as a space). A path
+ * may hold at most 4 decode rounds; forms are deduplicated, and the search stops after 64 distinct forms. An
+ * operation that changes nothing adds no form. The forms come out in BFS order (fewest operations first), so a
+ * caller can stop at the first that matters. Each form costs one linear pass; never throws.
  */
 export function* decodeStages(text: string): Generator<string> {
-  let cur = text;
-  yield cur;
-  const stripped = strip(cur);
-  if (stripped !== cur) yield (cur = stripped);
-  for (let i = 0; i < 4; i++) {
-    const decoded = decode(cur);
-    if (decoded === cur) return;
-    yield decoded;
-    const next = strip(decoded);
-    if (next !== decoded) yield next;
-    cur = next;
+  const seen = new Set<string>([text]);
+  let level: { form: string; decodes: number }[] = [{ form: text, decodes: 0 }];
+  yield text;
+  while (level.length > 0) {
+    const next: { form: string; decodes: number }[] = [];
+    for (const { form, decodes } of level) {
+      const steps: [string, number][] = [
+        [strip(form), decodes],
+        [plus(form), decodes],
+      ];
+      if (decodes < MAX_DECODES) steps.push([decode(form), decodes + 1]);
+      for (const [out, d] of steps) {
+        if (seen.has(out)) continue;
+        seen.add(out);
+        yield out;
+        if (seen.size >= MAX_FORMS) return;
+        next.push({ form: out, decodes: d });
+      }
+    }
+    level = next;
   }
 }
 
 /**
  * Free text (error messages) before it is stored or shown, all-or-nothing (Ruling 18; docs/ledger-contract.md,
- * "Free-text secret scrubbing"): if any form of the text (see decodeStages; each also with `+` read as a space)
- * looks secret, the result is SECRET_LIKE, at the first match; otherwise the text is returned unchanged. Nothing is
- * rewritten in place, so no partial redaction can leave a secret behind. Over-redaction is accepted: a key word
- * followed by any character ("the bearer of good news") fails closed.
+ * "Free-text secret scrubbing"): if any form of the text (see decodeStages) looks secret, the result is SECRET_LIKE,
+ * at the first match; otherwise the text is returned unchanged. Nothing is rewritten in place, so no partial
+ * redaction can leave a secret behind. Over-redaction is accepted: a key word followed by any character ("the bearer
+ * of good news") fails closed.
  */
 export function scrubSecrets(text: string): string {
-  for (const form of decodeStages(text)) {
-    if (looksSecret(form)) return SECRET_LIKE;
-    if (form.includes("+") && looksSecret(form.replace(/\+/g, " "))) return SECRET_LIKE;
-  }
+  for (const form of decodeStages(text)) if (looksSecret(form)) return SECRET_LIKE;
   return text;
 }

@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { canonicalJson } from "../src/ledger/canonical.js";
-import { redactPreview, SECRET_LIKE, scrubSecrets } from "../src/ledger/redact.js";
+import { decodeStages, redactPreview, SECRET_LIKE, scrubSecrets } from "../src/ledger/redact.js";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -909,6 +909,75 @@ describe("scrubSecrets, backslashes around percent-decoding", () => {
       ("%" + String.fromCharCode(92)).repeat(50_000),
       (String.fromCharCode(92) + "%2").repeat(33_000),
       escAll("%25".repeat(16_000)),
+    ]) {
+      const t = performance.now();
+      expect(() => scrubSecrets(s)).not.toThrow();
+      expect(performance.now() - t, `${s.slice(0, 20)}... (${s.length})`).toBeLessThan(50);
+    }
+  });
+});
+
+/** Ruling 19 (fix wave 15): the check explores every order of strip, decode and `+` -> space. */
+describe("scrubSecrets, every decode order (Ruling 19)", () => {
+  const BS = String.fromCharCode(92);
+
+  it.each([
+    ["%a" + BS + "c%63ess_token=SEKRIT"],
+    ["%" + BS + "ac%63ess_token=SEKRIT"],
+    ["%A" + BS + "c%63essToken: v"],
+    ["%b" + BS + "e%61rer abcdef"],
+    ["%a" + BS + "c%2563ess_token=SEKRIT"],
+    ["x %a" + BS + "c%63ess_token=SEKRIT."],
+  ])("RT15-1 repro: %s -> the fixed sentence", (text) => {
+    expect(scrubSecrets(text)).toBe(SECRET_LIKE);
+  });
+
+  // The inverse of each operation the check undoes: E percent-encodes every character (undone by a decode round),
+  // S puts a backslash before every character (undone by strip), P turns spaces into `+` (undone by plus).
+  const inverse: Record<string, (s: string) => string> = {
+    E: (s) => [...s].map((c) => "%" + c.charCodeAt(0).toString(16).padStart(2, "0")).join(""),
+    S: (s) => [...s].map((c) => BS + c).join(""),
+    P: (s) => s.replace(/ /g, "+"),
+  };
+  const sequences: string[] = [];
+  const grow = (seq: string) => {
+    if (seq.length > 0) sequences.push(seq);
+    if (seq.length === 5) return;
+    for (const op of "ESP") if (op !== "E" || [...seq].filter((c) => c === "E").length < 4) grow(seq + op);
+  };
+  grow("");
+  const secrets = ["access_token=SEKRIT", "Bearer abcdef", "ya29.a0AfH6SEKRITxyz", "x %access_token: SEKRIT"];
+
+  it(`every interleaving of encode, escape and plus, up to 5 steps with at most 4 encodes (${sequences.length} orders x ${secrets.length} secrets)`, () => {
+    const leaks: string[] = [];
+    for (const secret of secrets) {
+      for (const seq of sequences) {
+        let text = secret;
+        for (const op of seq) text = inverse[op]!(text);
+        if (scrubSecrets(text) !== SECRET_LIKE) leaks.push(`${seq}: ${secret}`);
+      }
+    }
+    expect(leaks).toEqual([]);
+  });
+
+  it("the search is capped at 64 forms; the worst case (cap reached) at ~100 KB stays within 100 ms", () => {
+    // A unit found by a random search to reach the cap; every form costs one linear pass, so 64 forms cost about
+    // 64 passes (measured ~21-25 ms at 100 KB on a dev machine, ~43 ms at 200 KB). The bound allows parallel-run load.
+    const unit = "%25255C%25252B%5C%2%25252525%2B%252525%255C+" + BS + "%%25252B";
+    const s = unit.repeat(Math.ceil(100_000 / unit.length));
+    expect([...decodeStages(s)]).toHaveLength(64);
+    const t = performance.now();
+    expect(scrubSecrets(s)).toBe(s);
+    expect(performance.now() - t).toBeLessThan(100);
+  });
+
+  it("stays linear on ~100 KB inputs that mix every operation", () => {
+    for (const s of [
+      ("%25" + BS + "+").repeat(20_000),
+      ("%a" + BS + "c%63").repeat(10_000),
+      ("+%2B" + BS + "%5c").repeat(10_000),
+      (BS + "%2" + BS + "5").repeat(16_000),
+      "%25".repeat(33_000) + BS + "+",
     ]) {
       const t = performance.now();
       expect(() => scrubSecrets(s)).not.toThrow();
