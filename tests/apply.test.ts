@@ -582,7 +582,8 @@ describe("secrets and auth failures at the provider", () => {
     await expectFailed(makeCtx({ provider: failing }), id, "PROVIDER_ERROR");
     const dump = JSON.stringify([getAction(db, id)!.error, events(id).map((e) => e.preview)]);
     for (const s of ["ya29.", "1//0g", "Bearer "]) expect(dump).not.toContain(s);
-    expect(getAction(db, id)!.error).toContain("[redacted]");
+    // Ruling 18: secret-like error text is replaced whole; apply's own prefix stays outside the scrub.
+    expect(getAction(db, id)!.error).toBe("PROVIDER_ERROR: Provider write failed: [redacted: text contained secret-like data]");
   });
 
   async function expectAuthRefused(p: CalendarProvider, id: string) {

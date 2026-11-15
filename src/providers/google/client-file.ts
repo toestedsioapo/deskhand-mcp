@@ -37,7 +37,7 @@ export function loadOAuthClient(configDir: string): OAuthClient {
   }
   const { client_id, client_secret } = inst as Record<string, unknown>;
   if (typeof client_id !== "string" || client_id === "" || typeof client_secret !== "string" || client_secret === "") {
-    throw new ConfigError(`${file} lacks client_id or client_secret; download the client file again (see ${GUIDE})`);
+    throw new ConfigError(`${file} lacks the client id or the client secret; download the client file again (see ${GUIDE})`);
   }
   return { clientId: client_id, clientSecret: client_secret };
 }

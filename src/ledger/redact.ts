@@ -80,96 +80,46 @@ export function redactInput(value: unknown): unknown {
   return redact(value, 0);
 }
 
-/**
- * The pattern pass: plain secret shapes become `[redacted]`, keeping the surrounding words. It only needs to know
- * plain text: encoded or escaped text that looks secret never reaches it (scrubSecrets step a), and anything it misses
- * is caught by the predicate on its output (step c). A replacement keeps a `key=` or `code=` prefix.
- */
-/**
- * Order matters: the keyed, `code`, `Bearer` and `Authorization` rules run before the JWT step (BEFORE_JWT), so a
- * `eyJx.y.` prefix glued to a key word cannot swallow the key and leave its value (RT11-1); the token rules after it
- * (AFTER_JWT) also consume a `[redacted]` the JWT step left inside them (`ya29.eyJa.b.c.TAIL`).
- */
-const BEFORE_JWT: readonly (readonly [RegExp, string])[] = [
-  // A value named by a secret key: `"access_token":"..."`, `client_secret = '...'` (quoted, up to the closing quote).
-  [/(?<![A-Za-z])((?:access|refresh|id)_?token|client_?secret)(["']?\s*[=:]\s*)(["'])(?:(?!\3)[^\n])*\3?/gi, "$1$2$3[redacted]$3"],
-  // The same, unquoted: `refresh_token=...`, `accessToken: ...` (up to a separator).
-  [/(?<![A-Za-z])((?:access|refresh|id)_?token|client_?secret)(["']?\s*[=:]\s*)(?!["'])[^\s&"',;}]+/gi, "$1$2[redacted]"],
-  // An OAuth authorization code: `code=4/0Aean...`, `"code":"4/0Aean..."`.
-  [/(?<![A-Za-z])(code["']?\s*[=:]\s*["']?)4\/[\w.-]+/gi, "$1[redacted]"],
-  [/Bearer\s+\S+/gi, "[redacted]"],
-  // An Authorization header value (after Bearer, so `Authorization: Bearer x` is already `Authorization: [redacted]`).
-  [/(?<![A-Za-z])(authorization["']?\s*[=:]\s*["']?)(?!\[redacted\])[^\s"',;&}]+/gi, "$1[redacted]"],
-];
-// Then the JWT step (not a regex: `eyJ[\w-]+\.` backtracks quadratically on dot-less `eyJ` runs; see jwtSpans).
-const SECRET_PATTERNS: readonly (readonly [RegExp, string])[] = [
-  [/ya29\.(?:[\w.-]|\[redacted\])+/g, "[redacted]"],
-  [/(?<![\w/])1\/\/(?:[\w./-]|\[redacted\])+/g, "[redacted]"],
-  // A refresh token as a URL path segment (`.../1//0gAB...`); a short `1//x` stays, it is not a token.
-  [/(?<=\/)1\/\/[\w-]{10,}[\w./-]*/g, "[redacted]"],
-  [/GOCSPX-[\w-]+/g, "[redacted]"],
-];
-
-/** Returned by scrubSecrets when the text holds, or may hide, a secret it cannot cut out cleanly. */
+/** What scrubSecrets returns for any text that holds, or may hide, a secret (Ruling 18). */
 export const SECRET_LIKE = "[redacted: text contained secret-like data]";
 
 /**
- * Ruling 17's predicate, regex part: deliberately simple and broad, case-insensitive. Token shapes (`ya29.`, `1//`,
- * `GOCSPX-`, auth code `4/0...`), or a secret key word followed by any number of separator characters (whitespace,
- * quotes, `:`, `=`) and then a value character that does not begin `[redacted]`, or `code` followed that way by `4/`.
- * The separator run is atomic (`(?=(run))\1`: a lookahead captures the whole run, the backreference consumes it), so
- * it can never be re-tried shorter; the run class and the value character are disjoint anyway. JWTs: see jwtSpans.
+ * Ruling 18's predicate, regex part. Case-insensitive, substring-based (no word boundary: `xaccess_token` counts):
+ * - token shapes: `ya29.`, `1//` (each + 10 or more of `[\w-]`), `gocspx-` (+ 6 or more), an auth code `4/0` (+ 10 or
+ *   more);
+ * - a key word (`access_token`, `refresh_token`, `id_token`, `client_secret`, each also without the underscore,
+ *   `authorization`, `bearer`, `api_key`, `apikey`, `password`) followed by a separator run of `[\s"':=]` (any length,
+ *   possibly empty) and then any non-separator character; the bare word with nothing after it does not count;
+ * - `code` followed that way by `4/`.
+ * Each separator run is atomic (`(?=(run))\1`: the lookahead captures the whole run, the backreference consumes it),
+ * so it is never re-tried shorter; the run class and the next character are disjoint. JWTs: see hasJwt.
  */
 const SECRET_SHAPE =
-  /ya29\.[\w-]{10,}|1\/\/[\w-]{10,}|gocspx-[\w-]{6,}|4\/0[\w-]{10,}|(?:access_?token|refresh_?token|id_?token|client_?secret|authorization|bearer)(?=([\s"':=]*))\1(?!\[redacted\](?:$|[\s"',;&}\]]|\[redacted: ))[^\s"':=]|code(?=([\s"':=]*))(?:\2)4\//i;
+  /ya29\.[\w-]{10,}|1\/\/[\w-]{10,}|gocspx-[\w-]{6,}|4\/0[\w-]{10,}|(?:access_?token|refresh_?token|id_?token|client_?secret|authorization|bearer|api_?key|password)(?=([\s"':=]*))\1[^\s"':=]|code(?=([\s"':=]*))(?:\2)4\//i;
 
 const WORD_RUN = /[\w.-]+/g;
 
 /**
- * The spans of three-part JWTs, as the regex `eyJ[\w-]+\.[\w-]+\.[\w-]+` (global, leftmost) would find them, by one
- * linear scan: each maximal run of `[\w.-]` is split on `.`; segments i, i+1 and i+2 form a JWT when all three are
- * non-empty and segment i holds `eyJ` with at least one character after it (the span starts at that `eyJ` and ends
- * with segment i+2). `ignoreCase` matches `eyj`, `EYJ`, ... (for the predicate).
+ * A three-part JWT, case-insensitive, by one linear scan (the regex `eyJ[\w-]+\.[\w-]+\.[\w-]+` backtracks
+ * quadratically on long dot-less `eyJ` runs): within a maximal run of `[\w.-]` split on `.`, three consecutive
+ * non-empty segments where the first holds `eyJ` with at least one character after it.
  */
-function jwtSpans(text: string, ignoreCase: boolean): [number, number][] {
-  const spans: [number, number][] = [];
-  const has = ignoreCase ? (s: string) => /eyj/i.test(s) : (s: string) => s.includes("eyJ");
-  if (!has(text)) return spans;
+function hasJwt(text: string): boolean {
+  if (!/eyj/i.test(text)) return false;
   for (const run of text.matchAll(WORD_RUN)) {
-    if (!has(run[0])) continue;
+    if (!/eyj/i.test(run[0])) continue;
     const segs = run[0].split(".");
-    const starts: number[] = [];
-    let at = run.index;
-    for (const s of segs) {
-      starts.push(at);
-      at += s.length + 1;
-    }
     for (let i = 0; i + 2 < segs.length; i++) {
       const seg = segs[i]!;
-      const p = (ignoreCase ? seg.toLowerCase() : seg).indexOf(ignoreCase ? "eyj" : "eyJ");
-      if (p < 0 || p + 3 >= seg.length || segs[i + 1] === "" || segs[i + 2] === "") continue;
-      spans.push([starts[i]! + p, starts[i + 2]! + segs[i + 2]!.length]);
-      i += 2; // the next match can start no earlier than the segment after this JWT
+      const p = seg.toLowerCase().indexOf("eyj");
+      if (p >= 0 && p + 3 < seg.length && segs[i + 1] !== "" && segs[i + 2] !== "") return true;
     }
   }
-  return spans;
-}
-
-/** Replaces each JWT span with `[redacted]`. */
-function redactJwts(text: string): string {
-  const spans = jwtSpans(text, false);
-  if (spans.length === 0) return text;
-  let out = "";
-  let last = 0;
-  for (const [a, b] of spans) {
-    out += `${text.slice(last, a)}[redacted]`;
-    last = b;
-  }
-  return out + text.slice(last);
+  return false;
 }
 
 export function looksSecret(text: string): boolean {
-  return SECRET_SHAPE.test(text) || jwtSpans(text, true).length > 0;
+  return SECRET_SHAPE.test(text) || hasJwt(text);
 }
 
 const PERCENT = /%([0-9A-Fa-f]{2})/g;
@@ -190,20 +140,11 @@ export function normaliseForCheck(text: string): string {
 }
 
 /**
- * Removes OAuth secrets from free text (error messages) before it is stored or shown (Ruling 17;
- * docs/ledger-contract.md, "Free-text secret scrubbing"):
- * a. if the decoded input differs from the input and looks secret, the whole text is SECRET_LIKE (any encoded or
- *    escaped secret fails closed);
- * b. otherwise the pattern pass replaces plain secret shapes with `[redacted]`, keeping the surrounding words;
- * c. if the result still looks secret, it is SECRET_LIKE; else the result is returned.
- * Over-redaction is accepted: a key word in prose followed by a word ("the bearer of good news") fails closed.
+ * Free text (error messages) before it is stored or shown, all-or-nothing (Ruling 18; docs/ledger-contract.md,
+ * "Free-text secret scrubbing"): if the text, or its decoded form, looks secret, the result is SECRET_LIKE; otherwise
+ * the text is returned unchanged. Nothing is rewritten in place, so no partial redaction can leave a secret behind.
+ * Over-redaction is accepted: a key word followed by any character ("the bearer of good news") fails closed.
  */
 export function scrubSecrets(text: string): string {
-  const decoded = normaliseForCheck(text);
-  if (decoded !== text && looksSecret(decoded)) return SECRET_LIKE;
-  let out = text;
-  for (const [p, r] of BEFORE_JWT) out = out.replace(p, r);
-  out = redactJwts(out);
-  for (const [p, r] of SECRET_PATTERNS) out = out.replace(p, r);
-  return looksSecret(out) ? SECRET_LIKE : out;
+  return looksSecret(text) || looksSecret(normaliseForCheck(text)) ? SECRET_LIKE : text;
 }

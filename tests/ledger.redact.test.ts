@@ -1,7 +1,10 @@
 import { createHash, randomBytes } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { canonicalJson } from "../src/ledger/canonical.js";
-import { normaliseForCheck, redactPreview, SECRET_LIKE, scrubSecrets } from "../src/ledger/redact.js";
+import { redactPreview, SECRET_LIKE, scrubSecrets } from "../src/ledger/redact.js";
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { AuthRequiredError, EVENT_DELETED, ProviderError } from "../src/providers/errors.js";
 
 type Loose = Record<string, any>;
@@ -159,18 +162,18 @@ describe("redactPreview", () => {
 });
 
 describe("scrubSecrets", () => {
-  it("replaces every secret pattern and keeps the surrounding words", () => {
+  it("any secret shape makes the whole text the fixed sentence (Ruling 18: all-or-nothing)", () => {
     const jwt = "eyJhbGciOi.eyJzdWIiOiIx.c2lnX25hdHVyZS0x";
     const text = `401 Bearer ya29.A0AbC-d_e refresh 1//0gXyZ-ab_c secret GOCSPX-abc_DEF-123 jwt ${jwt} done`;
-    const out = scrubSecrets(text);
-    for (const s of ["ya29.", "1//0g", "GOCSPX", "Bearer", "eyJ", "A0AbC", "c2lnX"]) expect(out).not.toContain(s);
-    for (const w of ["401", "refresh", "secret", "jwt", "done"]) expect(out).toContain(w);
-    expect(out).toContain("[redacted]");
+    expect(scrubSecrets(text)).toBe(SECRET_LIKE);
   });
 
-  it("scrubs bare tokens without a Bearer prefix", () => {
-    expect(scrubSecrets("tok ya29.a0.b-c_d end")).toBe("tok [redacted] end");
-    expect(scrubSecrets("rt 1//0abc-d_e/f end")).toBe("rt [redacted] end");
+  it("bare tokens without a Bearer prefix fail closed; shapes shorter than the predicate's minimum pass", () => {
+    expect(scrubSecrets("tok ya29.a0AfH6abcdefgh end")).toBe(SECRET_LIKE);
+    expect(scrubSecrets("rt 1//0abc-d_e_fgh/f end")).toBe(SECRET_LIKE);
+    // Ruling 18's shapes need 10 or more token characters after `ya29.` / `1//` (real tokens are far longer).
+    expect(scrubSecrets("tok ya29.a0.b-c_d end")).toBe("tok ya29.a0.b-c_d end");
+    expect(scrubSecrets("rt 1//0abc-d_e/f end")).toBe("rt 1//0abc-d_e/f end");
   });
 
   it.each([
@@ -202,17 +205,10 @@ describe("scrubSecrets", () => {
     ["double URL-encoded value with an escaped quote", "q access_token%2522%253A%2522ab%255C%2522opaqueN%2522 end", ["opaqueN"]],
     ["double URL-encoded = separator", "q refresh_token%253DopaqueSECRET5 end", ["opaqueSECRET5"]],
     ["double URL-encoded JSON separator", "q access_token%2522%253A%2522opaqueSECRET6%2522 end", ["opaqueSECRET6"]],
-  ])("scrubs a %s (plain: keeps the surrounding words; encoded or escaped: the fixed sentence)", (_name, text, gone) => {
+  ])("a %s fails closed (Ruling 18: all-or-nothing, plain or encoded)", (_name, text, gone) => {
     const out = scrubSecrets(text);
     for (const g of gone) expect(out).not.toContain(g);
-    if (normaliseForCheck(text) !== text) {
-      // Ruling 17: an encoded or escaped secret fails closed.
-      expect(out).toBe(SECRET_LIKE);
-      return;
-    }
-    expect(out).toContain("[redacted]");
-    expect(out.split(" ")[0]).toBe(text.split(" ")[0]);
-    expect(out.endsWith(" end")).toBe(true);
+    expect(out).toBe(SECRET_LIKE);
   });
 
   // JSON nested `d` levels deep: a quote is written with 2^d - 1 backslashes before it.
@@ -354,14 +350,13 @@ describe("scrubSecrets fails closed", () => {
     }
   });
 
-  it("keeps the pattern pass's output when the normalised copy is clean", () => {
-    expect(scrubSecrets("401 Bearer ya29.A0AbC refresh 1//0gXyZ end")).toBe("401 [redacted] refresh [redacted] end");
-    expect(scrubSecrets('q {"access_token":"abc","x":"KEEPME"} end')).toBe('q {"access_token":"[redacted]","x":"KEEPME"} end');
+  it("plain secrets fail closed too; nothing is rewritten in place (Ruling 18)", () => {
+    expect(scrubSecrets("401 Bearer ya29.A0AbC refresh 1//0gXyZ end")).toBe(SECRET_LIKE);
+    expect(scrubSecrets('q {"access_token":"abc","x":"KEEPME"} end')).toBe(SECRET_LIKE);
   });
 
-  it("an empty secret value: quoted is redacted as usual, unquoted fails closed (Ruling 17)", () => {
-    expect(scrubSecrets('q {"access_token":"","x":"KEEPME"} end')).toBe('q {"access_token":"[redacted]","x":"KEEPME"} end');
-    // The predicate sees `access_token=` followed by a value character (`&`): deliberately broad.
+  it("an empty secret value fails closed too (a key word followed by any character)", () => {
+    expect(scrubSecrets('q {"access_token":"","x":"KEEPME"} end')).toBe(SECRET_LIKE);
     expect(scrubSecrets("q access_token=&x=1 end")).toBe(SECRET_LIKE);
   });
 
@@ -387,7 +382,7 @@ describe("scrubSecrets fails closed", () => {
     ["clientSecret", { clientSecret: 'q"x\'SEKRIT3' }],
     ["id_token", { id_token: "plainSEKRIT4" }],
     ["code", { code: "4/0AeanSEKRIT5" }],
-    ["ya29", { note: "ya29.a0SEKRIT6" }],
+    ["ya29", { note: "ya29.a0SEKRIT6abc" }],
     ["1//", { note: "1//0gSEKRIT7abcdef" }],
     ["GOCSPX", { note: "GOCSPX-SEKRIT8" }],
   ];
@@ -486,16 +481,48 @@ describe("scrubSecrets, Ruling 17", () => {
   });
 
   it.each([
+    // RT12-1: an Authorization header with a scheme other than Bearer.
+    ["Authorization: Basic dXNlcjpwYXNzd29yZA=="],
+    ["request failed: Authorization: Basic Y2xpZW50aWQ6R09DU1BYc2VjcmV0 end"],
+    ['{"Authorization": "Basic dXNlcjpwYXNzd29yZA=="}'],
+    ["Authorization: Token 9944b09199c62bcf9418ad846dd0e4bbdfc6ee4b"],
+    ['Authorization: Digest username="u", response="6629fae49393a05397450978507c4ef1"'],
+    ["Authorization: GoogleLogin auth=DQAAAGgA7Zg8CTN"],
+    ["Proxy-Authorization: Basic dXNlcjpwYXNz"],
+    ["authorization: basic dXNlcjpwYXNz"],
+    ["Authorization:\tBasic\tdXNlcjpwYXNz"],
+    // RT12-2: values that start with the literal `[redacted]`.
+    ["Authorization: [redacted]]SEKRIT"],
+    ["authorization=[redacted]]SEKRIT"],
+    ['{"authorization":"[redacted]]SEKRIT"}'],
+    ["x authorization: [REDACTED]]SEKRIT y"],
+    ["%61ccess_token=[redacted]]SEKRIT"],
+    ["%61uthorization: [redacted]]SEKRIT"],
+    ["%61ccess_token=[redacted]+SEKRIT"],
+    ["%61ccess_token=[redacted]\\ SEKRIT"],
+    ["access_token=[redacted]]SEKRIT"],
+    ["Bearer [redacted]]SEKRIT"],
+    // RT12-3: a letter before the key word, behind a JWT-like prefix.
+    ["eyJa.b.xaccess_token=SEKRIT"],
+    ["eyJa.b.Xclient_secret: SEKRIT"],
+    ["eyJa.b.xauthorization: SEKRIT"],
+    ["eyJa.b.xcode=4/SEKRIT"],
+    // RT12-4: a URL-path `1//` token around a JWT-like part.
+    ["https://x/1//eyJa.b.c.TAILSEKRIT end"],
+    ["x/1//abcdefghijkl.eyJa.b.c.TAILSEKRIT end"],
+  ])("RT12 repro (Ruling 18, all-or-nothing): %s -> the fixed sentence", (text) => {
+    expect(scrubSecrets(text)).toBe(FIXED);
+  });
+
+  it.each([
     ["eyJa.b.access_token=SEKRIT", "[redacted]=[redacted]"],
     ["eyJa.b.client_secret: SEKRIT", "[redacted]: [redacted]"],
     ["x eyJhbGc.eyJzdWI.refresh_token=SEKRIT&y=1", "x [redacted]=[redacted]&y=1"],
     ['eyJa.b.access_token":"SEKRIT"', '[redacted]":"[redacted]"'],
     ["eyJa.b.Bearer SEKRIT", "eyJa.b.[redacted]"],
     ["eyJa.b.code=4/SEKRIT", "[redacted]=[redacted]"],
-  ])("RT11-1 repro: the key, code and Bearer rules run before the JWT step: %s", (text, expected) => {
-    const out = scrubSecrets(text);
-    expect(out).not.toContain("SEKRIT");
-    expect(out).toBe(expected);
+  ])("RT11-1 repro: %s -> the fixed sentence (Ruling 18; the wave-11 rewrite was %s)", (text, _wave11) => {
+    expect(scrubSecrets(text)).toBe(SECRET_LIKE);
   });
 
   it.each([
@@ -507,7 +534,7 @@ describe("scrubSecrets, Ruling 17", () => {
     expect(scrubSecrets(text)).toBe(FIXED);
   });
 
-  it("[redacted] followed by a delimiter (or the fixed sentence) stays exempt", () => {
+  it("there is no [redacted] exemption any more: a key word followed by anything fails closed (Ruling 18)", () => {
     for (const t of [
       'q {"access_token":"[redacted]","x":"KEEP"} end',
       "q access_token=[redacted]&x=1 end",
@@ -516,7 +543,7 @@ describe("scrubSecrets, Ruling 17", () => {
       "q {access_token: [redacted]} end",
       "q access_token=[redacted]; x",
     ]) {
-      expect(scrubSecrets(t), t).toBe(t);
+      expect(scrubSecrets(t), t).toBe(SECRET_LIKE);
     }
   });
 
@@ -527,27 +554,26 @@ describe("scrubSecrets, Ruling 17", () => {
     expect(out2).not.toContain("SEKRIT");
     const out3 = scrubSecrets("rt 1//eyJa.b.c.TAILSEKRIT end");
     expect(out3).not.toContain("SEKRIT");
-    expect(scrubSecrets("Authorization: Bearer opaqueSEKRIT end")).not.toContain("SEKRIT");
-    expect(scrubSecrets("Authorization: opaqueSEKRIT end")).toBe("Authorization: [redacted] end");
+    expect(scrubSecrets("Authorization: Bearer opaqueSEKRIT end")).toBe(SECRET_LIKE);
+    expect(scrubSecrets("Authorization: opaqueSEKRIT end")).toBe(SECRET_LIKE);
   });
 
-  it("JWTs: the exact span is redacted in plain text; case variants are caught by the predicate", () => {
+  it("JWTs (any case, inside a word, followed by more dots) fail closed; near-misses pass", () => {
     const jwt = "eyJhbGciOi.eyJzdWIiOiIx.c2lnX25hdHVyZS0x";
-    expect(scrubSecrets(`tok ${jwt} end`)).toBe("tok [redacted] end");
-    expect(scrubSecrets(`a=${jwt}.more x`)).toBe("a=[redacted].more x");
-    expect(scrubSecrets(`ab${jwt} x`)).toBe("ab[redacted] x");
+    for (const t of [`tok ${jwt} end`, `a=${jwt}.more x`, `ab${jwt} x`, `two ${jwt} and ${jwt} end`]) {
+      expect(scrubSecrets(t), t).toBe(FIXED);
+    }
     expect(scrubSecrets(`x eyJ.a.b eyJa..b eyJa.b end`)).toBe("x eyJ.a.b eyJa..b eyJa.b end");
-    expect(scrubSecrets(`two ${jwt} and ${jwt} end`)).toBe("two [redacted] and [redacted] end");
     expect(scrubSecrets("x EYJHBGCIOI.EYJZDWIIOIIX.C2LNX25HDHVYZS0X end")).toBe(FIXED);
   });
 
-  it("plain shapes keep their surrounding words (the pattern pass still runs)", () => {
-    expect(scrubSecrets("401 Bearer ya29.A0AbC-d_e refresh 1//0gXyZ-ab_c end")).toBe("401 [redacted] refresh [redacted] end");
-    expect(scrubSecrets('q {"access_token":"abc","x":"KEEPME"} end')).toBe('q {"access_token":"[redacted]","x":"KEEPME"} end');
-    expect(scrubSecrets("cb ?state=s&code=4/0AeanS0abcdef end")).toBe("cb ?state=s&code=[redacted] end");
+  it("plain shapes fail closed as a whole (Ruling 18 replaced the word-keeping pattern pass)", () => {
+    expect(scrubSecrets("401 Bearer ya29.A0AbC-d_e refresh 1//0gXyZ-ab_c end")).toBe(FIXED);
+    expect(scrubSecrets('q {"access_token":"abc","x":"KEEPME"} end')).toBe(FIXED);
+    expect(scrubSecrets("cb ?state=s&code=4/0AeanS0abcdef end")).toBe(FIXED);
   });
 
-  it("a plain shape the pattern pass misses still fails closed (checked on the output)", () => {
+  it("shapes the old pattern pass missed fail closed", () => {
     expect(scrubSecrets("x ab1//0gSEKRITabcdef end")).toBe(FIXED); // the raw 1// rule refuses a word character before it
     expect(scrubSecrets('q {"access_token":"\\"SEKRIT"} end')).toBe(FIXED);
     expect(scrubSecrets("tok eyJhbGciOi.eyJzdWIiOiIx.c2lnX25hdHVyZS0x")).not.toContain("c2lnX");
@@ -637,7 +663,21 @@ describe("scrubSecrets, Ruling 17", () => {
     ["comma and amp", "a,b&cSEKRIT5x"],
     ["backslash r", "\\rSEKRIT6x"],
   ];
-  const keys = ["access_token", "accessToken", "refresh_token", "refreshToken", "id_token", "idToken", "client_secret", "clientSecret"];
+  const keys = [
+    "access_token",
+    "accessToken",
+    "refresh_token",
+    "refreshToken",
+    "id_token",
+    "idToken",
+    "client_secret",
+    "clientSecret",
+    "api_key",
+    "apiKey",
+    "password",
+    "Authorization",
+    "xaccess_token",
+  ];
   const shapes: [string, string][] = [
     ["ya29", "ya29.a0SEKRIT7abcdefgh"],
     ["1//", "1//0gSEKRIT8abcdefgh"],
@@ -720,6 +760,105 @@ describe("scrubSecrets, Ruling 17", () => {
       "eyJa.b." + "access_token=".repeat(7_000),
     ];
     for (const s of inputs) {
+      const t = performance.now();
+      scrubSecrets(s);
+      expect(performance.now() - t, `${s.slice(0, 20)}... (${s.length})`).toBeLessThan(50);
+    }
+  });
+});
+
+/** Ruling 18 (fix wave 12): all-or-nothing. A secret-like text is the fixed sentence; anything else is unchanged. */
+describe("scrubSecrets, Ruling 18", () => {
+  // Non-message literals the predicate rightly flags; none of them reaches scrubSecrets (see the report, wave 12).
+  const NOT_MESSAGES = new Map<string, string>([
+    ["client_secret.json", "the OAuth client file name (Google's download name)"],
+    ["client_secret.json: X\\n", "the auth status line naming that file, printed directly to stdout"],
+    ["Bearer X", "the Authorization header value itself, a credential"],
+    ["authorization_code", "the OAuth grant_type value"],
+  ]);
+
+  it("every string literal in src/ (except redact.ts) comes back unchanged, but the listed non-messages", () => {
+    const root = fileURLToPath(new URL("../src/", import.meta.url));
+    const walk = (d: string): string[] =>
+      readdirSync(d, { withFileTypes: true }).flatMap((e) =>
+        e.isDirectory() ? walk(join(d, e.name)) : e.name.endsWith(".ts") ? [join(d, e.name)] : [],
+      );
+    const LIT = /"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|`(?:[^`\\]|\\.)*`/g;
+    const changed: string[] = [];
+    let n = 0;
+    for (const f of walk(root)) {
+      if (f.endsWith("redact.ts")) continue;
+      for (const m of readFileSync(f, "utf8").matchAll(LIT)) {
+        const lit = m[0].slice(1, -1).replace(/\$\{[^}]*\}/g, "X");
+        n += 1;
+        if (scrubSecrets(lit) !== lit && !NOT_MESSAGES.has(lit)) changed.push(lit);
+      }
+    }
+    expect(n).toBeGreaterThan(1000);
+    expect(changed).toEqual([]);
+  });
+
+  it("is idempotent", () => {
+    for (const t of [
+      "plain text",
+      "access_token=SEKRIT",
+      SECRET_LIKE,
+      "Error code: 4 retries left",
+      "%61ccess_token=x",
+      "eyJa.b.c",
+      "",
+    ]) {
+      expect(scrubSecrets(scrubSecrets(t)), t).toBe(scrubSecrets(t));
+    }
+  });
+
+  it("the bare key word with nothing after it does not count; any following character does", () => {
+    expect(scrubSecrets("access_token")).toBe("access_token");
+    expect(scrubSecrets("password:  ")).toBe("password:  ");
+    expect(scrubSecrets("passwords")).toBe(SECRET_LIKE);
+    expect(scrubSecrets("api_key=x")).toBe(SECRET_LIKE);
+    expect(scrubSecrets("apikey: x")).toBe(SECRET_LIKE);
+    expect(scrubSecrets("xaccess_token=x")).toBe(SECRET_LIKE);
+  });
+
+  // Every repro from rounds 1-12 in one list: the fixed sentence, no marker left.
+  const repros = [
+    "grant refresh_token=1%2F%2F0gABCDEFxyz&x=1 end",
+    'body {"refresh_token":"1\\/\\/0gABCDEFxyz"} end',
+    "header Bearer%20opaqueTOKEN123 end",
+    "q client_secret=GOCSPX%2Dabc_DEF end",
+    "q access_token=ya29%2Ea0AfH6xyz end",
+    'body {"code":"4/0AeanS0abcdef","state":"s"} end',
+    "q access_token%22%3A%22opaqueVALUE%22 end",
+    'q client_secret = "abc def" end',
+    'body {\\"access_token\\":\\"ab\\\\\\"opaqueL\\"} end',
+    "q access_token%2522%253A%2522ab%255C%2522opaqueN%2522 end",
+    "q=%7B%5C%22access_token%5C%22%3A%5C%22SEKRITX%5C%22%7D end",
+    "q=%7B%0A%20%20%22code%22%3A%20%224%2F0AeanCODEXQ%22%0A%7D end",
+    "j%3D%257B%250A%2B%2B%2522code%2522%253A%2B%25224%252F0AeanCODEXQ%2522%250A%257D",
+    "j%3D%257B%2522access_token%2522%2B%253A%2522SEKRIT%2522%257D",
+    "%25257B%252522access_token%252522%25253A%252522%25255C%252522SEKRIT%252522%25257D",
+    "C%3A%5Crefresh_token%3DSEKRIT",
+    "access_token:%252520'SEKRIT'",
+    "access%5Ftoken%3D" + "%20".repeat(12) + "SEKRIT",
+    "eyJa.b.access_token=SEKRIT",
+    "eyJa.b.Bearer SEKRIT",
+    "%61ccess_token=[redacted]SEKRIT",
+    "eyJa.b.authorization: SEKRIT",
+    "ya29.eyJa.b.c.TAILSEKRIT",
+    "Authorization: Basic dXNlcjpwYXNzd29yZA==",
+    'Authorization: Digest username="u", response="6629fae49393a05397450978507c4ef1"',
+    "Authorization: [redacted]]SEKRIT",
+    "eyJa.b.xaccess_token=SEKRIT",
+    "https://x/1//eyJa.b.c.TAILSEKRIT end",
+  ];
+  it.each(repros.map((r) => [r]))("repro from rounds 1-12 fails closed: %s", (text) => {
+    const out = scrubSecrets(text);
+    expect(out).toBe(SECRET_LIKE);
+  });
+
+  it("stays linear on ~100 KB inputs for the new key words", () => {
+    for (const s of ["password".repeat(12_500), "api_key" + " ".repeat(100_000), "xapikey".repeat(14_000), "%70assword=".repeat(9_000)]) {
       const t = performance.now();
       scrubSecrets(s);
       expect(performance.now() - t, `${s.slice(0, 20)}... (${s.length})`).toBeLessThan(50);
