@@ -118,7 +118,8 @@ async function send(
   accessToken: string,
 ): Promise<GoogleResponse> {
   const headers: Record<string, string> = { authorization: `Bearer ${accessToken}`, accept: "application/json" };
-  const init: RequestInit = { method: req.method, headers, signal: AbortSignal.timeout(deps.timeoutMs ?? 10_000) };
+  // Never follow a redirect: it would take the bearer token and the body past the API host check.
+  const init: RequestInit = { method: req.method, headers, redirect: "error", signal: AbortSignal.timeout(deps.timeoutMs ?? 10_000) };
   if (req.body !== undefined) {
     headers["content-type"] = "application/json";
     init.body = JSON.stringify(req.body);
@@ -145,7 +146,8 @@ async function send(
  * every other outcome is an AuthRequiredError or a ProviderError whose text
  * never holds a token, header or response body. A ProviderError is `retryable`
  * for a timeout, a network error, HTTP 429 and 5xx (outcome unknown or
- * transient), and definite for every other status.
+ * transient), and definite for every other status. A redirect is never
+ * followed (a network error to the caller).
  */
 export async function googleRequest(
   deps: GoogleHttpDeps,

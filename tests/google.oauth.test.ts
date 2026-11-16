@@ -10,6 +10,7 @@ import {
 } from "../src/providers/google/oauth.js";
 import type { StoredToken } from "../src/providers/google/token-store.js";
 import { jsonReply, startFakeOAuth, type FakeOAuth } from "./helpers/fake-oauth.js";
+import { startRedirectPair } from "./helpers/redirect-server.js";
 
 const client = { clientId: "cid.apps.googleusercontent.com", clientSecret: "SECRET-XYZ" };
 const SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"];
@@ -322,5 +323,47 @@ describe("refreshAccessToken", () => {
     fake.respond((_req, res) => jsonReply(res, 500, { error: "boom ya29.SECRET" }));
     const err = await refreshAccessToken(client, stored, deps()).catch((e: unknown) => e);
     expect((err as Error).message).toBe("Google sign-in failed: the token endpoint returned HTTP 500.");
+  });
+});
+
+describe("token endpoint redirects (red-team round 18)", () => {
+  const stored: StoredToken = {
+    version: 1,
+    client_id: client.clientId,
+    scopes: SCOPES,
+    refresh_token: "1//refresh",
+    access_token: "old",
+    expires_at: "2026-11-14T09:00:00.000Z",
+    obtained_at: "2026-11-10T09:00:00.000Z",
+  };
+
+  for (const status of [307, 308] as const) {
+    it(`a refresh answered with ${status} is refused and the refresh token and client secret go nowhere else`, async () => {
+      const pair = await startRedirectPair(status);
+      try {
+        const over = { endpoints: { authUrl: GOOGLE_ENDPOINTS.authUrl, tokenUrl: pair.redirectUrl } };
+        const err = await refreshAccessToken(client, stored, deps(over)).catch((e: unknown) => e);
+        expect(err).toBeInstanceOf(OAuthError);
+        expect((err as OAuthError).code).toBe("PROVIDER_ERROR");
+        expect(pair.landed).toHaveLength(0);
+      } finally {
+        await pair.close();
+      }
+    });
+  }
+
+  it("a code exchange answered with 307 fails the login and the code, verifier and secret go nowhere else", async () => {
+    const pair = await startRedirectPair(307);
+    try {
+      const { urlP, result } = start({ endpoints: { authUrl: GOOGLE_ENDPOINTS.authUrl, tokenUrl: pair.redirectUrl } });
+      const url = await urlP;
+      await fetch(`${callbackBase(url)}/oauth2callback?code=CODE1&state=${url.searchParams.get("state")}`);
+      const err = await result.catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(OAuthError);
+      expect((err as OAuthError).code).toBe("PROVIDER_ERROR");
+      expect(pair.landed).toHaveLength(0);
+    } finally {
+      await pair.close();
+    }
   });
 });

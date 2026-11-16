@@ -7,6 +7,7 @@ import { AuthRequiredError, ProviderError } from "../src/providers/errors.js";
 import { googleRequest, type GoogleHttpDeps } from "../src/providers/google/http.js";
 import { GOOGLE_ENDPOINTS } from "../src/providers/google/oauth.js";
 import { readToken, tokenPath, writeToken, type StoredToken } from "../src/providers/google/token-store.js";
+import { startRedirectPair } from "./helpers/redirect-server.js";
 import { replayFetch, type Replay } from "./helpers/replay-fetch.js";
 
 const NOW = new Date("2026-11-14T10:00:00.000Z");
@@ -343,5 +344,49 @@ describe("googleRequest fixes", () => {
     const e = await reject(getList(use(["events-list-403-insufficient"]), SCOPE_CALENDAR_READ));
     expect(e).toBeInstanceOf(AuthRequiredError);
     expect(e.message).toBe(LOGIN);
+  });
+});
+
+describe("googleRequest redirects (red-team round 18)", () => {
+  /** Sends what googleRequest asks for to `target` instead, with the caller's init unchanged (redirect mode included). */
+  const via = (target: string): typeof fetch => ((_u: unknown, init?: RequestInit) => fetch(target, init)) as typeof fetch;
+
+  for (const status of [302, 307, 308] as const) {
+    it(`an API answer of ${status} is not followed: the bearer token and the body reach no other server`, async () => {
+      writeToken(dir, token());
+      const pair = await startRedirectPair(status);
+      try {
+        const e = await reject(
+          googleRequest(deps(via(pair.redirectUrl)), "events.insert", {
+            method: "POST",
+            url: "https://www.googleapis.com/calendar/v3/calendars/primary/events",
+            body: { summary: "x" },
+            requiredScope: SCOPE_CALENDAR_READ,
+          }),
+        );
+        expect(e).toBeInstanceOf(ProviderError);
+        expect(pair.landed).toHaveLength(0);
+      } finally {
+        await pair.close();
+      }
+    });
+  }
+
+  it("a token refresh answered with 307 is 'token refresh failed' and token.json is unchanged", async () => {
+    writeToken(dir, token(expired()));
+    const before = readFileSync(tokenPath(dir), "utf8");
+    const pair = await startRedirectPair(307);
+    try {
+      const d = deps(never, {
+        oauth: { fetch, endpoints: { authUrl: GOOGLE_ENDPOINTS.authUrl, tokenUrl: pair.redirectUrl }, now: () => NOW },
+      });
+      const e = await reject(getList(d));
+      expect(e).toBeInstanceOf(ProviderError);
+      expect(e.message).toBe("google calendar events.list failed: token refresh failed");
+      expect(pair.landed).toHaveLength(0);
+      expect(readFileSync(tokenPath(dir), "utf8")).toBe(before);
+    } finally {
+      await pair.close();
+    }
   });
 });

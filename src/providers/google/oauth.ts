@@ -44,7 +44,7 @@ interface TokenResponse {
   scope?: unknown;
 }
 
-/** POSTs to the token endpoint. Returns the parsed body only on HTTP 2xx; otherwise throws a fixed sentence. */
+/** POSTs to the token endpoint, never following a redirect. Returns the parsed body only on HTTP 2xx; otherwise throws a fixed sentence. */
 async function postToken(deps: OAuthDeps, params: Record<string, string>): Promise<TokenResponse> {
   let res: Response;
   try {
@@ -52,6 +52,8 @@ async function postToken(deps: OAuthDeps, params: Record<string, string>): Promi
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams(params).toString(),
+      // The body holds the client secret and a code or refresh token: a 307/308 would resend it to another host.
+      redirect: "error",
     });
   } catch {
     throw new OAuthError("Google sign-in failed: could not reach the token endpoint.", "PROVIDER_ERROR");
