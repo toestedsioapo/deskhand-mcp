@@ -2,6 +2,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
+import { ProviderError } from "../src/providers/errors.js";
 import { createFixtureProvider } from "../src/providers/fixture/provider.js";
 import type { NewCalendarEvent } from "../src/providers/types.js";
 import { makeWorld } from "./helpers/seed.js";
@@ -57,6 +58,7 @@ describe("fixture provider", () => {
     const p = createFixtureProvider(makeWorld());
     const a = await p.createEvent(newEvent, "key1");
     expect(a.id).toBe("key1");
+    expect(a.organizerSelf).toBe(true);
     expect(p.writes).toHaveLength(1);
     const b = await p.createEvent(newEvent, "key1");
     expect(b).toEqual(a);
@@ -64,6 +66,32 @@ describe("fixture provider", () => {
     expect(await p.getEvent("primary", "key1")).toEqual(a);
     const { busy } = await p.freeBusy("primary", { start: newEvent.start, end: newEvent.end });
     expect(busy).toEqual([{ start: newEvent.start, end: newEvent.end }]);
+  });
+
+  it("lookupEvent tells absent, present and cancelled apart; a cancelled event is gone for every other read", async () => {
+    const p = createFixtureProvider(makeWorld());
+    expect(await p.lookupEvent("primary", "nope")).toEqual({ state: "absent" });
+    const a = await p.createEvent(newEvent, "key1");
+    expect(await p.lookupEvent("primary", "key1")).toEqual({ state: "present", event: a });
+    p.cancelEvent("primary", "key1");
+    expect(await p.lookupEvent("primary", "key1")).toEqual({ state: "cancelled" });
+    expect(await p.getEvent("primary", "key1")).toBeNull();
+    expect((await p.freeBusy("primary", { start: newEvent.start, end: newEvent.end })).busy).toEqual([]);
+    const listed = await p.listEvents("primary", { start: newEvent.start, end: newEvent.end }, 10);
+    expect(listed.events.map((e) => e.id)).not.toContain("key1");
+  });
+
+  it("createEvent on a cancelled id throws the deleted-event ProviderError and writes nothing", async () => {
+    const p = createFixtureProvider(makeWorld());
+    await p.createEvent(newEvent, "key1");
+    p.cancelEvent("primary", "key1");
+    await expect(p.createEvent(newEvent, "key1")).rejects.toThrow("an event with this action's id was created and later deleted");
+    await expect(p.createEvent(newEvent, "key1")).rejects.toBeInstanceOf(ProviderError);
+    expect(p.writes).toHaveLength(1);
+  });
+
+  it("cancelEvent of an unknown event throws", () => {
+    expect(() => createFixtureProvider(makeWorld()).cancelEvent("primary", "nope")).toThrow("unknown event");
   });
 
   it("calls afterWrite after the write is recorded, once per distinct write", async () => {
@@ -224,6 +252,7 @@ describe("fixture provider", () => {
         attendees: [],
         etag: "a1",
         allDay: true,
+        organizerSelf: true, // world events are the owner's by default
       });
       expect((await p.getEvent("primary", "evt_timed"))?.allDay).toBe(false);
     });

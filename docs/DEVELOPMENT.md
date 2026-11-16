@@ -23,8 +23,8 @@ The SQLite ledger is `ledger.db` in the data dir: `%LOCALAPPDATA%\deskhand` on W
 | `DESKHAND_HOME` | data and config dir, overrides the platform default |
 | `DESKHAND_ALLOW_WRITES` | must be exactly `1` for `action_apply` to do anything; anything else (including `true`) leaves writes off |
 | `DESKHAND_PLAN_TTL_HOURS` | plan lifetime, integer 1-168, default 24; out of range is a startup error |
-| `DESKHAND_PROVIDER` | `fixture` selects the fixture provider (M3b adds `google`). Unset means no provider: the server starts, but `action_apply` refuses with `PROVIDER_NOT_CONFIGURED`. Any other value is a startup error (ADR 0008) |
-| `DESKHAND_FIXTURE` | path to a fixture world JSON (`docs/fixture-format.md`) for the fixture provider, with its fixed `now` as the clock. Requires `DESKHAND_PROVIDER=fixture` (set without it is a startup error). With `DESKHAND_PROVIDER=fixture` and this unset, the world is empty and the clock is real |
+| `DESKHAND_PROVIDER` | `fixture` selects the fixture provider, `google` the Google Calendar adapter (sign in first with `deskhand auth login`; `docs/google-oauth-setup.md`). With `google` the server starts without a token and Google-backed tools answer `AUTH_REQUIRED` until you sign in. Unset means no provider: the server starts, but `action_apply` refuses with `PROVIDER_NOT_CONFIGURED`. Any other value is a startup error (ADR 0008) |
+| `DESKHAND_FIXTURE` | path to a fixture world JSON (`docs/fixture-format.md`) for the fixture provider, with its fixed `now` as the clock. Requires `DESKHAND_PROVIDER=fixture` (set without it, or with `DESKHAND_PROVIDER=google`, is a startup error). With `DESKHAND_PROVIDER=fixture` and this unset, the world is empty and the clock is real |
 | `DESKHAND_TIMEZONE` | IANA zone name (for example `Europe/Berlin`) for the `when:` line of every diff and the default zone of calendar tools. Default: the system zone. An offset such as `+01:00` or an abbreviation is a startup error, and so is a system zone that is not an IANA name (set this variable then) |
 | `DESKHAND_RULES` | path to your own working-hours rules for `calendar_find_slots`. Default: `rules.json` in the config dir (see below) |
 | `DESKHAND_SHUTDOWN_TIMEOUT_MS` | how long the server waits for in-flight tool calls after the client closes stdin, integer 1000-120000, default 30000; anything else is a startup error. At the cap it logs one line and exits 1 |
@@ -55,7 +55,7 @@ node dist/cli.js approve <id>             # needs a TTY on stdin and stdout; typ
 node dist/cli.js reject <id> [reason]     # no TTY needed; the method is logged
 ```
 
-`export` and `auth` are stubs until M5 and M3b. `pending` and `approve` print times in `DESKHAND_TIMEZONE` (default: the system zone). Installed, the bin is `deskhand`.
+`auth login | status | upgrade` is the Google OAuth flow (`docs/google-oauth-setup.md`); `export` is a stub until M5. `pending` and `approve` print times in `DESKHAND_TIMEZONE` (default: the system zone). Installed, the bin is `deskhand`.
 
 ## Red-team sandbox
 
@@ -75,5 +75,7 @@ Build first (`pnpm build`), then either:
   ```
   pnpm exec mcp-inspector --cli -e DESKHAND_PROVIDER=fixture -e DESKHAND_FIXTURE=<world.json> node dist/server.js --method tools/call --tool-name calendar_list_events --tool-arg time_min=2026-11-10T00:00:00Z --tool-arg time_max=2026-11-11T00:00:00Z
   ```
+
+Google mode: `pnpm exec mcp-inspector --cli -e DESKHAND_PROVIDER=google node dist/server.js --method tools/call --tool-name calendar_list_events ...` answers `AUTH_REQUIRED` until `deskhand auth login` has run. Live calls to Google are only ever made by hand (TEST_PLAN, manual Google check); tests and CI never do.
 
 Bin entry files (`src/server.ts`, `src/cli.ts`) must keep the `#!/usr/bin/env node` first line and LF endings (enforced by `.gitattributes` and `tests/packaging.test.ts`).

@@ -88,11 +88,21 @@ Output (success only):
   action_id: string,
   status: "applied",
   replayed: boolean,   // true when the stored result was returned (repeat call) or the write was recovered
-  result: unknown      // the stored result_json (for calendar.create_event: the created event)
+  result: {            // the event as stored in result_json, shaped like a calendar_list_events item
+    id: string,
+    etag: string,
+    all_day: boolean,
+    start: string,
+    end: string,
+    title: Untrusted,          // source "calendar:<the plan's calendarId>"
+    attendees: Untrusted[]     // one per address, same source
+  }
 }
 ```
 
-Failures are `isError` results with `_meta.deskhand.error_code` and `action_id` (`WRITES_DISABLED`, `UNKNOWN_ACTION`, `NOT_APPROVED`, `PLAN_MODIFIED`, `PLAN_EXPIRED`, `STALE_PLAN`, `PROVIDER_ERROR`, `INTERNAL`). Gate order, row sequences and which refusals change `status` are fixed in `docs/ledger-contract.md`; the schemas are snapshot-tested in `tests/tools.action-apply.test.ts`.
+The event's title and attendees are calendar text and come back wrapped as untrusted (see "Untrusted text"), on the first apply, on a recovery and on every replay. Before M3b fix wave 1 `result` was the raw stored event (`z.unknown()`); this is a snapshot-tested output change. `result_json` in the ledger is unchanged (the raw `EventRef`). An event under the action's id that is not the approved plan's event is never returned: apply fails with `STALE_PLAN` and a fixed phrase that carries no event content (ledger contract, gate 6).
+
+Failures are `isError` results with `_meta.deskhand.error_code` and `action_id` (`WRITES_DISABLED`, `UNKNOWN_ACTION`, `NOT_APPROVED`, `PLAN_MODIFIED`, `PLAN_EXPIRED`, `STALE_PLAN`, `PROVIDER_ERROR`, `AUTH_REQUIRED`, `INTERNAL`). Gate order, row sequences and which refusals change `status` are fixed in `docs/ledger-contract.md`; the schemas are snapshot-tested in `tests/tools.action-apply.test.ts`.
 
 ## Untrusted text
 
@@ -111,7 +121,7 @@ Input (strict):
 | `time_max` | ISO-8601 datetime, offset allowed | required | normalised to UTC |
 | `limit` | integer 1..250 | 50 | out of range is `INVALID_INPUT` |
 
-Refused as `INVALID_INPUT`: `time_max <= time_min`; a span over 62 days. A provider failure is `PROVIDER_ERROR`.
+Refused as `INVALID_INPUT`: `time_max <= time_min`; a span over 62 days. A provider failure is `PROVIDER_ERROR` (a sign-in problem is `AUTH_REQUIRED`, tool_call outcome `rejected`; an unrecognised failure answers `Calendar provider call failed.`).
 
 Output:
 
@@ -164,7 +174,7 @@ Input (strict):
 | `date` | `YYYY-MM-DD` | required | local date of the requested slot in `time_zone`; a date that is not on the calendar is `INVALID_INPUT` (Tempo rejects it) |
 | `start` | `HH:mm` | required | local start, 00:00 to 23:59 |
 | `end` | `HH:mm` | required | local end |
-| `time_zone` | IANA zone name | `Config.timeZone` | `DESKHAND_TIMEZONE`, else the system zone. Offsets (`+01:00`), POSIX names (`EST5EDT`), unknown names and `""` are `INVALID_INPUT` |
+| `time_zone` | IANA zone name | `Config.timeZone` | `DESKHAND_TIMEZONE`, else the system zone. The name is used in its canonical spelling (`europe/berlin` is `Europe/Berlin`; aliases such as `Asia/Calcutta` are kept, only their case is fixed). Offsets (`+01:00`), POSIX names (`EST5EDT`), unknown names and `""` are `INVALID_INPUT` |
 | `participants` | `PartyRules[]`, 1 to 49 | required | the counterparties |
 | `own_rules` | `PartyRules` | none | the caller's rules; overrides the rules file |
 | `calendar_id` | string, 1 to 256 characters | `"primary"` | calendar checked for busy time; printable ASCII, no whitespace or control characters (`^[\x21-\x7e]+$`); anything else is `INVALID_INPUT` |
@@ -195,9 +205,9 @@ Behaviour: Tempo is asked for 10 suggestions with `now` set to the server clock.
 - Tempo said `book` and the requested slot is free: `decision: "book"`, `slots` is the requested slot alone, `busy_dropped: 0`.
 - Tempo said `book` but the requested slot is busy: it is dropped and counted in `busy_dropped`; the surviving alternatives (first `max_suggestions`) give `counter_offer`.
 - Tempo said `counter_offer`: busy candidates are dropped, `slots` is the first `max_suggestions` survivors, `reasons` carries Tempo's reasons (for example `OUTSIDE_AVAILABILITY` with the `participant_id`).
-- `none` when no candidate survives, with `note: "All suggested slots are busy in calendar <calendar_id>."`. Otherwise `note` is null.
+- `none` when no candidate survives. If Tempo returned no candidate at all, `note: "No slot fits the given rules."`, `busy_dropped: 0` and Tempo's `reasons` are passed through. If there were candidates and every one was dropped as busy, `note: "All suggested slots are busy in calendar <calendar_id>."`. Otherwise `note` is null.
 
-Errors: `INVALID_INPUT` for a bad `time_zone`, no usable own rules, or a Tempo error (message carries Tempo's code and message, for example a duplicate party id or an impossible date); `PROVIDER_ERROR` when `freeBusy` fails; `PROVIDER_NOT_CONFIGURED` with no provider. The output schemas are snapshot-tested in `tests/tools.calendar-find-slots.test.ts`.
+Errors: `INVALID_INPUT` for a bad `time_zone`, no usable own rules, or a Tempo error (message carries Tempo's code and message, for example a duplicate party id or an impossible date); `PROVIDER_ERROR` when `freeBusy` fails (`AUTH_REQUIRED` when sign-in is needed); `PROVIDER_NOT_CONFIGURED` with no provider. The output schemas are snapshot-tested in `tests/tools.calendar-find-slots.test.ts`.
 
 ## `calendar_propose_event`
 
@@ -213,7 +223,7 @@ Input (strict):
 | `attendees` | email[], at most 50, each at most 254 characters | `[]` | the diff never truncates an address |
 | `send_updates` | `"none"` \| `"all"` \| `"externalOnly"` | `"none"` | whether attendees are emailed when the event is created |
 | `calendar_id` | string, 1 to 256 characters | `"primary"` | printable ASCII, no whitespace or control characters (`^[\x21-\x7e]+$`); anything else is `INVALID_INPUT` |
-| `time_zone` | IANA zone name | `Config.timeZone` | the event's own zone, always stored in the plan as `event.timeZone` (resolved at plan time: this input, else `Config.timeZone`) and shown on an `event zone:` diff line when it differs from the viewer's `Config.timeZone`. Offsets (`+01:00`), POSIX names and unknown names are `INVALID_INPUT` |
+| `time_zone` | IANA zone name | `Config.timeZone` | the event's own zone, always stored in the plan as `event.timeZone` (resolved at plan time: this input, else `Config.timeZone`, always in its canonical spelling, so `europe/berlin` and `Europe/Berlin` give the same plan hash) and shown on an `event zone:` diff line when it differs from the viewer's `Config.timeZone` (compared in canonical spelling). Offsets (`+01:00`), POSIX names and unknown names are `INVALID_INPUT` |
 | `rationale` | string, at most 500 characters | none | why the agent proposes it; stored in the plan |
 
 Output:
@@ -230,7 +240,7 @@ Output:
 
 The result sets `_meta.deskhand.action_id`, so the `tool_call` row carries the action id. Ledger rows on success: `plan_created`, then `tool_call`, both with the action id.
 
-Refused as `INVALID_INPUT` (no plan row): `end <= start`; `start` not after the server clock; a `time_zone` that is not an IANA name; a `calendar_id` with whitespace or control characters; a `title` that is not one line of visible text; an unknown extra field; a slot that overlaps a busy block in the calendar (`The slot is busy in calendar <id>; use calendar_find_slots.`, checked with `provider.freeBusy`; all-day events are not busy time). A provider failure while checking is `PROVIDER_ERROR`.
+Refused as `INVALID_INPUT` (no plan row): `end <= start`; `start` not after the server clock; a `time_zone` that is not an IANA name; a `calendar_id` with whitespace or control characters; a `title` that is not one line of visible text; an unknown extra field; a slot that overlaps a busy block in the calendar (`The slot is busy in calendar <id>; use calendar_find_slots.`, checked with `provider.freeBusy`; all-day events are not busy time). A provider failure while checking is `PROVIDER_ERROR` (`AUTH_REQUIRED` when sign-in is needed).
 
 The plan it stores (`plan_json`, hashed with the canonical JSON):
 

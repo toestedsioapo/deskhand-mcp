@@ -1,13 +1,13 @@
 import { join } from "node:path";
-import { isIanaTimeZone } from "../util/local-time.js";
+import { canonicalTimeZone } from "../util/local-time.js";
 import { resolvePaths, type DataPaths } from "./paths.js";
 
 export interface Config {
   writesEnabled: boolean;
   planTtlHours: number;
   busyTimeoutMs: number;
-  /** Explicit provider choice (ADR 0008). null: none configured. M3b widens this to add "google". */
-  provider: "fixture" | null;
+  /** Explicit provider choice (ADR 0008). null: none configured. "google" is the Google Calendar adapter (M3b). */
+  provider: "fixture" | "google" | null;
   fixturePath: string | undefined;
   /** IANA zone used when a tool call names none: `DESKHAND_TIMEZONE`, else the system zone. */
   timeZone: string;
@@ -51,10 +51,10 @@ function parseShutdownTimeout(raw: string | undefined): number {
   return n;
 }
 
-function parseProvider(raw: string | undefined): "fixture" | null {
+function parseProvider(raw: string | undefined): "fixture" | "google" | null {
   if (raw === undefined) return null;
-  if (raw === "fixture") return "fixture";
-  throw new ConfigError(`DESKHAND_PROVIDER must be "fixture" (or unset for no provider), got "${raw}"`);
+  if (raw === "fixture" || raw === "google") return raw;
+  throw new ConfigError(`DESKHAND_PROVIDER must be "fixture" or "google" (or unset for no provider), got "${raw}"`);
 }
 
 /**
@@ -64,17 +64,19 @@ function parseProvider(raw: string | undefined): "fixture" | null {
  */
 export function resolveTimeZone(raw: string | undefined, systemZone: string): string {
   if (raw === undefined) {
-    if (!isIanaTimeZone(systemZone)) {
+    const system = canonicalTimeZone(systemZone);
+    if (system === null) {
       throw new ConfigError(
         `the system time zone "${systemZone}" is not an IANA name; set DESKHAND_TIMEZONE to one such as "Europe/Berlin"`,
       );
     }
-    return systemZone;
+    return system;
   }
-  if (!isIanaTimeZone(raw)) {
+  const canonical = canonicalTimeZone(raw);
+  if (canonical === null) {
     throw new ConfigError(`DESKHAND_TIMEZONE must be an IANA time zone name such as "Europe/Berlin", got "${raw}"`);
   }
-  return raw;
+  return canonical;
 }
 
 export function loadConfig(

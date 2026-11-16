@@ -2,6 +2,7 @@ import type { AppContext } from "../app-context.js";
 import { assertSupportedNode } from "../config/node-check.js";
 import { PACKAGE_VERSION } from "../config/version.js";
 import { createCliContext } from "./context.js";
+import { authCommand } from "./auth.js";
 import { APPROVE_USAGE, approveArgsValid, approveCommand } from "./approve.js";
 import { oneLine, realCliIo, type CliIo } from "./io.js";
 import { pendingCommand } from "./pending.js";
@@ -12,7 +13,6 @@ export type { CliIo } from "./io.js";
 /** Commands that are still stubs, with the milestone that implements them. */
 const PLANNED: Record<string, string> = {
   export: "M5",
-  auth: "M3",
 };
 
 const HELP = `deskhand ${PACKAGE_VERSION}
@@ -24,7 +24,7 @@ Commands:
   reject      reject a planned action: reject <action_id> [reason]
   approve     approve a planned action: approve <action_id> (interactive terminal only)
   export      export ledger data, e.g. expenses (not implemented yet, M5)
-  auth        Google OAuth: login | status | upgrade (not implemented yet, M3)
+  auth        Google OAuth: login | status | upgrade
 
 Options:
   -h, --help     show this help
@@ -53,7 +53,7 @@ export async function runCli(
     io.out(`${PACKAGE_VERSION}\n`);
     return 0;
   }
-  if (command === "pending" || command === "reject" || command === "approve") {
+  if (command === "pending" || command === "reject" || command === "approve" || command === "auth") {
     if (command === "reject" && (args[0] ?? "") === "") {
       io.err("deskhand: usage: deskhand reject <action_id> [reason]\n");
       return 2;
@@ -65,6 +65,8 @@ export async function runCli(
     let ctx: AppContext | undefined;
     try {
       ctx = ctxFactory();
+      // authCommand checks its own arguments, so a usage error still writes its `cli:auth` row (subcommand null).
+      if (command === "auth") return await authCommand(ctx, io, args);
       if (command === "approve") return await approveCommand(ctx, io, args);
       return command === "pending" ? pendingCommand(ctx, io) : rejectCommand(ctx, io, args);
     } catch (error) {

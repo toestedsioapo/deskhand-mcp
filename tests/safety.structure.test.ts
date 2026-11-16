@@ -45,6 +45,56 @@ const PARAM_STATUS = /\bstatus\s*=\s*\?/i;
 /** An import specifier that reaches into the CLI layer (`cli/...`). */
 const CLI_IMPORT = /(^|\/)cli\//;
 
+/** The [start, end) span of `async <name>(` ... its closing `\n    },\n` in a provider object literal; throws if absent. */
+function methodBody(text: string, name: string): { start: number; end: number } {
+  const start = text.indexOf(`async ${name}(`);
+  if (start <= 0) throw new Error(`no method ${name}`);
+  const end = text.indexOf("\n    },\n", start);
+  if (end <= start) throw new Error(`no end for method ${name}`);
+  return { start, end };
+}
+
+/** "POST" string literals in any case and quote (fetch upper-cases `"post"`), not counting the `"GET" | "POST"` type. */
+function postLiterals(text: string): number {
+  return (text.replace(/"GET"\s*\|\s*"POST"/gi, "").match(/["'`]post["'`]/gi) ?? []).length;
+}
+
+/** Every line that names `<word>` at all (a call, a declaration, an alias, `.call`/`.bind`), trimmed. */
+function linesNaming(text: string, word: string): string[] {
+  const re = new RegExp(`\\b${word}\\b`);
+  return text.split("\n").map((l) => l.trim()).filter((l) => re.test(l));
+}
+
+/** An indirect call (`.call(`/`.apply(`/`.bind(`) or an alias (`= fetch`, `= deps.fetch`, `= googleRequest`). */
+const INDIRECT = /\b(?:fetch|googleRequest)\s*\.\s*(?:call|apply|bind)\b|=\s*(?:[\w.]+\.)?(?:fetch|googleRequest)\s*(?:[;,)]|$)/m;
+
+/** googleRequest's arguments: `deps, op,` then an inline object literal whose first property is a literal method. */
+const INLINE_REQUEST = /^deps, op, \{\s*method: "(?:GET|POST)",/;
+
+/** An import that renames googleRequest (`googleRequest as x`). */
+const ALIASED_IMPORT = /\bimport\b[^;]*\bgoogleRequest\s+as\b/;
+
+/** The argument text of each `<name>(` call (not its `function <name>(` declaration), up to the matching `)`. */
+function callArgs(text: string, name: string): string[] {
+  const out: string[] = [];
+  for (const m of text.matchAll(new RegExp(`(?<!function )\\b${name}\\s*\\(`, "g"))) {
+    const open = m.index + m[0].length;
+    let depth = 1;
+    let i = open;
+    for (; i < text.length && depth > 0; i++) {
+      if (text[i] === "(") depth++;
+      else if (text[i] === ")") depth--;
+    }
+    out.push(text.slice(open, i - 1));
+  }
+  return out;
+}
+
+/** Each `fetch(` call with its callee and first argument, e.g. `deps.fetch(req.url,`. */
+function fetchCalls(text: string): string[] {
+  return [...text.matchAll(/(?:[\w.]+\.)?\bfetch\s*\(\s*[^,)]*,?/g)].map((m) => m[0].replace(/\s+/g, "")).sort();
+}
+
 describe("safety structure", () => {
   it("scans a non-trivial source tree", () => {
     expect(FILES.map((f) => f.path)).toContain("src/approval/plan-kinds.ts");
@@ -53,6 +103,152 @@ describe("safety structure", () => {
 
   it("the provider write `createEvent` is referenced outside src/providers only by src/approval/plan-kinds.ts", () => {
     expect(matching(/\bcreateEvent\b/, (p) => !p.startsWith("src/providers/"))).toEqual(["src/approval/plan-kinds.ts"]);
+  });
+
+  it("the Google adapter's events insert (a literal `method: \"POST\"` with the write scope) lives only inside createEvent", () => {
+    const google = FILES.filter((f) => f.path.startsWith("src/providers/google/"));
+    // Outside calendar.ts: no literal POST except the OAuth token endpoint, and the write scope is only compared, never requested.
+    expect(google.filter((f) => /method:\s*["']POST["']/.test(f.text)).map((f) => f.path).sort()).toEqual([
+      "src/providers/google/calendar.ts",
+      "src/providers/google/oauth.ts",
+    ]);
+    expect(google.filter((f) => /requiredScope:\s*SCOPE_CALENDAR_WRITE/.test(f.text)).map((f) => f.path)).toEqual([
+      "src/providers/google/calendar.ts",
+    ]);
+    const cal = google.find((f) => f.path === "src/providers/google/calendar.ts")!.text;
+    const { start, end } = methodBody(cal, "createEvent");
+    const outside = cal.slice(0, start) + cal.slice(end);
+    expect(outside).not.toMatch(/requiredScope:\s*SCOPE_CALENDAR_WRITE/);
+    expect(cal.slice(start, end)).toMatch(/method:\s*["']POST["']/);
+  });
+
+  it("calendar.ts sends a POST from exactly two call sites: createEvent's insert and freeBusy's POST /freeBusy", () => {
+    const cal = FILES.find((f) => f.path === "src/providers/google/calendar.ts")!.text;
+    // Every "POST" string literal in the file, wherever it is (a helper parameter, a type, a positional argument).
+    const posts = [...cal.matchAll(/["'`]POST["'`]/g)].map((m) => m.index);
+    expect(posts).toHaveLength(2);
+    const insert = methodBody(cal, "createEvent");
+    const freeBusy = methodBody(cal, "freeBusy");
+    const inInsert = posts.filter((i) => i > insert.start && i < insert.end);
+    const inFreeBusy = posts.filter((i) => i > freeBusy.start && i < freeBusy.end);
+    expect(inInsert).toHaveLength(1);
+    expect(inFreeBusy).toHaveLength(1);
+    expect(cal.slice(freeBusy.start, freeBusy.end)).toMatch(/method:\s*"POST",\s*url:\s*`\$\{BASE\}\/freeBusy`/);
+    // Every request goes through googleRequest with a literal method: no variable method, no other transport.
+    expect([...cal.matchAll(/method:\s*([^,\s}]+)/g)].map((m) => m[1]).sort()).toEqual(['"GET"', '"POST"', '"POST"']);
+    expect(cal).not.toMatch(/\bfetch\s*\(/);
+  });
+
+  it("methodBody finds a real, non-empty span (the guards above cannot pass vacuously)", () => {
+    const cal = FILES.find((f) => f.path === "src/providers/google/calendar.ts")!.text;
+    for (const name of ["createEvent", "freeBusy"]) {
+      const { start, end } = methodBody(cal, name);
+      expect(start).toBeGreaterThan(0);
+      expect(end).toBeGreaterThan(start + 50);
+    }
+    expect(() => methodBody(cal, "noSuchMethod")).toThrow();
+  });
+
+  it("every file in src/providers/google/: only oauth.ts (token endpoint) and calendar.ts (insert, freeBusy) can POST", () => {
+    const google = FILES.filter((f) => f.path.startsWith("src/providers/google/"));
+    expect(google.length).toBeGreaterThanOrEqual(5);
+    const name = (p: string) => p.slice("src/providers/google/".length);
+    // A "POST" string anywhere (a variable, an argument, a property), except the `"GET" | "POST"` type of http.ts.
+    expect(
+      Object.fromEntries(google.map((f) => [name(f.path), postLiterals(f.text)]).filter(([, n]) => n !== 0)),
+    ).toEqual({ "calendar.ts": 2, "oauth.ts": 1 });
+    // Network calls: http.ts `send` (deps.fetch) and the refresh pass-through to the token endpoint; oauth.ts postToken.
+    expect(Object.fromEntries(google.map((f) => [name(f.path), fetchCalls(f.text)]).filter(([, c]) => c.length > 0))).toEqual({
+      "http.ts": ["deps.fetch(req.url,", "deps.oauth.fetch(u,"],
+      "oauth.ts": ["deps.fetch(deps.endpoints.tokenUrl,"],
+    });
+    // No other transport: no node:https, undici or http(s).request; node:http only for oauth.ts's loopback listener.
+    for (const f of google) {
+      expect(f.text, f.path).not.toMatch(/["']node:https["']|["']undici["']|\bhttps?\.request\b|\brequest\s*\(/);
+      if (f.path.endsWith("/oauth.ts")) expect(f.text).toMatch(/import \{ createServer, type Server, type ServerResponse \} from "node:http";/);
+      else expect(f.text, f.path).not.toMatch(/["']node:http["']/);
+    }
+    // http.ts only forwards the method it is given.
+    const http = google.find((f) => f.path.endsWith("/http.ts"))!.text;
+    expect([...http.matchAll(/\bmethod\s*:\s*([^,;}\n]+)/g)].map((m) => m[1]!.trim()).sort()).toEqual([
+      '"GET" | "POST"',
+      '"GET" | "POST"',
+      "req.method",
+    ]);
+    // Every line naming fetch at all, pinned: no `.call`/`.bind`, alias or extra reference can slip in.
+    expect(Object.fromEntries(google.map((f) => [name(f.path), linesNaming(f.text, "fetch")]).filter(([, l]) => l.length > 0))).toEqual({
+      "http.ts": [
+        "fetch: typeof fetch;",
+        "refreshAccessToken(client, current, { ...deps.oauth, fetch: (u, init) => deps.oauth.fetch(u, { ...init, signal }) }),",
+        "const res = await deps.fetch(req.url, init);",
+      ],
+      "oauth.ts": ["fetch: typeof fetch;", "res = await deps.fetch(deps.endpoints.tokenUrl, {"],
+    });
+    // Every line naming googleRequest in src/: its definition, calendar.ts's import and its three calls.
+    expect(Object.fromEntries(FILES.map((f) => [f.path, linesNaming(f.text, "googleRequest").length]).filter(([, n]) => n !== 0))).toEqual({
+      "src/providers/google/calendar.ts": 4,
+      "src/providers/google/http.ts": 1,
+    });
+    expect(FILES.filter((f) => INDIRECT.test(f.text)).map((f) => f.path)).toEqual([]);
+    // The googleRequest import is never aliased, and no call spreads a request object into its arguments
+    // (tests/google.write-surface.test.ts is the behavioural guard behind these).
+    expect(FILES.filter((f) => ALIASED_IMPORT.test(f.text)).map((f) => f.path)).toEqual([]);
+    const calArgs = callArgs(google.find((f) => f.path.endsWith("/calendar.ts"))!.text, "googleRequest");
+    expect(calArgs).toHaveLength(3);
+    expect(calArgs.filter((a) => a.includes("..."))).toEqual([]);
+    // Each call passes an inline object literal that opens with a literal method, and asks for one of the two scope
+    // constants by name: no request object built elsewhere, no scope from a variable.
+    expect(calArgs.filter((a) => !INLINE_REQUEST.test(a))).toEqual([]);
+    const calText = google.find((f) => f.path.endsWith("/calendar.ts"))!.text;
+    expect([...calText.matchAll(/\brequiredScope\s*:\s*([^,}\s]+)/g)].map((m) => m[1]).sort()).toEqual([
+      "SCOPE_CALENDAR_READ",
+      "SCOPE_CALENDAR_READ",
+      "SCOPE_CALENDAR_WRITE",
+    ]);
+    // googleRequest is called from calendar.ts only, from exactly three places (get, freeBusy, createEvent).
+    const calls = FILES.flatMap((f) =>
+      [...f.text.matchAll(/(?<!function )\bgoogleRequest\s*\(/g)].map(() => f.path),
+    );
+    expect(calls).toEqual(["src/providers/google/calendar.ts", "src/providers/google/calendar.ts", "src/providers/google/calendar.ts"]);
+    // calendar.ts never passes a method by shorthand (`{ method }`), so every method is a visible literal.
+    const cal = google.find((f) => f.path.endsWith("/calendar.ts"))!.text;
+    expect(cal).not.toMatch(/[{,]\s*method\s*[,}]/);
+  });
+
+  it("the provider POST guards detect what they are meant to detect (self-test)", () => {
+    const evil = 'const m = "POST";\nconst r = await googleRequest(deps, op, { method: m, url, requiredScope: SCOPE_CALENDAR_READ });\nawait fetch(url, { method: `POST` });';
+    expect(postLiterals(evil)).toBe(2);
+    expect(fetchCalls(evil)).toEqual(["fetch(url,"]);
+    expect(postLiterals('req: { method: "GET" | "POST"; url: string }')).toBe(0);
+    expect(postLiterals("method: 'POST'")).toBe(1);
+    expect(/[{,]\s*method\s*[,}]/.test("googleRequest(deps, op, { method, url })")).toBe(true);
+    // Round-3 shapes: lowercase method, an indirect call and an alias.
+    const sneaky =
+      'await deps.fetch.call(undefined, insertUrl, { method: "post", body });\nconst g = googleRequest; await g(deps, op, { method: "post" as never, url });';
+    expect(postLiterals(sneaky)).toBe(2);
+    expect(INDIRECT.test("await deps.fetch.call(undefined, u)")).toBe(true);
+    expect(INDIRECT.test("const g = googleRequest;")).toBe(true);
+    expect(INDIRECT.test("const f = deps.fetch")).toBe(true);
+    expect(INDIRECT.test("googleRequest.bind(null)")).toBe(true);
+    expect(INDIRECT.test("const res = await deps.fetch(req.url, init);")).toBe(false);
+    expect(linesNaming(sneaky, "fetch")).toHaveLength(1);
+    expect(linesNaming(sneaky, "googleRequest")).toHaveLength(1);
+    // Round-4 shapes: an alias import and a spread request object.
+    expect(ALIASED_IMPORT.test('import { googleRequest, googleRequest as send, type GoogleHttpDeps } from "./http.js";')).toBe(true);
+    expect(ALIASED_IMPORT.test('import { googleRequest, type GoogleHttpDeps } from "./http.js";')).toBe(false);
+    const spread = "const res = await googleRequest(deps, op, fbReq);\nawait googleRequest(deps, op, { ...fbReq, url: `${BASE}/x(${id})` });";
+    expect(callArgs(spread, "googleRequest")).toEqual(["deps, op, fbReq", "deps, op, { ...fbReq, url: `${BASE}/x(${id})` }"]);
+    // Round-5 shape: a request object declared before the call and a write scope from a variable.
+    const mutant = [
+      "const w = SCOPE_CALENDAR_WRITE;",
+      "const extra = { ...fbReq, url: `${cal(calendarId)}/events`, body: { summary: \"x\" }, requiredScope: w };",
+      "for (const r of [extra, fbReq]) {",
+      "  try { res = await googleRequest(deps, op, r); } catch (e) { if (r === fbReq) throw e; }",
+      "}",
+    ].join("\n");
+    expect(callArgs(mutant, "googleRequest").filter((a) => !INLINE_REQUEST.test(a))).toEqual(["deps, op, r"]);
+    expect(INLINE_REQUEST.test('deps, op, {\n        method: "POST",\n        url: `${BASE}/freeBusy`,')).toBe(true);
+    expect(INLINE_REQUEST.test('deps, op, { url, method: "GET" }')).toBe(false);
   });
 
   it("createPlan is imported and mentioned only by the plan tools listed in PLAN_TOOLS (outside src/approval)", () => {
@@ -74,12 +270,25 @@ describe("safety structure", () => {
   });
 
   it("nothing in src/tools or src/cli imports provider implementations or calls provider writes", () => {
+    // providers/types (interface) and providers/errors (error classes) are importable. src/cli/auth.ts is the one CLI file allowed to import src/providers/google (OAuth login; it never calls provider writes).
     const offenders = FILES.filter((f) => /^src\/(tools|cli)\//.test(f.path)).flatMap((f) => {
-      const bad = importSpecifiers(f.text).filter((s) => /providers\//.test(s) && !/providers\/types(\.js)?$/.test(s));
+      const google = f.path === "src/cli/auth.ts" ? /providers\/google\/(client-file|oauth|token-store)(\.js)?$/ : /(?!)/;
+      const bad = importSpecifiers(f.text).filter(
+        (s) => /providers\//.test(s) && !/providers\/(types|errors)(\.js)?$/.test(s) && !google.test(s),
+      );
       if (/\bcreateEvent\b|\.\s*execute\s*\(/.test(f.text)) bad.push("<provider write call>");
       return bad.map((b) => `${f.path}: ${b}`);
     });
     expect(offenders).toEqual([]);
+  });
+
+  it("only src/composition.ts and src/cli/auth.ts import from src/providers/google/ (files inside it import each other)", () => {
+    const importers = FILES.filter(
+      (f) => !f.path.startsWith("src/providers/google/") && importSpecifiers(f.text).some((s) => /(^|\/)providers\/google(\/|$)/.test(s)),
+    )
+      .map((f) => f.path)
+      .sort();
+    expect(importers).toEqual(["src/cli/auth.ts", "src/composition.ts"]);
   });
 
   it(`status 'approved' is SET only in ${APPROVE_ALLOWED.join(", ")}`, () => {

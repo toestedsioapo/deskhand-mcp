@@ -1,0 +1,21 @@
+{
+  "request": {
+    "method": "GET",
+    "url": "https://www.googleapis.com/calendar/v3/calendars/primary/events/evt-gone-4"
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "id": "evt-gone-4",
+      "etag": "\"3100000000000004\"",
+      "status": "cancelled",
+      "summary": "Cancelled review",
+      "start": {
+        "dateTime": "2026-11-12T16:00:00Z"
+      },
+      "end": {
+        "dateTime": "2026-11-12T17:00:00Z"
+      }
+    }
+  }
+}

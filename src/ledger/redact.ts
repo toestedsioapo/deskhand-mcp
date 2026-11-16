@@ -79,3 +79,144 @@ export function redactPreview(value: unknown): unknown {
 export function redactInput(value: unknown): unknown {
   return redact(value, 0);
 }
+
+/** What scrubSecrets returns for any text that holds, or may hide, a secret (Ruling 18). */
+export const SECRET_LIKE = "[redacted: text contained secret-like data]";
+
+/**
+ * Ruling 18's predicate, regex part. Case-insensitive, substring-based (no word boundary: `xaccess_token` counts):
+ * - token shapes: `ya29.`, `1//` (each + 10 or more of `[\w-]`), `gocspx-` (+ 6 or more), an auth code `4/0` (+ 10 or
+ *   more);
+ * - a key word (`access_token`, `refresh_token`, `id_token`, `client_secret`, each also without the underscore,
+ *   `authorization`, `bearer`, `api_key`, `apikey`, `password`) followed by a separator run of `[\s"':=]` (any length,
+ *   possibly empty) and then any non-separator character; the bare word with nothing after it does not count;
+ * - `code` followed that way by `4/`.
+ * Each separator run is atomic (`(?=(run))\1`: the lookahead captures the whole run, the backreference consumes it),
+ * so it is never re-tried shorter; the run class and the next character are disjoint. JWTs: see hasJwt.
+ */
+const SECRET_SHAPE =
+  /ya29\.[\w-]{10,}|1\/\/[\w-]{10,}|gocspx-[\w-]{6,}|4\/0[\w-]{10,}|(?:access_?token|refresh_?token|id_?token|client_?secret|authorization|bearer|api_?key|password)(?=([\s"':=]*))\1[^\s"':=]|code(?=([\s"':=]*))(?:\2)4\//i;
+
+const WORD_RUN = /[\w.-]+/g;
+
+/**
+ * A three-part JWT, case-insensitive, by one linear scan (the regex `eyJ[\w-]+\.[\w-]+\.[\w-]+` backtracks
+ * quadratically on long dot-less `eyJ` runs): within a maximal run of `[\w.-]` split on `.`, three consecutive
+ * non-empty segments where the first holds `eyJ` with at least one character after it.
+ */
+function hasJwt(text: string): boolean {
+  if (!/eyj/i.test(text)) return false;
+  for (const run of text.matchAll(WORD_RUN)) {
+    if (!/eyj/i.test(run[0])) continue;
+    const segs = run[0].split(".");
+    for (let i = 0; i + 2 < segs.length; i++) {
+      const seg = segs[i]!;
+      const p = seg.toLowerCase().indexOf("eyj");
+      if (p >= 0 && p + 3 < seg.length && segs[i + 1] !== "" && segs[i + 2] !== "") return true;
+    }
+  }
+  return false;
+}
+
+export function looksSecret(text: string): boolean {
+  return SECRET_SHAPE.test(text) || hasJwt(text);
+}
+
+
+const strip = (s: string): string => (s.includes("\\") ? s.replace(/\\/g, "") : s);
+
+/** The value of one hex digit's char code, or -1. */
+function hexValue(c: number): number {
+  if (c >= 48 && c <= 57) return c - 48; // 0-9
+  if (c >= 65 && c <= 70) return c - 55; // A-F
+  if (c >= 97 && c <= 102) return c - 87; // a-f
+  return -1;
+}
+
+/**
+ * One percent-decode round, the same as `s.replace(/%([0-9A-Fa-f]{2})/g, byte as a character)` (non-overlapping,
+ * left to right; a malformed `%` stays) but as a plain scan: the regex-callback version dominated the check's cost.
+ */
+function decode(s: string): string {
+  let out = "";
+  let last = 0;
+  for (let i = s.indexOf("%"); i !== -1 && i + 2 < s.length; i = s.indexOf("%", i + 1)) {
+    const hi = hexValue(s.charCodeAt(i + 1));
+    const lo = hexValue(s.charCodeAt(i + 2));
+    if (hi < 0 || lo < 0) continue;
+    out += s.slice(last, i) + String.fromCharCode(hi * 16 + lo);
+    last = i + 3;
+    i += 2;
+  }
+  return last === 0 ? s : out + s.slice(last);
+}
+
+const plus = (s: string): string => (s.includes("+") ? s.replace(/\+/g, " ") : s);
+
+const MAX_DECODES = 4;
+const MAX_FORMS = 64;
+
+/** The outcome of a decode search: the forms found (in order), and whether the search finished. */
+export interface FormSearch {
+  forms: string[];
+  /** False when the search hit its form cap or its decode depth with forms still changing (Ruling 20). */
+  complete: boolean;
+  /** True when `stop` returned true for a form (the search ended there). */
+  stopped: boolean;
+}
+
+/**
+ * Ruling 19: every form the text can take under any order of three operations, by a bounded breadth-first search
+ * from the text as written: strip (delete every backslash; no escape is interpreted), one percent-decode round (a
+ * malformed `%` stays; each byte becomes one character, enough for matching) and plus (`+` read as a space). Forms are
+ * deduplicated; an operation that changes nothing adds no form; forms come in BFS order (fewest operations first).
+ *
+ * Ruling 20: the search is incomplete (`complete: false`) when it would need a 65th distinct form, or when a form
+ * that already took 4 decode rounds would still change under a fifth. `stop` ends the search early (for example at
+ * the first secret-like form). Each form costs one linear pass; never throws.
+ */
+function explore(text: string, stop: (form: string) => boolean): FormSearch {
+  const forms = [text];
+  const seen = new Set<string>(forms);
+  if (stop(text)) return { forms, complete: true, stopped: true };
+  let level: { form: string; decodes: number }[] = [{ form: text, decodes: 0 }];
+  while (level.length > 0) {
+    const next: { form: string; decodes: number }[] = [];
+    for (const { form, decodes } of level) {
+      const steps: [string, number][] = [
+        [strip(form), decodes],
+        [plus(form), decodes],
+      ];
+      const decoded = decode(form);
+      if (decodes < MAX_DECODES) steps.push([decoded, decodes + 1]);
+      else if (decoded !== form) return { forms, complete: false, stopped: false };
+      for (const [out, d] of steps) {
+        if (seen.has(out)) continue;
+        if (seen.size >= MAX_FORMS) return { forms, complete: false, stopped: false };
+        seen.add(out);
+        forms.push(out);
+        if (stop(out)) return { forms, complete: true, stopped: true };
+        next.push({ form: out, decodes: d });
+      }
+    }
+    level = next;
+  }
+  return { forms, complete: true, stopped: false };
+}
+
+/** Every form of the text (see explore), and whether the search finished. For tests and diagnostics. */
+export function searchForms(text: string): FormSearch {
+  return explore(text, () => false);
+}
+
+/**
+ * Free text (error messages) before it is stored or shown, all-or-nothing (Ruling 18; docs/ledger-contract.md,
+ * "Free-text secret scrubbing"): if any form of the text (see explore) looks secret, or the search cannot finish
+ * (Ruling 20: too many distinct forms, or still decoding after 4 rounds), the result is SECRET_LIKE; otherwise the
+ * text is returned unchanged. Nothing is rewritten in place, so no partial redaction can leave a secret behind.
+ * Over-redaction is accepted: a key word followed by any character ("the bearer of good news") fails closed.
+ */
+export function scrubSecrets(text: string): string {
+  const r = explore(text, looksSecret);
+  return r.stopped || !r.complete ? SECRET_LIKE : text;
+}

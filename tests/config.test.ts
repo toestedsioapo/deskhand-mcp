@@ -136,15 +136,22 @@ describe("loadConfig", () => {
     expect(loadConfig({ ...fx, DESKHAND_FIXTURE: "" }).fixturePath).toBeUndefined();
   });
 
-  it("DESKHAND_PROVIDER unset is no provider; fixture is the only accepted value", () => {
+  it("DESKHAND_PROVIDER unset is no provider; fixture and google are the accepted values", () => {
     expect(loadConfig(base).provider).toBeNull();
     expect(loadConfig({ ...base, DESKHAND_PROVIDER: "fixture" }).provider).toBe("fixture");
+    expect(loadConfig({ ...base, DESKHAND_PROVIDER: "google" }).provider).toBe("google");
+  });
+
+  it("DESKHAND_PROVIDER=google with DESKHAND_FIXTURE set is a ConfigError", () => {
+    const env = { ...base, DESKHAND_PROVIDER: "google", DESKHAND_FIXTURE: "/x.json" };
+    expect(() => loadConfig(env)).toThrow(ConfigError);
+    expect(() => loadConfig(env)).toThrow(/DESKHAND_FIXTURE/);
   });
 
   it('DESKHAND_PROVIDER rejects every other value, naming the variable', () => {
-    for (const v of ["Fixture", "google", "", "none"]) {
+    for (const v of ["Fixture", "Google", "", "none"]) {
       expect(() => loadConfig({ ...base, DESKHAND_PROVIDER: v })).toThrow(ConfigError);
-      expect(() => loadConfig({ ...base, DESKHAND_PROVIDER: v })).toThrow(/DESKHAND_PROVIDER must be "fixture"/);
+      expect(() => loadConfig({ ...base, DESKHAND_PROVIDER: v })).toThrow(/DESKHAND_PROVIDER must be "fixture" or "google"/);
     }
   });
 
@@ -206,6 +213,12 @@ describe("loadConfig timeZone and rulesPath", () => {
   it("timeZone defaults to the system zone, DESKHAND_TIMEZONE overrides it", () => {
     expect(loadConfig(base).timeZone).toBe(Intl.DateTimeFormat().resolvedOptions().timeZone);
     expect(loadConfig({ ...base, DESKHAND_TIMEZONE: "Europe/Berlin" }).timeZone).toBe("Europe/Berlin");
+  });
+
+  it("DESKHAND_TIMEZONE and the system zone are canonicalised", () => {
+    expect(loadConfig({ ...base, DESKHAND_TIMEZONE: "asia/manila" }).timeZone).toBe("Asia/Manila");
+    expect(resolveTimeZone("europe/berlin", "Asia/Manila")).toBe("Europe/Berlin");
+    expect(resolveTimeZone(undefined, "asia/manila")).toBe("Asia/Manila");
   });
 
   it("an invalid DESKHAND_TIMEZONE is a ConfigError naming the variable", () => {

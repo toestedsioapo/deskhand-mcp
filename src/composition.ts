@@ -4,6 +4,8 @@ import { loadConfig, type Config } from "./config/env.js";
 import { ensureDirs } from "./config/paths.js";
 import { LedgerDb } from "./ledger/db.js";
 import { createIdGenerator, type Clock } from "./ledger/ids.js";
+import { createGoogleCalendarProvider } from "./providers/google/calendar.js";
+import { GOOGLE_ENDPOINTS } from "./providers/google/oauth.js";
 import { createFixtureProvider, loadFixtureWorld } from "./providers/fixture/index.js";
 import type { CalendarProvider } from "./providers/types.js";
 
@@ -18,6 +20,17 @@ export function selectProvider(config: Config): { provider: CalendarProvider | n
     const world = loadFixtureWorld(config.fixturePath);
     const clock: Clock = config.fixturePath ? () => new Date(world.now) : () => new Date();
     return { provider: createFixtureProvider(world), clock };
+  }
+  if (config.provider === "google") {
+    // No token is read here: a missing or expired sign-in surfaces as AUTH_REQUIRED on the first call.
+    const now = (): Date => new Date();
+    const provider = createGoogleCalendarProvider({
+      fetch: globalThis.fetch,
+      configDir: config.paths.configDir,
+      now,
+      oauth: { fetch: globalThis.fetch, endpoints: GOOGLE_ENDPOINTS, now },
+    });
+    return { provider, clock: now };
   }
   return { provider: null, clock: () => new Date() };
 }

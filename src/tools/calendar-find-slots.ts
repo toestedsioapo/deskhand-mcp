@@ -1,11 +1,11 @@
 import { z } from "zod";
 import type { AppContext } from "../app-context.js";
 import { calendarIdSchema } from "./calendar-id.js";
-import { requireProvider } from "./provider-guard.js";
+import { providerFailure, requireProvider } from "./provider-guard.js";
 import { toolError, toolOk, type ToolErrorResult, type ToolOkResult } from "./result.js";
 import { loadOwnRules } from "../config/own-rules.js";
 import { findSlots, partyRulesSchema, type PartyRules, type Slot } from "../tempo/index.js";
-import { isIanaTimeZone } from "../util/local-time.js";
+import { canonicalTimeZone } from "../util/local-time.js";
 
 const clockTime = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/);
 
@@ -58,9 +58,9 @@ export async function calendarFindSlotsHandler(
   const provider = requireProvider(ctx);
   if ("isError" in provider) return provider;
 
-  const timeZone = input.time_zone ?? ctx.config.timeZone;
-  if (!isIanaTimeZone(timeZone)) {
-    return toolError("INVALID_INPUT", `time_zone must be an IANA zone name such as "Europe/Berlin", got "${timeZone}".`);
+  const timeZone = input.time_zone === undefined ? ctx.config.timeZone : canonicalTimeZone(input.time_zone);
+  if (timeZone === null) {
+    return toolError("INVALID_INPUT", `time_zone must be an IANA zone name such as "Europe/Berlin", got "${input.time_zone}".`);
   }
 
   let own: PartyRules;
@@ -95,8 +95,8 @@ export async function calendarFindSlotsHandler(
       busy = (
         await provider.freeBusy(input.calendar_id, { start: new Date(from).toISOString(), end: new Date(to).toISOString() })
       ).busy;
-    } catch {
-      return toolError("PROVIDER_ERROR", "The calendar provider failed to read free/busy.");
+    } catch (e) {
+      return providerFailure(e);
     }
   }
 
@@ -111,6 +111,11 @@ export async function calendarFindSlotsHandler(
     slots,
     busy_dropped: requestedFree ? 0 : candidates.length - survivors.length,
     reasons: found.reasons.map((r) => ({ code: r.code, participant_id: r.participantId ?? null, message: r.message })),
-    note: decision === "none" ? `All suggested slots are busy in calendar ${input.calendar_id}.` : null,
+    note:
+      decision !== "none"
+        ? null
+        : candidates.length === 0
+          ? "No slot fits the given rules."
+          : `All suggested slots are busy in calendar ${input.calendar_id}.`,
   });
 }

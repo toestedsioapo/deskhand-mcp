@@ -40,7 +40,7 @@ Status: written in M2a. The fixture world is the fake calendar/mail universe loa
 | `fixture_version` | number, must be `1` | yes | format version |
 | `now` | ISO-8601 UTC instant | yes | where the fake clock starts. The fixture provider and the server's clock (when a fixture is loaded) read this; time does not advance unless a test advances it |
 | `calendars` | object, calendar id to `{ events }` | yes (may be `{}`) | calendar ids are free strings; `primary` is the default |
-| `calendars.<id>.events[]` | object | yes (may be `[]`) | `id` string unique per calendar; `title` string; `start` and `end` ISO-8601 UTC instants with `start < end` (or dates, see All-day events); `attendees` array of email strings (may be empty); `etag` non-empty string, opaque, changes when the event changes; `all_day` optional boolean |
+| `calendars.<id>.events[]` | object | yes (may be `[]`) | `id` string unique per calendar; `title` string; `start` and `end` ISO-8601 UTC instants with `start < end` (or dates, see All-day events); `attendees` array of email strings (may be empty); `etag` non-empty string, opaque, changes when the event changes; `all_day` optional boolean; `organizer_self` optional boolean (see Organiser) |
 | `settings.latency_ms` | non-negative integer | no, default `0` | artificial delay added to every provider call (for timeout and concurrency tests) |
 | `settings.write_log` | string path | no | file the fixture provider appends to on every provider write; relative paths resolve against the fixture file's directory. Absent means no log |
 
@@ -58,6 +58,10 @@ An event may carry `"all_day": true`. Its `start` and `end` must then be `YYYY-M
 - An all-day event does not count as busy in `freeBusy` (fixture-only rule; the Google adapter takes free/busy from Google).
 - Provider results carry `allDay: true` and the dates as given; timed events carry `allDay: false`.
 
+## Organiser
+
+World events are on the calendar owner's calendar and, by default, organised by the owner: the provider marks them `organizerSelf: true`, as Google reports `organizer.self` for events you organise. `"organizer_self": false` models an invitation from someone else (Google `organizer.self: false`). The key is additive: existing files stay valid and `fixture_version` stays 1. The apply engine accepts an event under an action's idempotency key only when it is organised by the owner (ledger contract, gate 6), so a world event with the plan's fields under the key simulates a crash after the write (recovered, `applied`), and the same event with `organizer_self: false` ends `failed` ("differs") with no write.
+
 ## Listing
 
 `listEvents(calendarId, range, limit)` returns the events that overlap `range` (the same overlap rule as `freeBusy`: `event.start < range.end` and `range.start < event.end`), sorted by start (all-day as above) then by `id`, at most `limit`. `truncated` is true when more events matched than were returned. An unknown calendar gives `{ events: [], truncated: false }`. `addBusy` ranges are not events and are never listed.
@@ -71,6 +75,8 @@ An event may carry `"all_day": true`. Its `start` and `end` must then be `YYYY-M
 ```
 
 `seq` starts at 1 per process and per file append; `ts` is the fake clock; `op` is the provider method name; `idempotency_key` is the one derived from the action id (see `docs/ledger-contract.md`); `request` is the provider request body, redacted by the ledger preview rules. A fixture write with an idempotency key already present in the world is a no-op that returns the existing event (and writes no log line), which is how crash recovery is simulated.
+
+Deleted events: the file format has no cancelled events. The provider's test seam `cancelEvent(calendarId, id)` models a user deleting an event, as Google keeps it as `status: cancelled`: `getEvent`, `listEvents` and `freeBusy` no longer see it, `lookupEvent` reports `cancelled` (not `absent`), and `createEvent` with that id throws the "created and later deleted" `ProviderError` and writes nothing.
 
 ## Determinism
 

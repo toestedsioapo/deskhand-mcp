@@ -1,6 +1,6 @@
 import { z } from "zod";
-import type { CalendarProvider, EventRef } from "../providers/types.js";
-import { formatLocalRange, isIanaTimeZone } from "../util/local-time.js";
+import type { CalendarProvider, EventLookup, EventRef } from "../providers/types.js";
+import { canonicalTimeZone, formatLocalRange, isIanaTimeZone } from "../util/local-time.js";
 import { isPlainLine, VISIBLE_ASCII } from "../util/sanitize.js";
 
 export type RecheckResult = { ok: true } | { ok: false; reason: string };
@@ -16,9 +16,43 @@ export interface PlanKind<P> {
    */
   renderDiff(plan: P, viewerTimeZone: string): string[];
   recheck(plan: P, provider: CalendarProvider): Promise<RecheckResult>;
-  lookupExisting(plan: P, idempotencyKey: string, provider: CalendarProvider): Promise<EventRef | null>;
+  /** What the provider holds under the idempotency key: absent, cancelled (deleted) or present. */
+  lookupExisting(plan: P, idempotencyKey: string, provider: CalendarProvider): Promise<EventLookup>;
+  /**
+   * True only when `event` is the approved plan's own write: our id and every approved field. The apply engine calls
+   * it for every event it would accept (recovery, the re-lookups, and the event `execute` returns, which may be an
+   * existing one), so a foreign or edited event under our id is never recorded as applied.
+   */
+  matches(plan: P, idempotencyKey: string, event: EventRef): boolean;
   execute(plan: P, idempotencyKey: string, provider: CalendarProvider): Promise<EventRef>;
 }
+
+/** Fixed phrase (no event content): an event is under the action's id but it is not the approved one. */
+export const EVENT_DIFFERS = "an event with this action's id exists but differs from the approved plan";
+
+/** Attendee addresses compared as a set, case-insensitively, repeats collapsed. */
+function sameAddresses(a: readonly string[], b: readonly string[]): boolean {
+  const norm = (xs: readonly string[]) => [...new Set(xs.map((x) => x.toLowerCase()))].sort();
+  const x = norm(a);
+  const y = norm(b);
+  return x.length === y.length && x.every((v, i) => v === y[i]);
+}
+
+/**
+ * The plan's attendees against a found event: the event's attendees (owner excluded) as they are, or with the owner
+ * added when the plan invited the owner explicitly. The owner Google adds on its own is never a difference; an
+ * extra address that is not the owner always is.
+ */
+function sameAttendees(planned: readonly string[], ev: EventRef): boolean {
+  if (sameAddresses(planned, ev.attendees)) return true;
+  return ev.ownerEmail !== undefined && sameAddresses(planned, [...ev.attendees, ev.ownerEmail]);
+}
+
+/** Two instants compared as times, not strings (`10:00Z` equals `11:00+01:00`); an unparseable one never matches. */
+const sameInstant = (a: string, b: string): boolean => {
+  const x = Date.parse(a);
+  return !Number.isNaN(x) && x === Date.parse(b);
+};
 
 // Exactly the form the plan tools store (Date.toISOString of a validated input): UTC, milliseconds, Z.
 const instant = z.iso
@@ -75,7 +109,8 @@ export const calendarCreateEvent: PlanKind<CalendarCreateEventPlan> = {
     const e = plan.event;
     const n = e.attendees.length;
     const lines = [`create event: ${e.title}`, `when: ${formatLocalRange(e.start, e.end, viewerTimeZone)}`];
-    if (e.timeZone !== undefined && e.timeZone !== viewerTimeZone) {
+    // Compare canonical forms: a plan stored with `europe/berlin` (hashed that way) is not a different zone.
+    if (e.timeZone !== undefined && (canonicalTimeZone(e.timeZone) ?? e.timeZone) !== (canonicalTimeZone(viewerTimeZone) ?? viewerTimeZone)) {
       lines.push(`event zone: ${formatLocalRange(e.start, e.end, e.timeZone)}`);
     }
     lines.push(`utc: ${e.start} to ${e.end}`, `calendar: ${e.calendarId}`, attendeeCount(n));
@@ -97,7 +132,20 @@ export const calendarCreateEvent: PlanKind<CalendarCreateEventPlan> = {
     return { ok: true };
   },
 
-  lookupExisting: (plan, key, provider) => provider.getEvent(plan.event.calendarId, key),
+  lookupExisting: (plan, key, provider) => provider.lookupEvent(plan.event.calendarId, key),
+
+  // The calendar is fixed by where it is looked up (lookupExisting and execute both use plan.event.calendarId).
+  // The organiser must be the calendar owner (a foreign invite under our id is not our write), and a recurring
+  // series or instance never matches a single-event plan.
+  matches: (plan, key, ev) =>
+    ev.id === key &&
+    ev.organizerSelf === true &&
+    ev.recurring !== true &&
+    !ev.allDay &&
+    ev.title === plan.event.title &&
+    sameInstant(ev.start, plan.event.start) &&
+    sameInstant(ev.end, plan.event.end) &&
+    sameAttendees(plan.event.attendees, ev),
 
   execute: (plan, key, provider) => provider.createEvent(plan.event, key),
 };

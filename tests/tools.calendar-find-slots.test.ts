@@ -2,6 +2,7 @@ import { writeFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { z } from "zod";
 import { createFixtureProvider } from "../src/providers/fixture/provider.js";
+import { AuthRequiredError } from "../src/providers/errors.js";
 import type { CalendarProvider } from "../src/providers/types.js";
 import { calendarFindSlotsInputSchema, calendarFindSlotsOutputSchema } from "../src/tools/calendar-find-slots.js";
 import { setupHarness } from "./helpers/harness.js";
@@ -126,6 +127,15 @@ describe("calendar_find_slots", () => {
     expect(out.note).toBe("All suggested slots are busy in calendar primary.");
   });
 
+  it("says no slot fits the rules, not busy, when Tempo returns no candidates", async () => {
+    const out = await find({ ...base, participants: [{ partyId: "them", timeZone: "UTC", weeklyRules: {} }] });
+    expect(out.decision).toBe("none");
+    expect(out.slots).toEqual([]);
+    expect(out.busy_dropped).toBe(0);
+    expect(out.note).toBe("No slot fits the given rules.");
+    expect(out.reasons.length).toBeGreaterThan(0);
+  });
+
   it("reads own rules from rules.json, and own_rules overrides the file", async () => {
     writeFileSync(h.ctx.config.rulesPath, JSON.stringify(rules("me-file", "09:00", "17:00")));
     const { own_rules: _unused, ...noOwn } = base;
@@ -159,6 +169,11 @@ describe("calendar_find_slots", () => {
       expect(JSON.stringify(r.content)).toContain("own_rules");
       expect((await h.client.callTool({ name: "ping", arguments: {} })).isError).toBeFalsy();
     }
+  });
+
+  it("a mis-cased time_zone gives the same answer as the canonical spelling", async () => {
+    const canon = await find({ ...base, time_zone: "Europe/Berlin" });
+    expect(await find({ ...base, time_zone: "europe/berlin" })).toEqual(canon);
   });
 
   it("refuses a time_zone that is not an IANA zone name as INVALID_INPUT", async () => {
@@ -234,6 +249,7 @@ describe("calendar_find_slots", () => {
     const boom: CalendarProvider = {
       freeBusy: () => Promise.reject(new Error("secret internal detail")),
       getEvent: () => Promise.reject(new Error("x")),
+      lookupEvent: () => Promise.reject(new Error("x")),
       listEvents: () => Promise.reject(new Error("x")),
       createEvent: () => Promise.reject(new Error("x")),
     };
@@ -242,6 +258,23 @@ describe("calendar_find_slots", () => {
     expect(r.isError).toBe(true);
     expect(errorCode(r)).toBe("PROVIDER_ERROR");
     expect(JSON.stringify(r)).not.toContain("secret internal detail");
+  });
+
+  it("AuthRequiredError from freeBusy -> AUTH_REQUIRED, tool_call rejected", async () => {
+    h.ctx.provider = { ...createFixtureProvider(makeWorld()), freeBusy: () => Promise.reject(new AuthRequiredError()) };
+    const r = await call(base);
+    expect(r.isError).toBe(true);
+    expect(errorCode(r)).toBe("AUTH_REQUIRED");
+    await h.logging.whenIdle();
+    expect(toolCallRows()[0]).toMatchObject({ outcome: "rejected", error_code: "AUTH_REQUIRED" });
+  });
+
+  it("an unknown freeBusy error is a fixed PROVIDER_ERROR text", async () => {
+    const err = new TypeError("fetch failed", { cause: new Error("secret-host") });
+    h.ctx.provider = { ...createFixtureProvider(makeWorld()), freeBusy: () => Promise.reject(err) };
+    const r = await call(base);
+    expect((r.content as { text: string }[])[0]!.text).toBe("PROVIDER_ERROR: Calendar provider call failed.");
+    expect(JSON.stringify(r)).not.toContain("secret-host");
   });
 
   it("writes exactly one tool_call row per call and changes nothing else", async () => {

@@ -1,3 +1,5 @@
+import { TZ_NAMES } from "./tz-names.js";
+
 /** True for `UTC` and for `Area/Location` IANA names the runtime knows; offsets, POSIX names like `EST5EDT` and `""` are not. */
 export function isIanaTimeZone(tz: string): boolean {
   if (tz !== "UTC" && !/^[A-Za-z_]+(\/[A-Za-z0-9_+-]+)+$/.test(tz)) return false;
@@ -7,6 +9,22 @@ export function isIanaTimeZone(tz: string): boolean {
   } catch {
     return false;
   }
+}
+
+const BY_LOWER = new Map(TZ_NAMES.map((n) => [n.toLowerCase(), n]));
+
+/**
+ * The canonical spelling of an accepted zone name (`europe/berlin` becomes `Europe/Berlin`, `utc` becomes `UTC`), or
+ * null when it is not an IANA zone name (`isIanaTimeZone` is false, apart from `utc`). A case-insensitive exact lookup
+ * in the pinned tzdata name list (`tz-names.ts`) returns the list's spelling; `Intl` only checks that the runtime
+ * accepts the zone. Aliases keep their own name (`Asia/Calcutta` and `Asia/Kolkata` stay as they are) because `Intl`
+ * resolves aliases differently across ICU versions; nothing here depends on the ICU version. A zone the runtime accepts
+ * but the pinned release does not list (one newer than the pin) is returned as typed.
+ */
+export function canonicalTimeZone(tz: string): string | null {
+  if (tz.toLowerCase() === "utc") return "UTC";
+  if (!isIanaTimeZone(tz)) return null;
+  return BY_LOWER.get(tz.toLowerCase()) ?? tz;
 }
 
 interface LocalParts {

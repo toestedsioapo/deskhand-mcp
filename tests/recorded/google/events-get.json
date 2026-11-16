@@ -1,0 +1,31 @@
+{
+  "request": {
+    "method": "GET",
+    "url": "https://www.googleapis.com/calendar/v3/calendars/primary/events/evt-standup-1"
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "id": "evt-standup-1",
+      "etag": "\"3100000000000001\"",
+      "status": "confirmed",
+      "summary": "Team standup",
+      "start": {
+        "dateTime": "2026-11-12T10:00:00+02:00",
+        "timeZone": "Europe/Berlin"
+      },
+      "end": {
+        "dateTime": "2026-11-12T10:30:00+02:00",
+        "timeZone": "Europe/Berlin"
+      },
+      "attendees": [
+        {
+          "email": "ana@example.com"
+        },
+        {
+          "email": "ben@example.com"
+        }
+      ]
+    }
+  }
+}

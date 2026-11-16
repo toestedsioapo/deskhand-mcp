@@ -1,0 +1,23 @@
+{
+  "request": {
+    "method": "GET",
+    "url": "https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin=2026-11-12T00%3A00%3A00.000Z&timeMax=2026-11-14T00%3A00%3A00.000Z&singleEvents=true&orderBy=startTime&maxResults=50&fields=items%28id%2Cetag%2Cstatus%2Csummary%2Cstart%2Cend%2Cattendees%28email%2Cself%29%2Corganizer%28self%29%2Crecurrence%2CrecurringEventId%29%2CnextPageToken"
+  },
+  "response": {
+    "status": 403,
+    "body": {
+      "error": {
+        "code": 403,
+        "message": "Request had insufficient authentication scopes.",
+        "errors": [
+          {
+            "message": "Insufficient Permission",
+            "domain": "global",
+            "reason": "insufficientPermissions"
+          }
+        ],
+        "status": "PERMISSION_DENIED"
+      }
+    }
+  }
+}

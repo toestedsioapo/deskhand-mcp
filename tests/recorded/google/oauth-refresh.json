@@ -1,0 +1,15 @@
+{
+  "request": {
+    "method": "POST",
+    "url": "https://oauth2.googleapis.com/token"
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "access_token": "ya29.NEW-ACCESS-TOKEN",
+      "expires_in": 3599,
+      "scope": "https://www.googleapis.com/auth/calendar.readonly",
+      "token_type": "Bearer"
+    }
+  }
+}

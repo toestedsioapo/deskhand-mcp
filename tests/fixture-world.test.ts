@@ -76,6 +76,25 @@ describe("loadFixtureWorld", () => {
     expect(() => loadFixtureWorld(p)).toThrow(p);
   });
 
+  describe("organizer_self (additive, default true)", () => {
+    const withEvent = (e: unknown) => ({ ...valid, calendars: { primary: { events: [e] } } });
+    it.each([true, false])("loads organizer_self: %s", (v) => {
+      const w = loadFixtureWorld(write(`org-${v}.json`, withEvent({ ...ev, organizer_self: v })));
+      expect(w.calendars["primary"]?.events[0]).toMatchObject({ organizer_self: v });
+    });
+    it("rejects a non-boolean organizer_self", () => {
+      expect(() => loadFixtureWorld(write("org-bad.json", withEvent({ ...ev, organizer_self: "false" })))).toThrow(/organizer_self/);
+    });
+    it("world events are yours by default; organizer_self: false is a foreign invite", async () => {
+      const { createFixtureProvider } = await import("../src/providers/fixture/provider.js");
+      const p = createFixtureProvider(
+        loadFixtureWorld(write("org-mix.json", { ...valid, calendars: { primary: { events: [ev, { ...ev, id: "evt_foreign", organizer_self: false }] } } })),
+      );
+      expect((await p.getEvent("primary", ev.id))?.organizerSelf).toBe(true);
+      expect(await p.getEvent("primary", "evt_foreign")).not.toHaveProperty("organizerSelf");
+    });
+  });
+
   describe("all_day events", () => {
     const offsite = {
       id: "evt_offsite",

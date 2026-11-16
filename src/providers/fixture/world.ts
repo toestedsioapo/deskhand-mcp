@@ -22,6 +22,9 @@ const eventSchema = z
     attendees: z.array(z.string()),
     etag: z.string().min(1),
     all_day: z.boolean().optional(),
+    // Additive (no version bump): the calendar owner organises the event. Default true; false models an invite
+    // from someone else (Google `organizer.self: false`).
+    organizer_self: z.boolean().optional(),
   })
   .strict()
   .superRefine((e, ctx) => {

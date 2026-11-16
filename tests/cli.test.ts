@@ -25,7 +25,7 @@ async function run(argv: string[]) {
 }
 
 const SUBCOMMANDS = ["pending", "approve", "reject", "export", "auth"];
-const STUBS = ["export", "auth"];
+const STUBS = ["export"];
 
 describe("runCli", () => {
   it.each([[[]], [["--help"]], [["-h"]]])("help for %j", async (argv) => {
@@ -36,6 +36,13 @@ describe("runCli", () => {
     expect(out).toContain("not implemented yet");
     expect(out).not.toMatch(/pending .*not implemented|reject .*not implemented|approve .*not implemented/);
     expect(out).toContain("--version");
+  });
+
+  it("lists auth as implemented", async () => {
+    const { out } = await run(["--help"]);
+    const line = out.split("\n").find((l) => l.includes("auth"));
+    expect(line).toContain("login | status | upgrade");
+    expect(line).not.toContain("not implemented");
   });
 
   it("prints the version", async () => {

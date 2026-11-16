@@ -1,0 +1,49 @@
+{
+  "request": {
+    "method": "GET",
+    "url": "https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin=2026-11-12T00%3A00%3A00.000Z&timeMax=2026-11-14T00%3A00%3A00.000Z&singleEvents=true&orderBy=startTime&maxResults=2&fields=items%28id%2Cetag%2Cstatus%2Csummary%2Cstart%2Cend%2Cattendees%28email%2Cself%29%2Corganizer%28self%29%2Crecurrence%2CrecurringEventId%29%2CnextPageToken"
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "kind": "calendar#events",
+      "nextPageToken": "CAEQAA-FAKE-PAGE-TOKEN",
+      "items": [
+        {
+          "id": "evt-standup-1",
+          "etag": "\"3100000000000001\"",
+          "status": "confirmed",
+          "summary": "Team standup",
+          "start": {
+            "dateTime": "2026-11-12T10:00:00+02:00",
+            "timeZone": "Europe/Berlin"
+          },
+          "end": {
+            "dateTime": "2026-11-12T10:30:00+02:00",
+            "timeZone": "Europe/Berlin"
+          },
+          "attendees": [
+            {
+              "email": "ana@example.com"
+            },
+            {
+              "email": "ben@example.com"
+            }
+          ]
+        },
+        {
+          "id": "evt-offsite-2",
+          "etag": "\"3100000000000002\"",
+          "status": "confirmed",
+          "summary": "Offsite planning",
+          "start": {
+            "dateTime": "2026-11-12T14:00:00Z"
+          },
+          "end": {
+            "dateTime": "2026-11-12T15:15:00Z"
+          }
+        }
+      ]
+    }
+  }
+}

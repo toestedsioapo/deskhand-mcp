@@ -1,6 +1,6 @@
 # Google Cloud OAuth setup (your own client, Testing mode)
 
-Status: written with the M3 plan on 2026-11-11. Parts 1 to 5 can be done today. Part 6 needs `deskhand auth`, which arrives with M3b; until then the commands there do not exist.
+Status: written with the M3 plan on 2026-11-11; Part 6 updated for the real `deskhand auth` commands in M3b (2026-11-14).
 
 Deskhand never ships an OAuth client. You create one in your own Google Cloud project, keep it in Testing mode, and add yourself as the only test user. Nobody else can sign in with it, and Google does not need to verify it.
 
@@ -79,29 +79,55 @@ Rules for this file:
 - Do not paste its contents into a chat or an AI client.
 - Keep the directory inside your user profile (on Windows the profile ACL is what protects it).
 
-## 6. Sign in (from M3b)
+## 6. Sign in
 
-In a real terminal, with the server not needed:
+In a real terminal (PowerShell on Windows). The server does not need to run. `deskhand` is the installed bin; from a checkout use `node dist/cli.js` instead.
 
 ```powershell
-$env:DESKHAND_PROVIDER = 'google'
+$env:DESKHAND_PROVIDER = "google"
 deskhand auth login
 ```
 
-1. The command prints a link. Open it in your browser.
+1. The command prints `Open this link in your browser to sign in:` and a link. Open it (Deskhand does not launch a browser).
 2. Pick your account. Google shows "Google hasn't verified this app". That is expected for your own client in Testing mode: click **Continue**.
 3. The consent page must list **only** "See and download any calendar you can access using your Google Calendar" (wording may vary slightly). If it lists anything about Gmail, or about editing events, stop and tell me: that would be a bug.
-4. Approve. The browser shows a short "you can close this tab" page, and the terminal prints the granted scope.
-5. `deskhand auth status` shows the scopes and roughly how many days are left.
+4. Approve. The browser shows a short "you can close this tab" page, and the terminal prints:
+
+   ```
+   Granted scopes:
+     https://www.googleapis.com/auth/calendar.readonly
+   Sign-in saved. In Testing mode Google expires it after about 7 days.
+   ```
+
+   If the login is denied, times out or Google grants less than was asked, the command exits 1 with one line and stores nothing.
+5. Check it (no network, reads the two files only):
+
+   ```powershell
+   deskhand auth status
+   ```
+
+   ```
+   client_secret.json: found
+   token.json: found
+   Granted scopes:
+     https://www.googleapis.com/auth/calendar.readonly
+   Write access: no (run: deskhand auth upgrade)
+   Signed in at: 2026-11-14T10:00:00.000Z
+   Testing-mode expiry: about 7 days left
+   ```
+
+   With no token it prints `Not signed in. Run: deskhand auth login` and exits 1.
 
 To allow writes later:
 
 ```powershell
-$env:DESKHAND_ALLOW_WRITES = '1'
+$env:DESKHAND_ALLOW_WRITES = "1"
 deskhand auth upgrade
 ```
 
-The consent page then also lists "View and edit events on all your calendars". `upgrade` refuses to run unless `DESKHAND_ALLOW_WRITES=1` is set.
+The consent page then also lists "View and edit events on all your calendars", and the output lists both scopes (`calendar.readonly` and `calendar.events`). `upgrade` refuses to run unless `DESKHAND_ALLOW_WRITES=1` is set, and asks you to run `login` first if there is no token. `deskhand auth status` then says `Write access: yes`.
+
+Then point your MCP client at the server with `DESKHAND_PROVIDER=google` (and `DESKHAND_ALLOW_WRITES=1` if you want to apply approved plans). The server starts without a token: until you sign in, every Google-backed tool answers `AUTH_REQUIRED`.
 
 ## Things to know
 
@@ -109,6 +135,7 @@ The consent page then also lists "View and edit events on all your calendars". `
 - **Only your test users can sign in.** Anyone else gets "access blocked".
 - **Where the token lives:** `token.json` next to `client_secret.json`. It is the sensitive file. It is never written to the ledger or printed.
 - **To revoke access:** <https://myaccount.google.com/permissions>, find your app name, **Remove access**. Then delete `token.json`.
+- **Dropping write access.** `deskhand auth login` asks for and stores the read scope only, even if you ran `upgrade` before, so `auth status` says `Write access: no` after it. Google itself still remembers the earlier write grant until you remove the app at <https://myaccount.google.com/permissions>; do that if you want the grant gone at Google too.
 - **To undo everything:** delete the OAuth client under **Clients**, or delete the whole project under **IAM & Admin** > **Settings** > **Shut down**.
 - **Costs:** none. The Calendar API has no charge at this usage; no billing account is needed.
 

@@ -8,9 +8,10 @@ import { getAction } from "../src/ledger/actions.js";
 import { LedgerDb } from "../src/ledger/db.js";
 import { createIdGenerator } from "../src/ledger/ids.js";
 import { queryEvents, type EventRow } from "../src/ledger/events.js";
+import { AuthRequiredError, ProviderError } from "../src/providers/errors.js";
 import type { FixtureProvider } from "../src/providers/fixture/provider.js";
 import { createFixtureProvider } from "../src/providers/fixture/provider.js";
-import type { CalendarProvider, EventRef } from "../src/providers/types.js";
+import type { CalendarProvider, EventRef, NewCalendarEvent } from "../src/providers/types.js";
 import { makeTempHome } from "./helpers/home.js";
 import { makeWorld, seedAction, validPlan } from "./helpers/seed.js";
 
@@ -251,7 +252,7 @@ describe("double apply", () => {
     const first = await applyAction(ctx, id);
     const rowsAfterFirst = eventCount();
     const second = await applyAction(ctx, id);
-    expect(second).toEqual({ ok: true, replayed: true, result: (first as { result: EventRef }).result });
+    expect(second).toEqual({ ok: true, replayed: true, result: (first as { result: EventRef }).result, calendarId: "primary" });
     expect(provider.writes).toHaveLength(1);
     expect(events(id).filter((e) => e.kind === "applied")).toHaveLength(1);
     expect(eventCount()).toBe(rowsAfterFirst); // replay writes no lifecycle row
@@ -262,7 +263,7 @@ describe("double apply", () => {
     const first = await applyAction(ctx, id);
     now = AFTER_EXPIRY;
     const again = await applyAction(ctx, id);
-    expect(again).toEqual({ ok: true, replayed: true, result: (first as { result: EventRef }).result });
+    expect(again).toEqual({ ok: true, replayed: true, result: (first as { result: EventRef }).result, calendarId: "primary" });
     expect(provider.writes).toHaveLength(1);
   });
 });
@@ -316,7 +317,7 @@ describe("crash between provider write and ledger update", () => {
 
   async function expectRecovered() {
     const r = await applyAction(ctx, id);
-    expect(r).toEqual({ ok: true, replayed: true, result: original });
+    expect(r).toEqual({ ok: true, replayed: true, result: original, calendarId: "primary" });
     expect(provider.writes).toHaveLength(1);
     const a = getAction(db, id)!;
     expect(a.status).toBe("applied");
@@ -388,6 +389,7 @@ describe("provider failure", () => {
     const failing: CalendarProvider = {
       freeBusy: (c, r) => provider.freeBusy(c, r),
       getEvent: (c, i) => provider.getEvent(c, i),
+      lookupEvent: (c, i) => provider.lookupEvent(c, i),
       listEvents: (c, r, l) => provider.listEvents(c, r, l),
       createEvent: async () => {
         throw new Error("backend unavailable");
@@ -403,6 +405,7 @@ describe("provider failure", () => {
     const failing: CalendarProvider = {
       freeBusy: (c, r) => provider.freeBusy(c, r),
       getEvent: (c, i) => provider.getEvent(c, i),
+      lookupEvent: (c, i) => provider.lookupEvent(c, i),
       listEvents: (c, r, l) => provider.listEvents(c, r, l),
       createEvent: async () => {
         throw new Error(long);
@@ -420,6 +423,7 @@ describe("provider failure", () => {
     const ambiguous: CalendarProvider = {
       freeBusy: (c, r) => provider.freeBusy(c, r),
       getEvent: (c, i) => provider.getEvent(c, i),
+      lookupEvent: (c, i) => provider.lookupEvent(c, i),
       listEvents: (c, r, l) => provider.listEvents(c, r, l),
       createEvent: async (e, k) => {
         await provider.createEvent(e, k);
@@ -428,7 +432,12 @@ describe("provider failure", () => {
     };
     const id = seedAction(ctx, "approved");
     const r = await applyAction(makeCtx({ provider: ambiguous }), id);
-    expect(r).toEqual({ ok: true, replayed: true, result: expect.objectContaining({ id: idempotencyKey(id) }) });
+    expect(r).toEqual({
+      ok: true,
+      replayed: true,
+      result: expect.objectContaining({ id: idempotencyKey(id) }),
+      calendarId: "primary",
+    });
     expect(status(id)).toBe("applied");
     expect(provider.writes).toHaveLength(1);
     expect(kinds(id)).toEqual(["plan_created", "applied"]);
@@ -448,13 +457,14 @@ describe("provider read errors are not terminal", () => {
     expect(provider.writes).toHaveLength(0);
   }
 
-  it("getEvent throws during the recovery lookup -> refused, still approved, retry applies", async () => {
+  it("the lookup throws during the recovery lookup -> refused, still approved, retry applies", async () => {
     const id = seedAction(ctx, "approved");
     await expectReadRefused(
       {
         freeBusy: (c, r) => provider.freeBusy(c, r),
-        getEvent: async () => {
-          throw new Error("getEvent down");
+        getEvent: (c, i) => provider.getEvent(c, i),
+        lookupEvent: async () => {
+          throw new Error("lookup down");
         },
         listEvents: (c, r, l) => provider.listEvents(c, r, l),
         createEvent: (e, k) => provider.createEvent(e, k),
@@ -472,6 +482,7 @@ describe("provider read errors are not terminal", () => {
           throw new Error("freeBusy down");
         },
         getEvent: (c, i) => provider.getEvent(c, i),
+      lookupEvent: (c, i) => provider.lookupEvent(c, i),
         listEvents: (c, r, l) => provider.listEvents(c, r, l),
         createEvent: (e, k) => provider.createEvent(e, k),
       },
@@ -490,6 +501,7 @@ describe("concurrent apply where our event lands between the other caller's look
     const slowReturn: CalendarProvider = {
       freeBusy: (c, r) => provider.freeBusy(c, r),
       getEvent: (c, i) => provider.getEvent(c, i),
+      lookupEvent: (c, i) => provider.lookupEvent(c, i),
       listEvents: (c, r, l) => provider.listEvents(c, r, l),
       createEvent: async (e, k) => {
         const ev = await provider.createEvent(e, k);
@@ -503,6 +515,7 @@ describe("concurrent apply where our event lands between the other caller's look
         return provider.freeBusy(c, r);
       },
       getEvent: (c, i) => provider.getEvent(c, i),
+      lookupEvent: (c, i) => provider.lookupEvent(c, i),
       listEvents: (c, r, l) => provider.listEvents(c, r, l),
       createEvent: (e, k) => provider.createEvent(e, k),
     };
@@ -543,5 +556,278 @@ describe("stored plan oddities", () => {
     const id = seedAction(ctx, "approved");
     db.run("UPDATE actions SET expires_at = 'not a date' WHERE id = ?", [id]);
     await expectRefused(ctx, id, "PLAN_EXPIRED", "approved");
+  });
+});
+
+describe("secrets and auth failures at the provider", () => {
+  const base = (): CalendarProvider => ({
+    freeBusy: (c, r) => provider.freeBusy(c, r),
+    getEvent: (c, i) => provider.getEvent(c, i),
+    lookupEvent: (c, i) => provider.lookupEvent(c, i),
+    listEvents: (c, r, l) => provider.listEvents(c, r, l),
+    createEvent: (e, k) => provider.createEvent(e, k),
+  });
+  const authFail = async () => {
+    throw new AuthRequiredError();
+  };
+
+  it("scrubs tokens from actions.error and every event preview", async () => {
+    const id = seedAction(ctx, "approved");
+    const failing = {
+      ...base(),
+      createEvent: async () => {
+        throw new Error("401 Bearer ya29.A0AbCdEf refresh 1//0gXyZaBc");
+      },
+    };
+    await expectFailed(makeCtx({ provider: failing }), id, "PROVIDER_ERROR");
+    const dump = JSON.stringify([getAction(db, id)!.error, events(id).map((e) => e.preview)]);
+    for (const s of ["ya29.", "1//0g", "Bearer "]) expect(dump).not.toContain(s);
+    // Ruling 18: secret-like error text is replaced whole; apply's own prefix stays outside the scrub.
+    expect(getAction(db, id)!.error).toBe("PROVIDER_ERROR: Provider write failed: [redacted: text contained secret-like data]");
+  });
+
+  async function expectAuthRefused(p: CalendarProvider, id: string) {
+    const r = await applyAction(makeCtx({ provider: p }), id);
+    expect(r).toMatchObject({ ok: false, errorCode: "AUTH_REQUIRED" });
+    expect(status(id)).toBe("approved");
+    expect(getAction(db, id)!.error).toBeNull();
+    const refused = events(id).filter((e) => e.kind === "apply_refused");
+    expect(refused).toHaveLength(1);
+    expect(refused[0]).toMatchObject({ outcome: "rejected", error_code: "AUTH_REQUIRED" });
+    expect(kinds(id)).not.toContain("apply_failed");
+    expect(provider.writes).toHaveLength(0);
+  }
+
+  it("lookupEvent AuthRequired (recovery lookup) -> AUTH_REQUIRED, approved", async () => {
+    await expectAuthRefused({ ...base(), lookupEvent: authFail }, seedAction(ctx, "approved"));
+  });
+
+  it("freeBusy AuthRequired (re-check) -> AUTH_REQUIRED, approved", async () => {
+    await expectAuthRefused({ ...base(), freeBusy: authFail }, seedAction(ctx, "approved"));
+  });
+
+  it("createEvent AuthRequired, follow-up lookup finds nothing -> AUTH_REQUIRED, approved, not failed", async () => {
+    await expectAuthRefused({ ...base(), createEvent: authFail }, seedAction(ctx, "approved"));
+  });
+
+  it("createEvent and the follow-up lookup both AuthRequired -> AUTH_REQUIRED, approved", async () => {
+    let calls = 0;
+    const p: CalendarProvider = {
+      ...base(),
+      lookupEvent: (c, i) => (++calls >= 2 ? authFail() : provider.lookupEvent(c, i)),
+      createEvent: authFail,
+    };
+    const id = seedAction(ctx, "approved");
+    await expectAuthRefused(p, id);
+    expect(calls).toBe(2);
+  });
+});
+
+const DIFFERS = "an event with this action's id exists but differs from the approved plan";
+const DELETED = "an event with this action's id was created and later deleted";
+const STILL = "an earlier write attempt may still be landing; retry later";
+
+/** Fixture parity with the Google adapter: an event under our id counts only when it is the approved one. */
+describe("an event under our id that is not the approved one", () => {
+  async function expectFailedWith(c: AppContext, id: string, message: string) {
+    const r = await applyAction(c, id);
+    expect(r).toEqual({ ok: false, errorCode: "STALE_PLAN", message });
+    const a = getAction(db, id)!;
+    expect(a.status).toBe("failed");
+    expect(a.result_json).toBeNull();
+    expect(a.error).toBe(`STALE_PLAN: ${message}`);
+    expect(kinds(id)).not.toContain("applied");
+  }
+
+  it("the recovery lookup finds an event under our id with another title -> failed, no second write", async () => {
+    const id = seedAction(ctx, "approved");
+    await provider.createEvent({ ...validPlan().event, title: "Something else" } as NewCalendarEvent, idempotencyKey(id));
+    await expectFailedWith(ctx, id, DIFFERS);
+    expect(provider.writes).toHaveLength(1);
+  });
+
+  for (const [what, over] of [
+    ["start", { start: "2026-11-12T10:05:00.000Z" }],
+    ["end", { end: "2026-11-12T10:45:00.000Z" }],
+    ["attendees", { attendees: ["a@example.com", "b@example.com", "evil@example.com"] }],
+    ["one attendee fewer", { attendees: ["a@example.com", "b@example.com"] }],
+  ] as const) {
+    it(`a differing ${what} is not ours`, async () => {
+      const id = seedAction(ctx, "approved");
+      await provider.createEvent({ ...validPlan().event, ...over } as NewCalendarEvent, idempotencyKey(id));
+      await expectFailedWith(ctx, id, DIFFERS);
+    });
+  }
+
+  it("attendees in another case and order still match", async () => {
+    const id = seedAction(ctx, "approved");
+    const ev = { ...validPlan().event, attendees: ["C@example.com", "a@EXAMPLE.com", "b@example.com"] } as NewCalendarEvent;
+    await provider.createEvent(ev, idempotencyKey(id));
+    expect(await applyAction(ctx, id)).toMatchObject({ ok: true, replayed: true });
+    expect(status(id)).toBe("applied");
+  });
+
+  it("a crash, then the user deletes the event -> failed with the deleted phrase, no second write", async () => {
+    const id = seedAction(ctx, "approved");
+    const crashing = makeCtx({ hooks: { beforeCommit: () => { throw new Error("crash"); } } });
+    await expect(applyAction(crashing, id)).rejects.toThrow("crash");
+    provider.cancelEvent("primary", idempotencyKey(id));
+    await expectFailedWith(ctx, id, DELETED);
+    expect(provider.writes).toHaveLength(1);
+  });
+
+  it("createEvent returns an existing, different event (written concurrently) -> failed, not applied", async () => {
+    const id = seedAction(ctx, "approved");
+    const other: CalendarProvider = {
+      ...delegate(),
+      createEvent: async (e, k) => provider.createEvent({ ...e, title: "Hijacked" }, k),
+    };
+    await expectFailedWith(makeCtx({ provider: other }), id, DIFFERS);
+  });
+});
+
+/** Ambiguous write failures (timeout, network, 429, 5xx) stay retryable; a definite rejection is terminal. */
+describe("write failures: ambiguous vs definite", () => {
+  it("after an earlier ambiguous write attempt, a failed re-check with nothing found stays approved (fixed note)", async () => {
+    const id = seedAction(ctx, "approved");
+    const flaky: CalendarProvider = {
+      ...delegate(),
+      createEvent: async () => {
+        throw new ProviderError("fixture", "createEvent", { phrase: "timed out", retryable: true });
+      },
+    };
+    await applyAction(makeCtx({ provider: flaky }), id);
+    provider.addBusy("primary", SLOT);
+    const r = await applyAction(ctx, id);
+    expect(r).toEqual({ ok: false, errorCode: "PROVIDER_ERROR", message: "an earlier write attempt may still be landing; retry later" });
+    expect(status(id)).toBe("approved");
+    expect((events(id).at(-1)!.preview as { note: unknown }).note).toBe("an earlier write attempt may still be landing; retry later");
+  });
+
+  it("an ambiguous write whose lookup then fails with AuthRequired is still recorded: a busy retry stays approved", async () => {
+    const id = seedAction(ctx, "approved");
+    let lookups = 0;
+    const flaky: CalendarProvider = {
+      ...delegate(),
+      lookupEvent: async (c, i) => {
+        if (++lookups === 2) throw new AuthRequiredError("Not signed in to Google. Run: deskhand auth login");
+        return provider.lookupEvent(c, i);
+      },
+      createEvent: async () => {
+        throw new ProviderError("fixture", "createEvent", { status: 503 });
+      },
+    };
+    const first = await applyAction(makeCtx({ provider: flaky }), id);
+    expect(first).toMatchObject({ ok: false, errorCode: "AUTH_REQUIRED" });
+    expect(first.ok ? "" : first.message).toMatch(/^Provider write failed: .*Run: deskhand auth login/);
+    provider.addBusy("primary", SLOT);
+    expect(await applyAction(ctx, id)).toMatchObject({ ok: false, errorCode: "PROVIDER_ERROR", message: STILL });
+    expect(status(id)).toBe("approved");
+  });
+
+  it("a definite write failure whose lookup fails is not an ambiguous attempt: busy retry -> STALE_PLAN", async () => {
+    const id = seedAction(ctx, "approved");
+    let lookups = 0;
+    const bad: CalendarProvider = {
+      ...delegate(),
+      lookupEvent: async (c, i) => {
+        if (++lookups === 2) throw new ProviderError("fixture", "lookup", { status: 503 });
+        return provider.lookupEvent(c, i);
+      },
+      createEvent: async () => {
+        throw new ProviderError("fixture", "createEvent", { status: 400 });
+      },
+    };
+    expect(await applyAction(makeCtx({ provider: bad }), id)).toMatchObject({ ok: false, errorCode: "PROVIDER_ERROR" });
+    expect(status(id)).toBe("approved");
+    provider.addBusy("primary", SLOT);
+    await expectFailed(ctx, id, "STALE_PLAN");
+  });
+
+  it("an earlier refusal that was not a write attempt (a read error) does not count: busy re-check -> STALE_PLAN", async () => {
+    const id = seedAction(ctx, "approved");
+    const down: CalendarProvider = {
+      ...delegate(),
+      lookupEvent: async () => {
+        throw new ProviderError("fixture", "lookup", { status: 503 });
+      },
+    };
+    await applyAction(makeCtx({ provider: down }), id);
+    provider.addBusy("primary", SLOT);
+    await expectFailed(ctx, id, "STALE_PLAN");
+  });
+
+  it("a retryable ProviderError and nothing found -> PROVIDER_ERROR refusal, still approved; a retry applies", async () => {
+    const id = seedAction(ctx, "approved");
+    const flaky: CalendarProvider = {
+      ...delegate(),
+      createEvent: async () => {
+        throw new ProviderError("fixture", "createEvent", { status: 503 });
+      },
+    };
+    const r = await applyAction(makeCtx({ provider: flaky }), id);
+    expect(r).toMatchObject({ ok: false, errorCode: "PROVIDER_ERROR" });
+    expect(status(id)).toBe("approved");
+    expect(getAction(db, id)!.error).toBeNull();
+    expect(events(id).at(-1)).toMatchObject({ kind: "apply_refused", outcome: "error", error_code: "PROVIDER_ERROR" });
+    expect(await applyAction(ctx, id)).toMatchObject({ ok: true, replayed: false });
+    expect(provider.writes).toHaveLength(1);
+  });
+
+  it("a definite ProviderError (HTTP 400) and nothing found -> failed", async () => {
+    const id = seedAction(ctx, "approved");
+    const bad: CalendarProvider = {
+      ...delegate(),
+      createEvent: async () => {
+        throw new ProviderError("fixture", "createEvent", { status: 400 });
+      },
+    };
+    await expectFailed(makeCtx({ provider: bad }), id, "PROVIDER_ERROR");
+  });
+});
+
+function delegate(): CalendarProvider {
+  return {
+    freeBusy: (c, r) => provider.freeBusy(c, r),
+    getEvent: (c, i) => provider.getEvent(c, i),
+    lookupEvent: (c, i) => provider.lookupEvent(c, i),
+    listEvents: (c, r, l) => provider.listEvents(c, r, l),
+    createEvent: (e, k) => provider.createEvent(e, k),
+  };
+}
+
+/** docs/fixture-format.md, "Write log": a world event under the idempotency key simulates a crash after the write. */
+describe("fixture world: crash recovery seeded in the world file", () => {
+  function seededWorld(id: string, extra: Record<string, unknown> = {}) {
+    const e = validPlan().event;
+    const base = makeWorld();
+    return makeWorld({
+      calendars: {
+        primary: {
+          events: [
+            ...base.calendars["primary"]!.events,
+            { id: idempotencyKey(id), title: e.title, start: e.start, end: e.end, attendees: e.attendees, etag: "w1", ...extra },
+          ],
+        },
+      },
+    });
+  }
+
+  it("a world event with the plan's fields under the key is recovered: applied, note recovered, no write", async () => {
+    const id = seedAction(ctx, "approved");
+    provider = createFixtureProvider(seededWorld(id));
+    const r = await applyAction(makeCtx(), id);
+    expect(r).toMatchObject({ ok: true, replayed: true, result: { id: idempotencyKey(id) } });
+    expect(status(id)).toBe("applied");
+    expect((events(id).at(-1)!.preview as { note: unknown }).note).toBe("recovered");
+    expect(provider.writes).toHaveLength(0);
+  });
+
+  it("organizer_self: false (a foreign invite) with the plan's fields -> failed differs, no write", async () => {
+    const id = seedAction(ctx, "approved");
+    provider = createFixtureProvider(seededWorld(id, { organizer_self: false }));
+    expect(await applyAction(makeCtx(), id)).toEqual({ ok: false, errorCode: "STALE_PLAN", message: DIFFERS });
+    expect(status(id)).toBe("failed");
+    expect(provider.writes).toHaveLength(0);
   });
 });
