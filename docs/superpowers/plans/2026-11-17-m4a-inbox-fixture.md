@@ -231,7 +231,7 @@
   - `normaliseBody("a\r\nb\r\n")` is `"a\nb\n"` and renders 3 lines, the last empty (Review Focus 2).
   - A row written around the tool with a bad subject, a bad body, or both `body` and `bodyRemoved` shows as `(invalid plan)`, and `approve` refuses it with `INTERNAL`.
   - `hashablePlan`: the hash of a draft plan with its body equals the hash of the same plan with `bodyRemoved: true` and no body; every calendar plan hash (existing snapshots and fixtures) is unchanged.
-  - Editing the body of an unswept `planned` plan (keeping `plan_hash`): `pending` shows `(invalid plan)` and `approve` refuses. Editing the body of an unswept `approved` plan: `action_apply` gives `PLAN_MODIFIED`, status `failed`, no draft written.
+  - Editing the body of an unswept `planned` plan (keeping `plan_hash`): `pending` shows `(invalid plan)` and `approve` refuses with `PLAN_MODIFIED` (a body that does not match `bodyChars` / `bodySha256` is checked before the schema's `INTERNAL`, in approve as in apply). Editing the body of an unswept `approved` plan: `action_apply` gives `PLAN_MODIFIED`, status `failed`, no draft written.
   - An unexpired `planned` plan with `bodyRemoved` (tampering): `approve` refuses with `PLAN_MODIFIED`. An unexpired `approved` plan with `bodyRemoved`: `action_apply` gives `PLAN_MODIFIED`, `failed`, no draft.
   - `-- ` (the signature separator) is accepted; `--  `, `a ` and ` -- ` are refused.
   - `deskhand approve` on a draft with a 300-line body at a terminal of 20 rows and 80 columns: the last lines printed before the prompt are the summary (`summary: to …, cc …, bcc …`, `new recipients: …`, `subject: …`), so all three are within the last 20 rows of output above the prompt. A calendar approve prints no summary.
