@@ -13,3 +13,7 @@ Status: Accepted (owner review, 2026-11-09)
 ## Addendum (2026-11-11, owner-approved): M3 requests calendar scopes only
 
 M3 requests Calendar scopes only. `deskhand auth login` asks for `calendar.readonly` alone; `deskhand auth upgrade` adds `calendar.events` (write scopes only when `DESKHAND_ALLOW_WRITES=1`). `gmail.readonly` and `gmail.compose` wait for M4. M3 therefore uses no restricted scope.
+
+## Addendum (2026-11-17, owner-approved): M4 scopes
+
+The Gmail scopes arrive in M4b, not M4a (M4a runs on the fixture provider and requests no scope). Then `deskhand auth login` asks for `calendar.readonly` and `gmail.readonly`, and `deskhand auth upgrade` adds `calendar.events` and `gmail.compose`, still only when `DESKHAND_ALLOW_WRITES=1`. `gmail.send` and `gmail.modify` are still never requested, and the "drafts only is enforced in our code" caveat above stands; M4b adds a request allowlist and a recorded-response test that no send request is made (M4b plan, decisions 1 and 2).

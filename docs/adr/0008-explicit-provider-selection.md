@@ -16,3 +16,7 @@ Status: Accepted (owner review, 2026-11-11, M3 plan decisions 1, 2 and 10)
 **Rejected alternative.** Reusing `PROVIDER_ERROR` for "nothing configured" would avoid the migration but make it look like a failed write to Deskbench.
 
 **Consequences.** A ledger contract change (`docs/ledger-contract.md`, v3). Every harness or spawn that passes `DESKHAND_FIXTURE` also passes `DESKHAND_PROVIDER=fixture`.
+
+## Addendum (2026-11-17, M4a): one `DESKHAND_PROVIDER` wires calendar and mail
+
+`DESKHAND_PROVIDER` selects one provider for both calendar and mail: `selectProvider(config)` returns the calendar and the mail provider together (`fixture` gives both from the same world; `google` will give both in M4b). Both are null or both are set, and there is no separate mail switch. With none configured, the inbox tools refuse with `PROVIDER_NOT_CONFIGURED` like the calendar tools, and `action_apply` refuses at gate 1b when either is missing. `NOT_FOUND` is now emitted: an unknown `thread_id` in any inbox tool. No new error code and no schema change, so the ledger stays at v3.
