@@ -38,6 +38,18 @@ import {
   calendarListEventsOutputSchema,
 } from "./tools/calendar-list-events.js";
 import {
+  INBOX_READ_THREAD_DESCRIPTION,
+  inboxReadThreadHandler,
+  inboxReadThreadInputSchema,
+  inboxReadThreadOutputSchema,
+} from "./tools/inbox-read-thread.js";
+import {
+  INBOX_SEARCH_DESCRIPTION,
+  inboxSearchHandler,
+  inboxSearchInputSchema,
+  inboxSearchOutputSchema,
+} from "./tools/inbox-search.js";
+import {
   CALENDAR_PROPOSE_EVENT_DESCRIPTION,
   calendarProposeEventHandler,
   calendarProposeEventInputSchema,
@@ -149,6 +161,28 @@ export function createServer(deps: ServerDeps, opts: CreateServerOptions = {}): 
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
     },
     (input) => track(() => calendarProposeEventHandler(deps, input)),
+  );
+
+  server.registerTool(
+    "inbox_search",
+    {
+      description: INBOX_SEARCH_DESCRIPTION,
+      inputSchema: inboxSearchInputSchema,
+      outputSchema: inboxSearchOutputSchema,
+      annotations: { readOnlyHint: true },
+    },
+    (input) => track(() => inboxSearchHandler(deps, input)),
+  );
+
+  server.registerTool(
+    "inbox_read_thread",
+    {
+      description: INBOX_READ_THREAD_DESCRIPTION,
+      inputSchema: inboxReadThreadInputSchema,
+      outputSchema: inboxReadThreadOutputSchema,
+      annotations: { readOnlyHint: true },
+    },
+    (input) => track(() => inboxReadThreadHandler(deps, input)),
   );
 
   // The only MCP tool that can cause a provider write (through the apply engine).

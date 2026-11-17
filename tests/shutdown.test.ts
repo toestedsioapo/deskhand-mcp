@@ -218,6 +218,8 @@ describe("createServer tracks every tool handler", () => {
     ledger_query: {},
     action_explain: { action_id: "act_missing" },
     action_apply: { action_id: "act_missing" },
+    inbox_search: { query: "budget" },
+    inbox_read_thread: { thread_id: "nope" },
     calendar_list_events: { time_min: "2026-11-10T00:00:00Z", time_max: "2026-11-11T00:00:00Z" },
     calendar_propose_event: { title: "Sync", start: "2099-01-01T10:00:00Z", end: "2099-01-01T10:30:00Z" },
     calendar_find_slots: {

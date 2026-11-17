@@ -3,7 +3,7 @@ import { canonicalJson } from "./canonical.js";
 
 const SECRET_KEY =
   /token|secret|password|authorization|credential|api[_-]?key|private[_-]?key|cookie|passphrase/i;
-const BODY_KEY = /^(body|html|content)$/i;
+const BODY_KEY = /^(body|html|content|text|snippet|body_text|html_body|raw)$/i;
 const MAX_STRING = 200;
 const MAX_PREVIEW_BYTES = 4096;
 const MAX_NOTE = 200;
@@ -11,6 +11,11 @@ const MAX_DEPTH = 32;
 const TOO_DEEP = "[omitted: too deep]";
 
 const sha8 = (s: string): string => createHash("sha256").update(s, "utf8").digest("hex").slice(0, 8);
+
+/** `[omitted <UTF-16 length> chars sha256:<8 hex>]`: what a body-key value is stored as (also used for draft bodies). */
+export function omittedMarker(text: string): string {
+  return `[omitted ${text.length} chars sha256:${sha8(text)}]`;
+}
 
 function omitted(value: unknown): string {
   let text: string;
@@ -23,7 +28,7 @@ function omitted(value: unknown): string {
       text = "[unserialisable]";
     }
   }
-  return `[omitted ${text.length} chars sha256:${sha8(text)}]`;
+  return omittedMarker(text);
 }
 
 function redact(value: unknown, depth: number): unknown {
