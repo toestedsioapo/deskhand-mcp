@@ -138,6 +138,40 @@ describe("createPlan", () => {
     expect(() => plan0(ctx)).toThrow(/id/i);
   });
 
+  it("refuses a plan whose kind says it cannot be written (a draft whose body was removed) and writes nothing", () => {
+    const p = validDraftPlan();
+    const { body: _body, ...rest } = p.draft;
+    const swept = { ...p, draft: { ...rest, bodyRemoved: true } };
+    expect(() => createPlan(ctxWith(), { tool: "inbox_draft_reply", input: {}, plan: swept })).toThrow(/cannot be written/);
+    expect(() => createPlan(ctxWith(), { tool: "inbox_draft_reply", input: {}, buildPlan: () => swept })).toThrow(/cannot be written/);
+    expect(db.all("SELECT id FROM actions")).toEqual([]);
+    expect(db.all("SELECT id FROM events")).toEqual([]);
+  });
+
+  it("buildPlan gets the chosen action id inside the transaction and returns the stored plan", () => {
+    seq = ["act_AAAA0000000000000000WXYZ"];
+    const seen: string[] = [];
+    const r = createPlan(ctxWith(), {
+      tool: "inbox_draft_reply",
+      input: {},
+      buildPlan: (id) => {
+        seen.push(id);
+        return validDraftPlan({}, { messageIdHeader: `<deskhand.${createHash("sha256").update(id).digest("hex")}@deskhand.invalid>` });
+      },
+    });
+    expect(seen).toEqual(["act_AAAA0000000000000000WXYZ"]);
+    expect(r.actionId).toBe(seen[0]);
+    const a = db.get<{ plan_json: string; plan_hash: string }>("SELECT plan_json, plan_hash FROM actions WHERE id = ?", [r.actionId])!;
+    expect(a.plan_json).toBe(canonicalJson(r.plan));
+    expect(a.plan_hash).toBe(planHash(r.plan));
+    expect(a.plan_json).toContain(createHash("sha256").update(seen[0]!).digest("hex"));
+  });
+
+  it("an invalid plan from buildPlan throws and writes nothing", () => {
+    expect(() => createPlan(ctxWith(), { tool: "inbox_draft_reply", input: {}, buildPlan: () => validDraftPlan({}, { to: [] }) })).toThrow();
+    expect(db.all("SELECT id FROM actions")).toEqual([]);
+  });
+
   it("sendUpdates changes the plan hash", () => {
     const a = plan0(ctxWith());
     const b = plan0(ctxWith(), validPlan({}, { sendUpdates: "none" }));

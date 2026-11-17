@@ -36,7 +36,7 @@ const importSpecifiers = (text: string): string[] =>
   );
 
 /** The tools that create plans (call createPlan). Explicit list; extend only with review. */
-const PLAN_TOOLS = ["src/tools/calendar-propose-event.ts"];
+const PLAN_TOOLS = ["src/tools/calendar-propose-event.ts", "src/tools/inbox-draft-reply.ts"];
 
 /** Files allowed to SET actions.status to 'approved' or write the approval columns. Explicit list; extend only with review. */
 const APPROVE_ALLOWED = ["src/approval/approve.ts"];

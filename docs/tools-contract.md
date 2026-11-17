@@ -357,7 +357,7 @@ Input (strict):
 | `reply_all` | boolean | `false` | only used when `to` is omitted |
 | `rationale` | string, at most 500 characters | none | stored in the plan |
 
-Default recipients (only when `to` is omitted): the reply goes to the latest non-draft message that was not sent by the owner, to that message's Reply-To, else its From; `reply_all: true` adds that message's To and Cc, minus the owner and minus duplicates. If every message is from the owner, the default is the latest message's To (nothing is addressed to the owner). If `to` is given, `cc` and `bcc` default to `[]` and nothing is added. Every address must be `z.email()`, at most 254 characters, printable ASCII (an address such as `josé@example.com` is refused, naming the rule); at least one `to`, at most 50 recipients in total, none repeated across to, cc and bcc.
+Default recipients (only when `to` is omitted): the reply goes to the latest non-draft message that was not sent by the owner, to that message's Reply-To, else its From; `reply_all: true` adds that message's To (to `to`) and Cc (to `cc`), minus the owner and minus duplicates. If every message is from the owner, the default is the latest message's To (nothing is addressed to the owner), and `reply_all: true` adds that message's Cc to `cc`. A `cc` or `bcc` given without `to` is kept alongside the defaults. A default recipient that breaks the address rule, or no default recipient at all, is `INVALID_INPUT` asking for `to` explicitly. In-Reply-To is the latest message's Message-ID and References the thread's last 10 Message-IDs (of the newest 100 messages), keeping only `<...>` shaped printable-ASCII values. If `to` is given, `cc` and `bcc` default to `[]` and nothing is added. Every address must be `z.email()`, at most 254 characters, printable ASCII (an address such as `josé@example.com` is refused, naming the rule); at least one `to`, at most 50 recipients in total, none repeated across to, cc and bcc.
 
 Output:
 
@@ -366,13 +366,15 @@ Output:
   action_id: string,
   plan_hash: string,           // 64 hex characters
   expires_at: string,
-  diff: string[],              // the agent audience: body rows replaced by "  [omitted <c> chars sha256:<8 hex>]"
-  new_recipients: string[],    // recipients not on the thread, lowercased; [] when none
+  diff: string[],              // the agent audience: body rows replaced by "  [omitted <c> chars sha256:<8 hex>]",
+                               // the subject and every address value replaced by its omitted marker (ruling R3)
+  new_recipients: string[],    // recipients not on the thread, lowercased; [] when none. Not wrapped: these are
+                               // addresses the agent supplied or that it can already read, like calendar attendees
   body: string                 // the omitted marker, never the text
 }
 ```
 
-The result sets `_meta.deskhand.action_id`. Ledger rows on success: `plan_created`, then `tool_call`, both with the action id. `actions.input_json` holds the omitted marker for `body`. No plan row is written for a refusal. Which recipients count as "on the thread": every address in the From, Reply-To, To and Cc of each non-draft message, plus the owner, compared case-insensitively; only addresses that pass the address rule count. This set is computed from the provider, stored as `observed.onThread`, and covered by the plan hash. Any other recipient is flagged `(new: not on this thread)` in the diff and listed in `new_recipients`. New recipients are flagged, not refused.
+The result sets `_meta.deskhand.action_id`. Ledger rows on success: `plan_created`, then `tool_call`, both with the action id. `actions.input_json` holds the omitted marker for `body`. No plan row is written for a refusal. Which recipients count as "on the thread": every address in the From, Reply-To, To and Cc of each non-draft message, plus the owner, compared case-insensitively; only addresses that pass the address rule count. This set is computed from the provider (the newest 100 messages); the recipients in it are stored, lowercased and sorted, as `observed.onThread` (decision 5: only the recipients, so the plan holds no other thread address), covered by the plan hash. Any other recipient is flagged `(new: not on this thread)` in the diff and listed in `new_recipients`. New recipients are flagged, not refused.
 
 The plan it stores is `mail.create_draft_reply` (ledger contract). The diff lines are in the ledger contract, "Plan shape: `mail.create_draft_reply`". The output schemas are snapshot-tested in `tests/tools.inbox-draft-reply.test.ts`.
 
@@ -388,8 +390,8 @@ result (draft) = {
 }
 ```
 
-The shape is built from `result_json` (the `DraftRef` and `bodySha256`) on the first apply, on a recovery and on every replay, so it never contains the body. Gate order and failures are in the ledger contract ("Gates 6 to 9 for a `mail.create_draft_reply` plan"). The `STALE_PLAN` phrases are `the thread no longer exists`, `the thread has a new message since planning` and `a draft with this action's id exists but differs from the approved plan`.
+The shape is built from `result_json` (the `DraftRef` and `bodySha256`) on the first apply, on a recovery and on every replay, so it never contains the body. Gate order and failures are in the ledger contract ("Gates 6 to 9 for a `mail.create_draft_reply` plan"). The `STALE_PLAN` messages are exactly `The world changed since planning: the mailbox account changed since planning.`, `The world changed since planning: the thread no longer exists.`, `The world changed since planning: the thread has a new message since planning.` (gate 8, the prefix every kind's re-check failure carries) and `a draft with this action's id exists but differs from the approved plan` (gates 6 and 9, no prefix).
 
 ## `action_explain` for a draft (M4a)
 
-`plan` is `kind.explainPlan(plan)`: for a draft plan it is the stored plan with `draft.body` replaced by the omitted marker `[omitted <c> chars sha256:<8 hex>]` (a swept plan has `bodyRemoved: true` and no `body`). `diff` is rendered for the agent audience (body rows replaced by one omitted row). The body text appears nowhere in the output, in its `tool_call` preview or in `ledger_query` output. For a calendar plan `plan` is the stored plan, as before.
+`plan` is `kind.explainPlan(plan)`: for a draft plan it is the stored plan with `draft.body` replaced by the omitted marker `[omitted <c> chars sha256:<8 hex>]` (a swept plan has `bodyRemoved: true` and no `body`), and (ruling R3) `draft.subject`, `draft.from`, every `draft.to` / `draft.cc` / `draft.bcc` entry and every `observed.onThread` entry wrapped as untrusted mail text, `{ untrusted: true, source: "mail:<threadId>", content }`, key order kept. `diff` is rendered for the agent audience (body rows replaced by one omitted row, subject and addresses by their omitted markers). The thread subject appears in clear nowhere in the output outside an untrusted wrapper's `content`. The body text appears nowhere in the output, in its `tool_call` preview or in `ledger_query` output. For a calendar plan `plan` is the stored plan, as before.

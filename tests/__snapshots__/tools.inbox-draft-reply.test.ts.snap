@@ -1,0 +1,128 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`inbox_draft_reply schemas > input schema is stable 1`] = `
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "bcc": {
+      "items": {
+        "allOf": [
+          {
+            "pattern": "^(?:[A-Za-z0-9_'+\\-]+\\.)*[A-Za-z0-9_'+\\-]*[A-Za-z0-9_+-]@(?:[A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$",
+          },
+          {
+            "pattern": "^[\\x21-\\x7e]+$",
+          },
+        ],
+        "maxLength": 254,
+        "type": "string",
+      },
+      "maxItems": 50,
+      "type": "array",
+    },
+    "body": {
+      "maxLength": 20000,
+      "minLength": 1,
+      "type": "string",
+    },
+    "cc": {
+      "items": {
+        "allOf": [
+          {
+            "pattern": "^(?:[A-Za-z0-9_'+\\-]+\\.)*[A-Za-z0-9_'+\\-]*[A-Za-z0-9_+-]@(?:[A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$",
+          },
+          {
+            "pattern": "^[\\x21-\\x7e]+$",
+          },
+        ],
+        "maxLength": 254,
+        "type": "string",
+      },
+      "maxItems": 50,
+      "type": "array",
+    },
+    "rationale": {
+      "maxLength": 500,
+      "type": "string",
+    },
+    "reply_all": {
+      "default": false,
+      "type": "boolean",
+    },
+    "subject": {
+      "maxLength": 250,
+      "minLength": 1,
+      "type": "string",
+    },
+    "thread_id": {
+      "pattern": "^[A-Za-z0-9_-]{1,64}$",
+      "type": "string",
+    },
+    "to": {
+      "items": {
+        "allOf": [
+          {
+            "pattern": "^(?:[A-Za-z0-9_'+\\-]+\\.)*[A-Za-z0-9_'+\\-]*[A-Za-z0-9_+-]@(?:[A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$",
+          },
+          {
+            "pattern": "^[\\x21-\\x7e]+$",
+          },
+        ],
+        "maxLength": 254,
+        "type": "string",
+      },
+      "maxItems": 50,
+      "type": "array",
+    },
+  },
+  "required": [
+    "thread_id",
+    "body",
+    "reply_all",
+  ],
+  "type": "object",
+}
+`;
+
+exports[`inbox_draft_reply schemas > output schema is stable 1`] = `
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "action_id": {
+      "type": "string",
+    },
+    "body": {
+      "type": "string",
+    },
+    "diff": {
+      "items": {
+        "type": "string",
+      },
+      "type": "array",
+    },
+    "expires_at": {
+      "type": "string",
+    },
+    "new_recipients": {
+      "items": {
+        "type": "string",
+      },
+      "type": "array",
+    },
+    "plan_hash": {
+      "type": "string",
+    },
+  },
+  "required": [
+    "action_id",
+    "plan_hash",
+    "expires_at",
+    "diff",
+    "new_recipients",
+    "body",
+  ],
+  "type": "object",
+}
+`;

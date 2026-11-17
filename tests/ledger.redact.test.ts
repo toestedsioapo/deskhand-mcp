@@ -1087,13 +1087,13 @@ describe("scrubSecrets, incomplete search fails closed (Ruling 20)", () => {
 });
 
 describe("BODY_KEY coverage (M4a)", () => {
-  it("omits text, snippet, body_text, html_body and raw with the marker", () => {
+  it("omits text, snippet, body_text, html_body, raw and subject with the marker (ruling R3)", () => {
     const v = "some mailbox text";
-    const out = redactPreview({ text: v, snippet: v, body_text: v, html_body: v, raw: v, subject: "kept" }) as Loose;
-    for (const k of ["text", "snippet", "body_text", "html_body", "raw"]) {
+    const out = redactPreview({ text: v, snippet: v, body_text: v, html_body: v, raw: v, subject: v, Subject: v, from: "kept" }) as Loose;
+    for (const k of ["text", "snippet", "body_text", "html_body", "raw", "subject", "Subject"]) {
       expect(out[k]).toBe(`[omitted ${v.length} chars sha256:${sha8(v)}]`);
     }
-    expect(out["subject"]).toBe("kept");
+    expect(out["from"]).toBe("kept");
   });
 
   it("omittedMarker matches the redactor and counts UTF-16 units", () => {

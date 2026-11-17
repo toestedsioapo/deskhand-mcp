@@ -44,6 +44,12 @@ import {
   inboxReadThreadOutputSchema,
 } from "./tools/inbox-read-thread.js";
 import {
+  INBOX_DRAFT_REPLY_DESCRIPTION,
+  inboxDraftReplyHandler,
+  inboxDraftReplyInputSchema,
+  inboxDraftReplyOutputSchema,
+} from "./tools/inbox-draft-reply.js";
+import {
   INBOX_SEARCH_DESCRIPTION,
   inboxSearchHandler,
   inboxSearchInputSchema,
@@ -183,6 +189,18 @@ export function createServer(deps: ServerDeps, opts: CreateServerOptions = {}): 
       annotations: { readOnlyHint: true },
     },
     (input) => track(() => inboxReadThreadHandler(deps, input)),
+  );
+
+  // A plan tool: writes a ledger plan row, nothing in the mailbox. Deskhand cannot send mail.
+  server.registerTool(
+    "inbox_draft_reply",
+    {
+      description: INBOX_DRAFT_REPLY_DESCRIPTION,
+      inputSchema: inboxDraftReplyInputSchema,
+      outputSchema: inboxDraftReplyOutputSchema,
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+    },
+    (input) => track(() => inboxDraftReplyHandler(deps, input)),
   );
 
   // The only MCP tool that can cause a provider write (through the apply engine).

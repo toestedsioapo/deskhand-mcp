@@ -1,8 +1,16 @@
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 
 export type Clock = () => Date;
 
 const ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+
+/**
+ * Lowercase hex SHA-256 of the action id (ledger contract, "Idempotency key"). Lives here, not in the apply engine,
+ * so a plan tool can derive a draft's Message-ID from it without importing the engine.
+ */
+export function idempotencyKey(actionId: string): string {
+  return createHash("sha256").update(actionId, "utf8").digest("hex");
+}
 
 /** ISO-8601 UTC with milliseconds and a trailing Z. */
 export function isoNow(clock: Clock): string {

@@ -3,7 +3,7 @@ import { canonicalJson } from "./canonical.js";
 
 const SECRET_KEY =
   /token|secret|password|authorization|credential|api[_-]?key|private[_-]?key|cookie|passphrase/i;
-const BODY_KEY = /^(body|html|content|text|snippet|body_text|html_body|raw)$/i;
+const BODY_KEY = /^(body|html|content|text|snippet|body_text|html_body|raw|subject)$/i;
 const MAX_STRING = 200;
 const MAX_PREVIEW_BYTES = 4096;
 const MAX_NOTE = 200;

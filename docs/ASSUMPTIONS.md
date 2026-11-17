@@ -34,7 +34,7 @@ Calls I made after the builder check (reversible; please skim): ledger `kind`/`e
 - `tool_call` error rows store the redacted error message in `preview.note`.
 
 **Open assumptions (recorded, to settle later):**
-- ~~BODY_KEY widening~~ closed in M4a Task 4: `BODY_KEY` is now `body|html|content|text|snippet|body_text|html_body|raw`.
+- ~~BODY_KEY widening~~ closed in M4a Task 4: `BODY_KEY` is now `body|html|content|text|snippet|body_text|html_body|raw`; M4a Task 6 (controller ruling R3) adds `subject`, so no preview holds a subject in clear.
 - **Draft-reply plans (M4):** a plan must hold the drafted body in `plan_json`, which conflicts with "never log full email bodies"; needs an ADR before M4.
 - **`action_explain` window:** it reads the last 1000 events, which repeated explains of the same action can dilute.
 - **Deskbench/Deskflow access to the ledger:** the contract is the documented ledger schema plus `ledger_query` output. Whether they may read `ledger.db` directly is decided during Deskbench planning.

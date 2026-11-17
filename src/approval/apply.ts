@@ -1,9 +1,8 @@
-import { createHash } from "node:crypto";
 import type { AppContext } from "../app-context.js";
 import { canonicalJson, planHash } from "../ledger/canonical.js";
 import type { ActionStatus, ErrorCode, EventOutcome } from "../ledger/contract.js";
 import { appendEvent } from "../ledger/events.js";
-import { isoNow } from "../ledger/ids.js";
+import { idempotencyKey, isoNow } from "../ledger/ids.js";
 import { redactInput, scrubSecrets } from "../ledger/redact.js";
 import { AuthRequiredError, ProviderError } from "../providers/errors.js";
 import type { Providers } from "../providers/types.js";
@@ -23,10 +22,8 @@ export type ApplyResult =
 
 const TOOL = "action_apply";
 
-/** Lowercase hex SHA-256 of the action id (ledger contract, "Idempotency key"). */
-export function idempotencyKey(actionId: string): string {
-  return createHash("sha256").update(actionId, "utf8").digest("hex");
-}
+/** Lowercase hex SHA-256 of the action id (ledger contract, "Idempotency key"); defined in src/ledger/ids.ts. */
+export { idempotencyKey };
 
 interface RawAction {
   id: string;

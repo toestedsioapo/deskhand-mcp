@@ -8,21 +8,35 @@ import { getPlanKind } from "./plan-kinds.js";
 
 const MAX_ID_ATTEMPTS = 50;
 
+/**
+ * The plan, validated by its kind's schema. A plan the kind says can never be written (a draft whose body was
+ * removed) is refused too: defence in depth, generic over kinds, since no plan tool builds one.
+ */
 function validate(plan: unknown): unknown {
   const k = typeof plan === "object" && plan !== null ? (plan as { kind?: unknown }).kind : undefined;
   const pk = typeof k === "string" ? getPlanKind(k) : undefined;
   if (!pk) throw new Error("unknown plan kind");
-  return pk.schema.parse(plan);
+  const parsed = pk.schema.parse(plan);
+  if (pk.writable?.(parsed) === false) throw new Error("the plan cannot be written (its content was removed)");
+  return parsed;
 }
 
-/** Validates the plan, then writes the `actions` row and `plan_created` event in one transaction. */
+/**
+ * What to store: a ready `plan`, or `buildPlan`, called inside the transaction with the chosen action id (a draft's
+ * Message-ID is derived from it, and it must be covered by the hash).
+ */
+export type PlanSource = { plan: unknown; buildPlan?: never } | { buildPlan: (actionId: string) => unknown; plan?: never };
+
+/**
+ * Validates the plan, then writes the `actions` row and `plan_created` event in one transaction. Returns the
+ * validated plan as stored.
+ */
 export function createPlan(
   ctx: AppContext,
-  args: { tool: string; input: unknown; plan: unknown },
-): { actionId: string; planHash: string; expiresAt: string } {
-  const plan = validate(args.plan);
-  const planJson = canonicalJson(plan);
-  const hash = planHash(plan);
+  args: { tool: string; input: unknown } & PlanSource,
+): { actionId: string; planHash: string; expiresAt: string; plan: unknown } {
+  // A ready plan is validated before the transaction (as before); a built one inside it, once the id is known.
+  const ready = args.buildPlan === undefined ? validate(args.plan) : undefined;
   // One clock read, so expires_at is exactly created_at + ttl.
   const now = ctx.clock();
   const createdAt = now.toISOString();
@@ -44,6 +58,9 @@ export function createPlan(
       }
     }
     if (id === undefined) throw new Error("could not generate a free action id");
+    const plan = args.buildPlan === undefined ? ready : validate(args.buildPlan(id));
+    const planJson = canonicalJson(plan);
+    const hash = planHash(plan);
     ctx.db.run(
       `INSERT INTO actions (id, created_at, tool, input_json, plan_json, plan_hash, expires_at, status)
        VALUES (?, ?, ?, ?, ?, ?, ?, 'planned')`,
@@ -57,7 +74,7 @@ export function createPlan(
       outcome: "ok",
       preview: { v: 1, input: null, output: null, note: null, action_id: id },
     });
-    return { actionId: id, planHash: hash, expiresAt };
+    return { actionId: id, planHash: hash, expiresAt, plan };
   }, "immediate");
 }
 

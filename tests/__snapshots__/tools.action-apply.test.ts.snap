@@ -29,79 +29,204 @@ exports[`action_apply schemas > output schema is stable 1`] = `
       "type": "boolean",
     },
     "result": {
-      "additionalProperties": false,
-      "properties": {
-        "all_day": {
-          "type": "boolean",
-        },
-        "attendees": {
-          "items": {
-            "additionalProperties": false,
-            "properties": {
-              "content": {
-                "type": "string",
-              },
-              "source": {
-                "type": "string",
-              },
-              "untrusted": {
-                "const": true,
-                "type": "boolean",
-              },
-            },
-            "required": [
-              "untrusted",
-              "source",
-              "content",
-            ],
-            "type": "object",
-          },
-          "type": "array",
-        },
-        "end": {
-          "type": "string",
-        },
-        "etag": {
-          "type": "string",
-        },
-        "id": {
-          "type": "string",
-        },
-        "start": {
-          "type": "string",
-        },
-        "title": {
+      "anyOf": [
+        {
           "additionalProperties": false,
           "properties": {
-            "content": {
-              "type": "string",
-            },
-            "source": {
-              "type": "string",
-            },
-            "untrusted": {
-              "const": true,
+            "all_day": {
               "type": "boolean",
+            },
+            "attendees": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "content": {
+                    "type": "string",
+                  },
+                  "source": {
+                    "type": "string",
+                  },
+                  "untrusted": {
+                    "const": true,
+                    "type": "boolean",
+                  },
+                },
+                "required": [
+                  "untrusted",
+                  "source",
+                  "content",
+                ],
+                "type": "object",
+              },
+              "type": "array",
+            },
+            "end": {
+              "type": "string",
+            },
+            "etag": {
+              "type": "string",
+            },
+            "id": {
+              "type": "string",
+            },
+            "start": {
+              "type": "string",
+            },
+            "title": {
+              "additionalProperties": false,
+              "properties": {
+                "content": {
+                  "type": "string",
+                },
+                "source": {
+                  "type": "string",
+                },
+                "untrusted": {
+                  "const": true,
+                  "type": "boolean",
+                },
+              },
+              "required": [
+                "untrusted",
+                "source",
+                "content",
+              ],
+              "type": "object",
             },
           },
           "required": [
-            "untrusted",
-            "source",
-            "content",
+            "id",
+            "etag",
+            "all_day",
+            "start",
+            "end",
+            "title",
+            "attendees",
           ],
           "type": "object",
         },
-      },
-      "required": [
-        "id",
-        "etag",
-        "all_day",
-        "start",
-        "end",
-        "title",
-        "attendees",
+        {
+          "additionalProperties": false,
+          "properties": {
+            "bcc": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "content": {
+                    "type": "string",
+                  },
+                  "source": {
+                    "type": "string",
+                  },
+                  "untrusted": {
+                    "const": true,
+                    "type": "boolean",
+                  },
+                },
+                "required": [
+                  "untrusted",
+                  "source",
+                  "content",
+                ],
+                "type": "object",
+              },
+              "type": "array",
+            },
+            "body": {
+              "type": "string",
+            },
+            "cc": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "content": {
+                    "type": "string",
+                  },
+                  "source": {
+                    "type": "string",
+                  },
+                  "untrusted": {
+                    "const": true,
+                    "type": "boolean",
+                  },
+                },
+                "required": [
+                  "untrusted",
+                  "source",
+                  "content",
+                ],
+                "type": "object",
+              },
+              "type": "array",
+            },
+            "draft_id": {
+              "type": "string",
+            },
+            "message_id": {
+              "type": "string",
+            },
+            "subject": {
+              "additionalProperties": false,
+              "properties": {
+                "content": {
+                  "type": "string",
+                },
+                "source": {
+                  "type": "string",
+                },
+                "untrusted": {
+                  "const": true,
+                  "type": "boolean",
+                },
+              },
+              "required": [
+                "untrusted",
+                "source",
+                "content",
+              ],
+              "type": "object",
+            },
+            "thread_id": {
+              "type": "string",
+            },
+            "to": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "content": {
+                    "type": "string",
+                  },
+                  "source": {
+                    "type": "string",
+                  },
+                  "untrusted": {
+                    "const": true,
+                    "type": "boolean",
+                  },
+                },
+                "required": [
+                  "untrusted",
+                  "source",
+                  "content",
+                ],
+                "type": "object",
+              },
+              "type": "array",
+            },
+          },
+          "required": [
+            "draft_id",
+            "message_id",
+            "thread_id",
+            "subject",
+            "to",
+            "cc",
+            "bcc",
+            "body",
+          ],
+          "type": "object",
+        },
       ],
-      "type": "object",
     },
     "status": {
       "const": "applied",

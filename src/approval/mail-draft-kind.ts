@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
+import { omittedMarker } from "../ledger/redact.js";
 import type { DraftRef } from "../providers/types.js";
 import { untrusted } from "../util/untrusted.js";
 import { isPlainLine, MAX_BODY_CHARS, normaliseBody, VISIBLE_ASCII } from "../util/sanitize.js";
@@ -15,17 +16,30 @@ import type { PlanKind } from "./plan-kinds.js";
 
 const sha256Hex = (s: string): string => createHash("sha256").update(s, "utf8").digest("hex");
 
+/** The address rule (decision 4), as the tool states it when it refuses an address. */
+export const ADDRESS_RULE =
+  "must be an email address of at most 254 printable ASCII characters (internationalised addresses are not supported)";
 /** A recipient or sender: an address, at most 254 characters, printable ASCII only (no IDN, no display name). */
-const address = z.email().max(254).regex(VISIBLE_ASCII);
+export const draftAddressSchema = z
+  .email({ message: ADDRESS_RULE })
+  .max(254, { message: ADDRESS_RULE })
+  .regex(VISIBLE_ASCII, { message: ADDRESS_RULE });
+const address = draftAddressSchema;
+/** True when `a` passes the address rule; only such addresses count as on a thread (decision 5). */
+export const isDraftAddress = (a: string): boolean => draftAddressSchema.safeParse(a).success;
 /** An RFC 5322 message id as it appears in In-Reply-To and References: `<...>`, printable ASCII, no inner `<` or `>`. */
 const headerValue = z
   .string()
   .max(998)
   .regex(/^<[\x21-\x3b\x3d\x3f-\x7e]+>$/, { message: "must be a <...> message id of printable ASCII" });
+/** True when `v` can be stored as an In-Reply-To or References value. */
+export const isHeaderValue = (v: string): boolean => headerValue.safeParse(v).success;
+/** Most References values a draft carries (the newest ones). */
+export const MAX_REFERENCES = 10;
 /** The draft's own Message-ID, derived from the idempotency key. */
 const OUR_HEADER = /^<deskhand\.[0-9a-f]{64}@deskhand\.invalid>$/;
 const SHA256 = /^[0-9a-f]{64}$/;
-const MAX_RECIPIENTS = 50;
+export const MAX_RECIPIENTS = 50;
 
 /** The draft's Message-ID for an idempotency key (ARCHITECTURE, "Gmail draft idempotency"). */
 export const draftHeaderFor = (key: string): string => `<deskhand.${key}@deskhand.invalid>`;
@@ -40,7 +54,7 @@ const draftSchema = z
     threadId: z.string().min(1).max(256).regex(VISIBLE_ASCII),
     messageIdHeader: z.string().regex(OUR_HEADER),
     inReplyTo: headerValue.nullable(),
-    references: z.array(headerValue).max(10),
+    references: z.array(headerValue).max(MAX_REFERENCES),
     from: address,
     to: z.array(address).min(1).max(MAX_RECIPIENTS),
     cc: z.array(address).max(MAX_RECIPIENTS),
@@ -117,6 +131,10 @@ function sameSet(a: readonly string[], b: readonly string[]): boolean {
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 
 export const DRAFT_DIFFERS = "a draft with this action's id exists but differs from the approved plan";
+/** Re-check phrases (decision 8 and the account check); apply prefixes each with `The world changed since planning: `. */
+export const THREAD_GONE = "the thread no longer exists";
+export const THREAD_NEW_MESSAGE = "the thread has a new message since planning";
+export const ACCOUNT_CHANGED = "the mailbox account changed since planning";
 /** Never used: a mail provider cannot report a deleted draft (decision 7). Kept so every kind names both phrases. */
 export const DRAFT_DELETED = "a draft with this action's id was created and later deleted";
 
@@ -126,15 +144,18 @@ export const mailCreateDraftReply: PlanKind<MailDraftPlan, DraftRef> = {
   phrases: { differs: DRAFT_DIFFERS, deleted: DRAFT_DELETED },
 
   // Decision 3. The approver sees every body row, each behind `  > `; the agent gets one omitted row instead.
+  // Ruling R3: the agent audience also gets the subject and every address value as its omitted marker (mailbox
+  // text, never in clear outside an untrusted wrapper); each line keeps its shape.
   renderDiff(plan, _viewerTimeZone, audience) {
     const d = plan.draft;
     const fresh = newRecipients(plan);
+    const show = (v: string): string => (audience === "approver" ? v : omittedMarker(v));
     const lines = [
       "create draft reply (not sent; Deskhand cannot send mail)",
       `thread: ${d.threadId}`,
       `in reply to message: ${plan.observed.latestMessageId}`,
-      `from: ${d.from}`,
-      `subject: ${d.subject}`,
+      `from: ${show(d.from)}`,
+      `subject: ${show(d.subject)}`,
       newRecipientsLine(fresh.size),
     ];
     for (const [label, list] of [
@@ -143,7 +164,7 @@ export const mailCreateDraftReply: PlanKind<MailDraftPlan, DraftRef> = {
       ["bcc", d.bcc],
     ] as const) {
       lines.push(`${label}: ${list.length} recipient(s)`);
-      for (const a of list) lines.push(`  ${a}${fresh.has(a) ? "  (new: not on this thread)" : ""}`);
+      for (const a of list) lines.push(`  ${show(a)}${fresh.has(a) ? "  (new: not on this thread)" : ""}`);
     }
     const tag = `${d.bodyChars} chars sha256:${d.bodySha256.slice(0, 8)}`;
     if (d.body === undefined) {
@@ -178,14 +199,16 @@ export const mailCreateDraftReply: PlanKind<MailDraftPlan, DraftRef> = {
   // A plan whose body was swept can never be written (decision 2).
   writable: (plan) => plan.draft.body !== undefined,
 
-  // Decision 8: the thread still exists and its latest non-draft message is the one the plan replies to.
+  // First, the mailbox is still the account the plan was made in: the draft says it is `from` that address, and the
+  // thread id and onThread belong to that mailbox. Then decision 8: the thread still exists and its latest non-draft
+  // message (getThread leaves drafts out) is the one the plan replies to.
   async recheck(plan, { mail }) {
+    const { email } = await mail.profile();
+    if (email.toLowerCase() !== plan.draft.from.toLowerCase()) return { ok: false, reason: ACCOUNT_CHANGED };
     const thread = await mail.getThread(plan.draft.threadId, 1);
     const latest = thread?.messages.at(-1);
-    if (!thread || !latest) return { ok: false, reason: "the thread no longer exists" };
-    if (latest.id !== plan.observed.latestMessageId) {
-      return { ok: false, reason: "the thread has a new message since planning" };
-    }
+    if (!thread || !latest) return { ok: false, reason: THREAD_GONE };
+    if (latest.id !== plan.observed.latestMessageId) return { ok: false, reason: THREAD_NEW_MESSAGE };
     return { ok: true };
   },
 
@@ -260,5 +283,23 @@ export const mailCreateDraftReply: PlanKind<MailDraftPlan, DraftRef> = {
   },
 
   // The stored plan with the body replaced by its omitted marker (key order kept); a swept plan has no body.
-  explainPlan: (plan) => (plan.draft.body === undefined ? plan : { ...plan, draft: { ...plan.draft, body: bodyMarker(plan.draft) } }),
+  // Ruling R3: the subject and every address (from, to, cc, bcc, observed.onThread) wrapped as untrusted mailbox
+  // text, the body as its omitted marker (a swept plan has none). Spreads keep the stored key order.
+  explainPlan(plan) {
+    const d = plan.draft;
+    const wrap = (s: string) => untrusted(`mail:${d.threadId}`, s);
+    return {
+      ...plan,
+      draft: {
+        ...d,
+        from: wrap(d.from),
+        to: d.to.map(wrap),
+        cc: d.cc.map(wrap),
+        bcc: d.bcc.map(wrap),
+        subject: wrap(d.subject),
+        ...(d.body === undefined ? {} : { body: bodyMarker(d) }),
+      },
+      observed: { ...plan.observed, onThread: plan.observed.onThread.map(wrap) },
+    };
+  },
 };

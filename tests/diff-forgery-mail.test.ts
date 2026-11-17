@@ -92,6 +92,27 @@ function headLines(body: string): string[] {
   ];
 }
 
+/** The agent audience of headLines (ruling R3): the subject and every address value become their omitted marker. */
+function agentHeadLines(body: string): string[] {
+  const m = omittedMarker;
+  return [
+    HEAD,
+    "thread: th_budget",
+    "in reply to message: m2",
+    `from: ${m("me@example.com")}`,
+    `subject: ${m("Re: Q4 budget")}`,
+    "new recipients: 1 not on this thread",
+    "to: 2 recipient(s)",
+    `  ${m("ana@example.com")}`,
+    `  ${m("ben@example.com")}`,
+    "cc: 1 recipient(s)",
+    `  ${m("cara@example.com")}`,
+    "bcc: 1 recipient(s)",
+    `  ${m("dan@example.com")}  (new: not on this thread)`,
+    `body: ${body.split("\n").length} lines, ${body.length} chars, sha256:${sha8(body)}`,
+  ];
+}
+
 const withBody = (body: string, over: Record<string, unknown> = {}) => validDraftPlan({}, { ...bodyFields(body), ...over });
 /** The plan as the sweep leaves it: no `body`, `bodyRemoved: true`, the same bodyChars and bodySha256. */
 function swept(plan: ReturnType<typeof validDraftPlan>) {
@@ -168,10 +189,14 @@ describe("the draft diff (decision 3)", () => {
   });
 
   it("agent (the default): the body rows are one omitted row", () => {
-    const agent = [...headLines(DRAFT_BODY), `  ${omittedMarker(DRAFT_BODY)}`, "end of body"];
+    const agent = [...agentHeadLines(DRAFT_BODY), `  ${omittedMarker(DRAFT_BODY)}`, "end of body"];
     expect(renderDiff(validDraftPlan(), "UTC", "agent")).toEqual(agent);
     expect(renderDiff(validDraftPlan(), "UTC")).toEqual(agent);
     expect(agent.join("\n")).not.toContain("The numbers look right");
+    // Ruling R3: no subject or address in clear for the agent.
+    for (const s of ["Q4 budget", "me@example.com", "ana@example.com", "ben@example.com", "cara@example.com", "dan@example.com"]) {
+      expect(agent.join("\n")).not.toContain(s);
+    }
   });
 
   it("no new recipients prints `new recipients: none`; empty cc and bcc blocks are still printed", () => {
@@ -190,10 +215,8 @@ describe("the draft diff (decision 3)", () => {
 
   it("a swept plan prints the body-removed line for both audiences, and no end of body", () => {
     const line = `body removed after the action ended (${DRAFT_BODY.length} chars sha256:${sha8(DRAFT_BODY)})`;
-    for (const audience of ["approver", "agent"] as const) {
-      const d = renderDiff(swept(validDraftPlan()), "UTC", audience);
-      expect(d).toEqual([...headLines(DRAFT_BODY).slice(0, -1), line]);
-    }
+    expect(renderDiff(swept(validDraftPlan()), "UTC", "approver")).toEqual([...headLines(DRAFT_BODY).slice(0, -1), line]);
+    expect(renderDiff(swept(validDraftPlan()), "UTC", "agent")).toEqual([...agentHeadLines(DRAFT_BODY).slice(0, -1), line]);
   });
 
   it("body lines that read like fields are printed only after `  > `", () => {
@@ -465,7 +488,7 @@ describe("body integrity: an edited body is PLAN_MODIFIED in approve and apply (
     expect(drafts(hh)).toHaveLength(0);
   });
 
-  it("a mismatched bodyChars alone is also PLAN_MODIFIED", async () => {
+  it("an edited body (one character appended, bodyChars and bodySha256 kept) is PLAN_MODIFIED at approve", async () => {
     const hh = await harness();
     const id = plant(hh, validDraftPlan());
     const p = validDraftPlan();

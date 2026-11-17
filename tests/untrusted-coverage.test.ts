@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { setupHarness } from "./helpers/harness.js";
 import { msg, useMail } from "./helpers/mail-world.js";
+import { seedAction, validDraftPlan, validPlan } from "./helpers/seed.js";
 
 type H = Awaited<ReturnType<typeof setupHarness>>;
 let h: H;
@@ -79,7 +80,11 @@ describe("untrusted coverage", () => {
       },
     ]);
     const mail = h.ctx.mail as unknown as { drafts: unknown[] };
+    // A planned draft and a planned calendar action, so "every action's status unchanged" is not vacuous.
+    seedAction(h.ctx, "planned", validDraftPlan());
+    seedAction(h.ctx, "planned", validPlan());
     const before = h.db.all("SELECT id, status, plan_hash FROM actions ORDER BY id");
+    expect(before).toHaveLength(2);
     await h.client.callTool({ name: "inbox_read_thread", arguments: { thread_id: "t1" } });
     await h.client.callTool({ name: "inbox_search", arguments: { query: "approve" } });
     await h.logging.whenIdle();
