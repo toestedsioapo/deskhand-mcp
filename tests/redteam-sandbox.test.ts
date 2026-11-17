@@ -4,7 +4,11 @@ import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { afterEach, describe, expect, it } from "vitest";
+import { approveAction } from "../src/approval/approve.js";
+import type { CliIo } from "../src/cli/io.js";
+import { createAppContext } from "../src/composition.js";
 import { planHash } from "../src/ledger/canonical.js";
+import { last4 } from "../src/ledger/ids.js";
 import { LedgerDb } from "../src/ledger/db.js";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -17,7 +21,7 @@ interface Sandbox {
   serverArgs: string[];
   cliCommand: string[];
   writeLog: string;
-  actions: Record<"P1" | "P2" | "P3" | "P4" | "P5", string>;
+  actions: Record<"P1" | "P2" | "P3" | "P4" | "P5" | "D1" | "D2", string>;
 }
 
 const homes: string[] = [];
@@ -71,7 +75,7 @@ describe("redteam sandbox script", () => {
       expect(p5["status"]).toBe("planned");
       expect(planHash(JSON.parse(String(p5["plan_json"])))).not.toBe(p5["plan_hash"]);
       expect(planHash(JSON.parse(String(row(a.P1)["plan_json"])))).toBe(row(a.P1)["plan_hash"]);
-      expect(new Set(Object.values(a)).size).toBe(5);
+      expect(new Set(Object.values(a)).size).toBe(7);
       // P1 uses the M3a plan shape: an event zone and three attendees, so `deskhand pending`
       // shows the `event zone:` line and every address.
       const p1 = JSON.parse(String(row(a.P1)["plan_json"])) as { event: { timeZone?: string; attendees: string[] } };
@@ -95,10 +99,10 @@ describe("redteam sandbox script", () => {
     await client.connect(transport);
     try {
       const names = (await client.listTools()).tools.map((t) => t.name).sort();
-      expect(names).toEqual(["action_apply", "action_explain", "calendar_find_slots", "calendar_list_events", "calendar_propose_event", "inbox_draft_reply", "inbox_read_thread", "inbox_search", "ledger_query", "ping"]);
+      expect(names).toEqual(["action_apply", "action_explain", "calendar_find_slots", "calendar_list_events", "calendar_propose_event", "inbox_draft_reply", "inbox_read_thread", "inbox_search", "inbox_triage", "ledger_query", "ping"]);
       // P1 planned, P2 rejected, P4 failed, P5 planned (tampered): gate 4. P3 approved but expired: gate 7.
-      const expected = { P1: "NOT_APPROVED", P2: "NOT_APPROVED", P3: "PLAN_EXPIRED", P4: "NOT_APPROVED", P5: "NOT_APPROVED" };
-      for (const key of ["P1", "P2", "P3", "P4", "P5"] as const) {
+      const expected = { P1: "NOT_APPROVED", P2: "NOT_APPROVED", P3: "PLAN_EXPIRED", P4: "NOT_APPROVED", P5: "NOT_APPROVED", D1: "NOT_APPROVED", D2: "NOT_APPROVED" };
+      for (const key of ["P1", "P2", "P3", "P4", "P5", "D1", "D2"] as const) {
         const r = await client.callTool({ name: "action_apply", arguments: { action_id: sb.actions[key] } });
         expect(r.isError, key).toBe(true);
         const meta = r._meta as { deskhand?: { error_code?: string } } | undefined;
@@ -119,6 +123,40 @@ describe("redteam sandbox script", () => {
     } finally {
       db.close();
     }
+  });
+});
+
+describe("redteam sandbox draft plans", () => {
+  it("seeds D1 (new bcc, flagged in pending) and D2 (body edited, plan_hash kept: approve gives PLAN_MODIFIED)", async () => {
+    const { sb } = runSandbox();
+    const db = LedgerDb.open(`${sb.home}/ledger.db`);
+    try {
+      type Row = { status: string; plan_json: string; plan_hash: string };
+      const d1 = db.get<Row>("SELECT * FROM actions WHERE id = ?", [sb.actions.D1])!;
+      const d2 = db.get<Row>("SELECT * FROM actions WHERE id = ?", [sb.actions.D2])!;
+      expect(d1.status).toBe("planned");
+      expect(d2.status).toBe("planned");
+      const p1 = JSON.parse(d1.plan_json) as { kind: string; draft: { bcc: string[] } };
+      expect(p1.kind).toBe("mail.create_draft_reply");
+      expect(p1.draft.bcc).toHaveLength(1);
+      expect(planHash(JSON.parse(d2.plan_json))).toBe(d2.plan_hash); // the hash excludes the body text
+    } finally {
+      db.close();
+    }
+    const run = (args: string[]) =>
+      spawnSync(sb.cliCommand[0]!, [...sb.cliCommand.slice(1), ...args], { cwd: ROOT, encoding: "utf8", env: { ...process.env, ...sb.env } });
+    const pending = run(["pending"]);
+    expect(pending.stdout).toContain("new recipients: 1 not on this thread");
+    expect(pending.stdout).toContain("(new: not on this thread)");
+    const ctx = createAppContext(sb.env);
+    try {
+      const io: CliIo = { out: () => undefined, err: () => undefined, stdinIsTTY: true, stdoutIsTTY: true, readLine: async () => last4(sb.actions.D2) };
+      const r = await approveAction(ctx, sb.actions.D2, io);
+      expect(r).toMatchObject({ ok: false, errorCode: "PLAN_MODIFIED" });
+    } finally {
+      ctx.db.close();
+    }
+    expect(readFileSync(sb.writeLog, "utf8")).toBe("");
   });
 });
 

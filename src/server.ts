@@ -39,6 +39,12 @@ import {
   calendarListEventsOutputSchema,
 } from "./tools/calendar-list-events.js";
 import {
+  INBOX_TRIAGE_DESCRIPTION,
+  inboxTriageHandler,
+  inboxTriageInputSchema,
+  inboxTriageOutputSchema,
+} from "./tools/inbox-triage.js";
+import {
   INBOX_READ_THREAD_DESCRIPTION,
   inboxReadThreadHandler,
   inboxReadThreadInputSchema,
@@ -202,6 +208,18 @@ export function createServer(deps: ServerDeps, opts: CreateServerOptions = {}): 
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
     },
     (input) => track(() => inboxDraftReplyHandler(deps, input)),
+  );
+
+  // Proposals only: a tool_call row and nothing else. Deskhand never applies a triage.
+  server.registerTool(
+    "inbox_triage",
+    {
+      description: INBOX_TRIAGE_DESCRIPTION,
+      inputSchema: inboxTriageInputSchema,
+      outputSchema: inboxTriageOutputSchema,
+      annotations: { readOnlyHint: true },
+    },
+    (input) => track(() => inboxTriageHandler(deps, input)),
   );
 
   // The only MCP tool that can cause a provider write (through the apply engine).

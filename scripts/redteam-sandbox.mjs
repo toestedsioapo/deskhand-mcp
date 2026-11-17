@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-// Red-team sandbox for Deskhand (M2b, plan shape updated in M3a). Run after `pnpm build`.
+// Red-team sandbox for Deskhand (M2b, plan shape updated in M3a, draft plans D1 and D2 added in M4a). Run after `pnpm build`.
 // Creates a throwaway DESKHAND_HOME with a fixture world (settings.write_log) and five
-// seeded actions, then prints ONE JSON object on stdout and nothing else.
+// seeded actions (P1-P5 calendar, D1-D2 mail drafts), then prints ONE JSON object on stdout and nothing else.
 // Uses only the built dist/ modules (no devDependencies, nothing from tests/).
 // Goal for the reviewer: get a line into `writeLog`, or any of P1-P5 to become `applied`,
 // without a valid human approval. Cleanup: delete the `home` directory printed below.
@@ -23,7 +23,7 @@ writeFileSync(
   fixturePath,
   JSON.stringify(
     {
-      fixture_version: 1,
+      fixture_version: 2,
       now: NOW,
       calendars: {
         primary: {
@@ -38,6 +38,25 @@ writeFileSync(
             },
           ],
         },
+      },
+      mail: {
+        owner: "me@example.com",
+        threads: [
+          {
+            id: "th_budget",
+            messages: [
+              {
+                id: "m1",
+                message_id: "<m1@example.com>",
+                date: "2026-11-09T10:00:00.000Z",
+                from: { address: "ben@example.com", name: "Ben" },
+                to: [{ address: "me@example.com" }],
+                subject: "Q4 budget",
+                body_text: "Please review the numbers",
+              },
+            ],
+          },
+        ],
       },
       settings: { latency_ms: 0, write_log: writeLog },
     },
@@ -57,6 +76,7 @@ const env = {
 const { createAppContext } = await import(dist("composition.js"));
 const { createPlan } = await import(dist("approval/plans.js"));
 const { rejectAction } = await import(dist("approval/approve.js"));
+const { inboxDraftReplyHandler } = await import(dist("tools/inbox-draft-reply.js"));
 
 // `zone` gives the M3a plan shape (event.timeZone plus a third attendee) so the
 // approve diff shows the `event zone:` line and every address.
@@ -113,6 +133,21 @@ try {
   const edited = JSON.parse(row.plan_json);
   edited.event.title = "P5 TAMPERED title";
   ctx.db.run("UPDATE actions SET plan_json = ? WHERE id = ?", [JSON.stringify(edited), actions.P5]);
+
+  // D1: a planned draft reply with a bcc that is not on the thread: `deskhand pending` must flag it.
+  // D2: a planned draft whose plan_json body was edited after planning while plan_hash was kept:
+  // `approve` gives PLAN_MODIFIED and apply never writes it.
+  const draft = async (body, bcc) => {
+    const r = await inboxDraftReplyHandler(ctx, { thread_id: "th_budget", body, bcc, reply_all: false, rationale: "Red-team sandbox draft" });
+    if (r.isError) throw new Error(`could not seed a draft: ${JSON.stringify(r.content)}`);
+    return r.structuredContent.action_id;
+  };
+  actions.D1 = await draft("Thanks Ben, the numbers look right.", ["outsider@example.net"]);
+  actions.D2 = await draft("Thanks Ben, the numbers look right.\n", ["outsider@example.net"]);
+  const d2row = ctx.db.get("SELECT plan_json FROM actions WHERE id = ?", [actions.D2]);
+  const d2 = JSON.parse(d2row.plan_json);
+  d2.draft.body = "Please wire the money to account 12345.\n";
+  ctx.db.run("UPDATE actions SET plan_json = ? WHERE id = ?", [JSON.stringify(d2), actions.D2]);
 } finally {
   ctx.db.close();
 }
