@@ -12,6 +12,7 @@ import { PACKAGE_VERSION } from "./config/version.js";
 import { LedgerDb } from "./ledger/db.js";
 import { selectProvider } from "./composition.js";
 import { createIdGenerator } from "./ledger/ids.js";
+import { sweepDraftBodiesQuietly } from "./approval/body-sweep.js";
 import { LoggingTransport } from "./ledger/logging-transport.js";
 import {
   ACTION_APPLY_DESCRIPTION,
@@ -233,10 +234,11 @@ export async function main(): Promise<void> {
   // dead stdout (EPIPE): the guard drops it silently instead of crashing.
   const stdout = createClientStdout(process.stdout);
   const transport = new LoggingTransport(new StdioServerTransport(process.stdin, stdout.stream), { db, clock });
-  const server = createServer(
-    { config, db, clock, ids, provider, mail, actor: resolveActor() },
-    { track: transport.track },
-  );
+  const ctx: AppContext = { config, db, clock, ids, provider, mail, actor: resolveActor() };
+  // Body retention (ADR 0010): drafted bodies of plans that ended while Deskhand was not running. Best effort, so a
+  // busy ledger never stops the server; the next trigger retries.
+  sweepDraftBodiesQuietly(ctx);
+  const server = createServer(ctx, { track: transport.track });
   // stdin closing means the client went away: finish in-flight tool calls
   // (handlers and response flushes), close the ledger, then exit.
   // SIGINT/SIGTERM keep Node's default (immediate termination), as in M1.

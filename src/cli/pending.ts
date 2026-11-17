@@ -1,4 +1,5 @@
 import type { AppContext } from "../app-context.js";
+import { sweepDraftBodiesQuietly } from "../approval/body-sweep.js";
 import { listPending } from "../approval/plans.js";
 import { renderDiff } from "../approval/plan-kinds.js";
 import { appendEvent } from "../ledger/events.js";
@@ -7,6 +8,8 @@ import { oneLine, writeRows, type CliIo } from "./io.js";
 
 /** `deskhand pending`: planned actions, oldest first. Writes one `cli_command` row. */
 export function pendingCommand(ctx: AppContext, io: CliIo): number {
+  // Body retention (ADR 0010): expired plans are listed without their body. Best effort.
+  sweepDraftBodiesQuietly(ctx);
   const rows = listPending(ctx);
   const nowMs = ctx.clock().getTime();
   if (rows.length === 0) io.out("No pending actions.\n");

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { AppContext } from "../app-context.js";
 import { applyAction } from "../approval/apply.js";
+import { sweepDraftBodiesQuietly } from "../approval/body-sweep.js";
 import { toolError, toolOk, type ToolErrorResult, type ToolOkResult } from "./result.js";
 import { untrustedTextSchema } from "./untrusted.js";
 
@@ -50,7 +51,14 @@ export async function actionApplyHandler(
   ctx: AppContext,
   input: z.infer<typeof actionApplyInputSchema>,
 ): Promise<ToolOkResult<Output> | ToolErrorResult> {
-  const r = await applyAction(ctx, input.action_id);
+  let r: Awaited<ReturnType<typeof applyAction>>;
+  try {
+    r = await applyAction(ctx, input.action_id);
+  } finally {
+    // Body retention (ADR 0010): an applied or failed draft can no longer be written. Best effort, after the apply
+    // has committed (or thrown), so it never changes the apply result.
+    sweepDraftBodiesQuietly(ctx);
+  }
   if (!r.ok) return toolError(r.errorCode, r.message, { action_id: input.action_id });
   // The plan kind built `output` from result_json (untrusted text already wrapped); the output schema enforces its shape.
   const result = r.output as Output["result"];

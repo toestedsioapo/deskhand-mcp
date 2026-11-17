@@ -4,6 +4,7 @@ import { getAction } from "../ledger/actions.js";
 import { appendEvent } from "../ledger/events.js";
 import { last4 } from "../ledger/ids.js";
 import { redactInput } from "../ledger/redact.js";
+import { sweepDraftBodiesQuietly } from "./body-sweep.js";
 import { getPlanKind } from "./plan-kinds.js";
 
 const MAX_ID_ATTEMPTS = 50;
@@ -35,10 +36,13 @@ export function createPlan(
   ctx: AppContext,
   args: { tool: string; input: unknown } & PlanSource,
 ): { actionId: string; planHash: string; expiresAt: string; plan: unknown } {
-  // A ready plan is validated before the transaction (as before); a built one inside it, once the id is known.
-  const ready = args.buildPlan === undefined ? validate(args.plan) : undefined;
   // One clock read, so expires_at is exactly created_at + ttl.
   const now = ctx.clock();
+  // Body retention (ADR 0010): best effort, at the start, with the same clock read; it never decides whether this
+  // plan is stored.
+  sweepDraftBodiesQuietly(ctx, now);
+  // A ready plan is validated before the transaction (as before); a built one inside it, once the id is known.
+  const ready = args.buildPlan === undefined ? validate(args.plan) : undefined;
   const createdAt = now.toISOString();
   const expiresAt = new Date(now.getTime() + ctx.config.planTtlHours * 3_600_000).toISOString();
   const inputJson = JSON.stringify(redactInput(args.input) ?? null);
