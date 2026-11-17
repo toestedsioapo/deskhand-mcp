@@ -49,7 +49,7 @@ describe("loadFixtureWorld", () => {
   });
 
   it("rejects an unknown fixture_version naming the file", () => {
-    const p = write("v2.json", { ...valid, fixture_version: 2 });
+    const p = write("v3.json", { ...valid, fixture_version: 3 });
     expect(() => loadFixtureWorld(p)).toThrow(p);
   });
 
@@ -127,6 +127,48 @@ describe("loadFixtureWorld", () => {
     ])("rejects %s", (name, e) => {
       const p = write(`bad-${name.replace(/\W+/g, "-")}.json`, withEvent(e));
       expect(() => loadFixtureWorld(p)).toThrow(p);
+    });
+  });
+
+  describe("mail (fixture_version 2)", () => {
+    const msg = (id: string, over: Record<string, unknown> = {}) => ({
+      id,
+      date: "2026-11-09T14:00:00.000Z",
+      from: { address: "ana@example.com" },
+      to: [{ address: "me@example.com" }],
+      subject: "Hi",
+      body_text: "Hello",
+      ...over,
+    });
+    const mail = (threads: unknown[]) => ({ owner: "me@example.com", threads });
+    const v2 = (m: unknown) => ({ ...valid, fixture_version: 2, mail: m });
+
+    it("refuses a mail key in a version 1 file", () => {
+      const p = write("v1mail.json", { ...valid, mail: mail([]) });
+      expect(() => loadFixtureWorld(p)).toThrow(/v1mail\.json/);
+    });
+
+    it("loads a version 2 mailbox, with or without mail", () => {
+      const w = loadFixtureWorld(write("v2ok.json", v2(mail([{ id: "t1", messages: [msg("m1")] }]))));
+      expect(w.fixture_version).toBe(2);
+      expect(w.mail?.threads[0]?.messages[0]?.id).toBe("m1");
+      expect(loadFixtureWorld(write("v2nomail.json", { ...valid, fixture_version: 2 })).mail).toBeUndefined();
+    });
+
+    it("refuses a duplicate id, a thread id reused as a message id, and an empty thread", () => {
+      const dup = v2(mail([{ id: "t1", messages: [msg("m1")] }, { id: "t2", messages: [msg("m1")] }]));
+      expect(() => loadFixtureWorld(write("dup.json", dup))).toThrow(/dup\.json/);
+      const reuse = v2(mail([{ id: "t1", messages: [msg("t1")] }]));
+      expect(() => loadFixtureWorld(write("reuse.json", reuse))).toThrow(/reuse\.json/);
+      const empty = v2(mail([{ id: "t1", messages: [] }]));
+      expect(() => loadFixtureWorld(write("empty.json", empty))).toThrow(/empty\.json/);
+    });
+
+    it("refuses a non-ISO date and unknown keys", () => {
+      const bad = v2(mail([{ id: "t1", messages: [msg("m1", { date: "yesterday" })] }]));
+      expect(() => loadFixtureWorld(write("baddate.json", bad))).toThrow(/baddate\.json/);
+      const extra = v2(mail([{ id: "t1", messages: [msg("m1", { labels: [] })] }]));
+      expect(() => loadFixtureWorld(write("extramsg.json", extra))).toThrow(/extramsg\.json/);
     });
   });
 });

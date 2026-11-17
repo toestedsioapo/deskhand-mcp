@@ -54,17 +54,62 @@ const settingsSchema = z
   })
   .strict();
 
-export const fixtureWorldSchema = z
+const addrSchema = z.object({ address: z.string().min(1), name: z.string().optional() }).strict();
+
+const messageSchema = z
   .object({
-    fixture_version: z.literal(1),
-    now: instant,
-    calendars: z.record(z.string(), calendarSchema),
-    settings: settingsSchema.default({ latency_ms: 0 }),
+    id: z.string().min(1),
+    message_id: z.string().min(1).optional(),
+    date: instant,
+    from: addrSchema,
+    reply_to: z.array(addrSchema).optional(),
+    to: z.array(addrSchema),
+    cc: z.array(addrSchema).optional(),
+    subject: z.string(),
+    body_text: z.string(),
+    unread: z.boolean().optional(),
+    draft: z.boolean().optional(),
   })
   .strict();
 
+const threadSchema = z
+  .object({
+    id: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/, "thread id must match [A-Za-z0-9_-]{1,64}"),
+    messages: z.array(messageSchema).min(1, "a thread needs at least one message"),
+  })
+  .strict();
+
+const mailSchema = z
+  .object({ owner: z.string().includes("@"), threads: z.array(threadSchema) })
+  .strict()
+  .superRefine((m, ctx) => {
+    const seen = new Set<string>();
+    for (const t of m.threads) {
+      for (const id of [t.id, ...t.messages.map((x) => x.id)]) {
+        if (seen.has(id)) ctx.addIssue({ code: "custom", message: `duplicate mail id ${id}`, path: ["threads"] });
+        seen.add(id);
+      }
+    }
+  });
+
+export const fixtureWorldSchema = z
+  .object({
+    fixture_version: z.union([z.literal(1), z.literal(2)]),
+    now: instant,
+    calendars: z.record(z.string(), calendarSchema),
+    mail: mailSchema.optional(),
+    settings: settingsSchema.default({ latency_ms: 0 }),
+  })
+  .strict()
+  .refine((w) => w.fixture_version === 2 || w.mail === undefined, {
+    message: "mail needs fixture_version 2",
+    path: ["mail"],
+  });
+
 export type FixtureWorld = z.infer<typeof fixtureWorldSchema>;
 export type FixtureEvent = z.infer<typeof eventSchema>;
+export type FixtureMessage = z.infer<typeof messageSchema>;
+export type FixtureThread = z.infer<typeof threadSchema>;
 
 /**
  * Reads the world file once. Undefined path gives an empty world. Any problem
@@ -93,7 +138,7 @@ export function loadFixtureWorld(path: string | undefined): FixtureWorld {
     const issue = parsed.error.issues[0];
     const where = issue && issue.path.length > 0 ? ` at ${issue.path.join(".")}` : "";
     throw new ConfigError(
-      `DESKHAND_FIXTURE ${path} is not a valid fixture world (version 1)${where}: ${issue?.message ?? "invalid"}`,
+      `DESKHAND_FIXTURE ${path} is not a valid fixture world (version 1 or 2)${where}: ${issue?.message ?? "invalid"}`,
     );
   }
   const world = parsed.data;

@@ -25,7 +25,7 @@ export function selectProvider(config: Config): {
   if (config.provider === "fixture") {
     const world = loadFixtureWorld(config.fixturePath);
     const clock: Clock = config.fixturePath ? () => new Date(world.now) : () => new Date();
-    return { provider: createFixtureProvider(world), mail: createFixtureMailProvider(), clock };
+    return { provider: createFixtureProvider(world), mail: createFixtureMailProvider(world), clock };
   }
   if (config.provider === "google") {
     // No token is read here: a missing or expired sign-in surfaces as AUTH_REQUIRED on the first call.

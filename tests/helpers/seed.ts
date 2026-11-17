@@ -36,7 +36,7 @@ export function makeProviderDeps(): Pick<AppContext, "ids" | "provider" | "mail"
   return {
     ids: createIdGenerator(),
     provider: createFixtureProvider(makeWorld()),
-    mail: createFixtureMailProvider(),
+    mail: createFixtureMailProvider(makeWorld()),
     actor: "tester",
   };
 }
