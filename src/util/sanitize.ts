@@ -78,6 +78,40 @@ export function isPlainLine(s: string): boolean {
   return oneLine(s, Number.POSITIVE_INFINITY) === s;
 }
 
+/**
+ * True when `s` is one line of a draft body that the approve diff prints exactly as it is written (decision 4): empty,
+ * or no hidden character (the stripControl set, line breaks included), no tab, no more than four stacked combining
+ * marks, no character of more than 8 code points and no leading extender. Leading and repeated spaces are allowed
+ * (quoting, indentation); trailing whitespace is not, except on the exact signature separator line `-- `.
+ */
+export function isBodyLine(s: string): boolean {
+  if (s === "" || s === "-- ") return true;
+  if (/\s$/u.test(s) || s.includes("\t") || s.includes("\n")) return false;
+  if (MARK_STACK.test(s) || LEADING_EXTENDER.test(s)) return false;
+  for (const { segment } of graphemes.segment(s)) {
+    if ([...segment].length > MAX_GRAPHEME_CODE_POINTS) return false;
+  }
+  return stripControl(s) === s;
+}
+
+/** Longest draft body, in UTF-16 code units. */
+export const MAX_BODY_CHARS = 20_000;
+/** Most lines in a draft body. */
+export const MAX_BODY_LINES = 500;
+
+/**
+ * A draft body as it is stored, hashed and shown: CR LF becomes LF. null when the result is empty, still holds a CR,
+ * is over MAX_BODY_CHARS characters or MAX_BODY_LINES lines, or has a line that fails isBodyLine. A trailing newline
+ * is one empty last line.
+ */
+export function normaliseBody(s: string): string | null {
+  const body = s.replace(/\r\n/g, "\n");
+  if (body.length === 0 || body.length > MAX_BODY_CHARS || body.includes("\r")) return null;
+  const lines = body.split("\n");
+  if (lines.length > MAX_BODY_LINES) return null;
+  return lines.every(isBodyLine) ? body : null;
+}
+
 // ---------------------------------------------------------------- terminal rows
 
 /** Marks a row that continues the line above; no real diff or header line starts with it. */

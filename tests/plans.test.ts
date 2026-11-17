@@ -1,10 +1,11 @@
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { AppContext } from "../src/app-context.js";
 import { createPlan, listPending } from "../src/approval/plans.js";
 import { calendarCreateEvent, getPlanKind, renderDiff } from "../src/approval/plan-kinds.js";
 import { loadConfig } from "../src/config/env.js";
-import { planHash } from "../src/ledger/canonical.js";
+import { canonicalJson, hashablePlan, planHash } from "../src/ledger/canonical.js";
 import { LedgerDb } from "../src/ledger/db.js";
 import { getAction } from "../src/ledger/actions.js";
 import { queryEvents } from "../src/ledger/events.js";
@@ -12,7 +13,7 @@ import { last4 } from "../src/ledger/ids.js";
 import type { FixtureProvider } from "../src/providers/fixture/provider.js";
 import { createFixtureMailProvider, createFixtureProvider } from "../src/providers/fixture/index.js";
 import { makeTempHome } from "./helpers/home.js";
-import { makeWorld, validPlan } from "./helpers/seed.js";
+import { DRAFT_BODY, makeWorld, validDraftPlan, validPlan } from "./helpers/seed.js";
 
 const NOW = "2026-11-10T09:00:00.000Z";
 
@@ -332,5 +333,42 @@ describe("calendar.create_event kind", () => {
     expect(k.matches(withOwner, "key1", { ...ref, ownerEmail: "me@example.com" })).toBe(true);
     expect(k.matches(withOwner, "key1", ref)).toBe(false);
     expect(k.matches(withOwner, "key1", { ...ref, ownerEmail: "other@example.com" })).toBe(false);
+  });
+});
+
+describe("hashablePlan (decision 2)", () => {
+  it("a calendar plan is returned unchanged and its hash is the hash of its canonical JSON, as before", () => {
+    const p = validPlan();
+    expect(hashablePlan(p)).toBe(p);
+    expect(planHash(p)).toBe(createHash("sha256").update(canonicalJson(p), "utf8").digest("hex"));
+    expect(planHash(validPlan())).toBe("14780c62ad4355dc81a4a2c9c421e26dafd920e7224d53b83af66ca39a6fda1e");
+    expect(planHash(validPlan({}, { timeZone: "Europe/Berlin" }))).toBe(
+      "3b02acb450a4f58a3cafe3e7fd7f82ddab927c6385ad182433158ce8d44a75ea",
+    );
+  });
+  it("a draft plan loses draft.body and draft.bodyRemoved, nothing else", () => {
+    const p = validDraftPlan();
+    const { body: _body, ...rest } = p.draft;
+    expect(hashablePlan(p)).toEqual({ ...p, draft: rest });
+    expect(hashablePlan({ ...p, draft: { ...rest, bodyRemoved: true } })).toEqual({ ...p, draft: rest });
+    expect(p.draft.body).toBe(DRAFT_BODY); // the input is not mutated
+  });
+  it("the hash of a draft plan with its body equals the hash with bodyRemoved and no body", () => {
+    const p = validDraftPlan();
+    const { body: _body, ...rest } = p.draft;
+    expect(planHash({ ...p, draft: { ...rest, bodyRemoved: true } })).toBe(planHash(p));
+  });
+  it("anything else is returned unchanged", () => {
+    for (const v of [null, "x", 1, [], { kind: "mail.create_draft_reply" }, { kind: "mail.create_draft_reply", draft: "x" }, { kind: "other", draft: { body: "b" } }]) {
+      expect(hashablePlan(v)).toBe(v);
+    }
+  });
+  it("createPlan stores the body in plan_json and hashes without it", () => {
+    const c = ctxWith();
+    const r = createPlan(c, { tool: "inbox_draft_reply", input: {}, plan: validDraftPlan() });
+    const a = getAction(db, r.actionId)!;
+    expect((a.plan_json as unknown as { draft: { body: string } }).draft.body).toBe(DRAFT_BODY);
+    expect(r.planHash).toBe(planHash(validDraftPlan()));
+    expect(r.planHash).toBe(createHash("sha256").update(canonicalJson(hashablePlan(validDraftPlan())), "utf8").digest("hex"));
   });
 });

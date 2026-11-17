@@ -68,7 +68,7 @@ export function actionExplainHandler(
     },
     plan: explainStoredPlan(plan),
     rationale,
-    diff: renderDiff(plan, viewerTimeZone),
+    diff: renderDiff(plan, viewerTimeZone, "agent"),
     events,
   };
   return toolOk(output, { action_id: a.id });

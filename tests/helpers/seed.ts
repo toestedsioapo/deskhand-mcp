@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { AppContext } from "../../src/app-context.js";
 import { createPlan } from "../../src/approval/plans.js";
 import type { ActionStatus } from "../../src/ledger/contract.js";
@@ -103,4 +104,42 @@ export function seedAction(ctx: AppContext, state: SeedState, plan: unknown = va
       break;
   }
   return actionId;
+}
+
+const sha256Hex = (s: string): string => createHash("sha256").update(s, "utf8").digest("hex");
+
+/** `body`, `bodyChars` and `bodySha256` for a draft body (what the tool stores). */
+export function bodyFields(body: string): { body: string; bodyChars: number; bodySha256: string } {
+  return { body, bodyChars: body.length, bodySha256: sha256Hex(body) };
+}
+
+export const DRAFT_BODY = "Thanks Ana,\n\nThe numbers look right to me.\n\n-- \nMe";
+
+/**
+ * A valid mail.create_draft_reply plan for the thread `th_budget` of draftThreads(): 2 to, 1 cc and 1 bcc that is
+ * not on the thread. `draftOver` replaces draft fields (pass `bodyFields(...)` to change the body consistently).
+ */
+export function validDraftPlan(over: Record<string, unknown> = {}, draftOver: Record<string, unknown> = {}) {
+  return {
+    kind: "mail.create_draft_reply",
+    rationale: "Reply to Ana about the budget",
+    draft: {
+      threadId: "th_budget",
+      messageIdHeader: `<deskhand.${"0".repeat(64)}@deskhand.invalid>`,
+      inReplyTo: "<m2@example.com>",
+      references: ["<m1@example.com>", "<m2@example.com>"],
+      from: "me@example.com",
+      to: ["ana@example.com", "ben@example.com"],
+      cc: ["cara@example.com"],
+      bcc: ["dan@example.com"],
+      subject: "Re: Q4 budget",
+      ...bodyFields(DRAFT_BODY),
+      ...draftOver,
+    },
+    observed: {
+      latestMessageId: "m2",
+      onThread: ["ana@example.com", "ben@example.com", "cara@example.com", "me@example.com"],
+    },
+    ...over,
+  };
 }

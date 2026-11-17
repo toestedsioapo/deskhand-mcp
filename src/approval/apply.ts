@@ -5,15 +5,15 @@ import type { ActionStatus, ErrorCode, EventOutcome } from "../ledger/contract.j
 import { appendEvent } from "../ledger/events.js";
 import { isoNow } from "../ledger/ids.js";
 import { redactInput, scrubSecrets } from "../ledger/redact.js";
-import { AuthRequiredError, EVENT_DELETED, ProviderError } from "../providers/errors.js";
+import { AuthRequiredError, ProviderError } from "../providers/errors.js";
 import type { Providers } from "../providers/types.js";
-import { EVENT_DIFFERS, getPlanKind, type AnyPlanKind, type ApplyOutputResult, type Lookup } from "./plan-kinds.js";
+import { getPlanKind, type AnyPlanKind, type ApplyOutputResult, type Lookup } from "./plan-kinds.js";
 
 /**
  * The apply engine: the ONLY place a plan kind's write is executed (a
  * structural test enforces it). Gate order is fixed by docs/ledger-contract.md
- * ("Apply gate order"): writes flag, provider configured, exists, applied-replay, approved, hash,
- * recovery, expiry, re-check, write.
+ * ("Apply gate order"): writes flag, provider configured, exists, applied-replay, approved, hash (and the kind's
+ * integrity hook), recovery, expiry, the kind's writable hook (7a), re-check, write.
  */
 
 /** `output` is the plan kind's `action_apply` result, built from `result_json` (the first apply and a replay alike). */
@@ -86,6 +86,12 @@ function refuseProvider(ctx: AppContext, actionId: string, e: unknown, what: str
   return refuse(ctx, actionId, true, "PROVIDER_ERROR", `${what}: ${errText(e)}`);
 }
 
+/** The registered kind a raw stored plan names, if any. */
+function kindOf(plan: unknown): AnyPlanKind | undefined {
+  const name = typeof plan === "object" && plan !== null ? (plan as { kind?: unknown }).kind : undefined;
+  return typeof name === "string" ? getPlanKind(name) : undefined;
+}
+
 /** The stored plan with its kind, or undefined when plan_json does not parse, names no known kind or is invalid. */
 function parseStored(planJson: string): { kind: AnyPlanKind; plan: unknown } | undefined {
   let plan: unknown;
@@ -94,8 +100,7 @@ function parseStored(planJson: string): { kind: AnyPlanKind; plan: unknown } | u
   } catch {
     return undefined;
   }
-  const name = typeof plan === "object" && plan !== null ? (plan as { kind?: unknown }).kind : undefined;
-  const kind = typeof name === "string" ? getPlanKind(name) : undefined;
+  const kind = kindOf(plan);
   const parsed = kind?.schema.safeParse(plan);
   return kind && parsed?.success ? { kind, plan: parsed.data } : undefined;
 }
@@ -249,6 +254,11 @@ export async function applyAction(ctx: AppContext, actionId: string): Promise<Ap
   ) {
     return fail(ctx, actionId, "PLAN_MODIFIED", "The plan changed after approval; re-plan and approve again.");
   }
+  // 5, the kind's integrity hook: an edit the hash does not cover (a drafted body that no longer matches its stored
+  // length and hash) is PLAN_MODIFIED too, checked before the schema so it is never the schema's INTERNAL.
+  if (kindOf(plan)?.tampered?.(plan)) {
+    return fail(ctx, actionId, "PLAN_MODIFIED", "The plan changed after approval; re-plan and approve again.");
+  }
   const stored = parseStored(row.plan_json);
   if (!stored) {
     // Unreachable through createPlan (it validates); refuse without touching status.
@@ -274,14 +284,14 @@ export async function applyAction(ctx: AppContext, actionId: string): Promise<Ap
    * the canonical text of the kind's `store` form, and the result is rebuilt from that same text.
    */
   const accept = (r: unknown, opts: { replayed: boolean; note: string | null; beforeCommit?: () => void }): ApplyResult => {
-    if (!kind.matches(validPlan, key, r)) return fail(ctx, actionId, "STALE_PLAN", EVENT_DIFFERS);
+    if (!kind.matches(validPlan, key, r)) return fail(ctx, actionId, "STALE_PLAN", kind.phrases.differs);
     const resultJson = canonicalJson(kind.store(r));
     return finalize(ctx, actionId, resultJson, { ...opts, output: () => outputFrom(kind, validPlan, resultJson) });
   };
   /** A lookup that found something decides the apply; `undefined` means nothing is there. */
   const settle = (found: Lookup<unknown>): ApplyResult | undefined => {
     if (found.state === "absent") return undefined;
-    if (found.state === "cancelled") return fail(ctx, actionId, "STALE_PLAN", EVENT_DELETED);
+    if (found.state === "cancelled") return fail(ctx, actionId, "STALE_PLAN", kind.phrases.deleted);
     return accept(found.value, { replayed: true, note: "recovered" });
   };
 
@@ -294,6 +304,11 @@ export async function applyAction(ctx: AppContext, actionId: string): Promise<Ap
   // 7. Expiry. Fails closed: an unparseable expires_at counts as expired.
   if (!(ctx.clock().getTime() < Date.parse(row.expires_at))) {
     return refuse(ctx, actionId, true, "PLAN_EXPIRED", `Action ${actionId} expired at ${row.expires_at}.`);
+  }
+  // 7a. A plan that can no longer be written (a draft whose body was swept) fails here, after recovery and expiry,
+  // so the provider is never asked to write it.
+  if (kind.writable && !kind.writable(validPlan)) {
+    return fail(ctx, actionId, "PLAN_MODIFIED", "The plan's content was removed after the action ended; it can no longer be written.");
   }
   // 8. Re-check against the real world. A read error is retryable (status unchanged).
   let check: Awaited<ReturnType<typeof kind.recheck>>;

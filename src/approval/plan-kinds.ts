@@ -3,6 +3,9 @@ import type { EventLookup, EventRef, Providers } from "../providers/types.js";
 import { untrusted } from "../util/untrusted.js";
 import { canonicalTimeZone, formatLocalRange, isIanaTimeZone } from "../util/local-time.js";
 import { isPlainLine, VISIBLE_ASCII } from "../util/sanitize.js";
+import { omittedMarker } from "../ledger/redact.js";
+import { EVENT_DELETED } from "../providers/errors.js";
+import { mailCreateDraftReply } from "./mail-draft-kind.js";
 
 export type RecheckResult = { ok: true } | { ok: false; reason: string };
 
@@ -27,6 +30,11 @@ export interface PlanKind<P, R> {
   kind: string;
   schema: z.ZodType<P>;
   /**
+   * Fixed phrases (no content) for a write under the action's id that is not the approved one (`differs`) and for
+   * one that was created and later deleted (`deleted`). They become the STALE_PLAN message.
+   */
+  phrases: { differs: string; deleted: string };
+  /**
    * Deterministic for a given plan, viewer zone and audience; built only from validated plan fields, printed
    * verbatim. The schema is what makes that safe: every field shown is single lines of visible text with no hidden
    * character, so what the approver reads is exactly what is stored and written. `viewerTimeZone` is the reader's
@@ -49,6 +57,20 @@ export interface PlanKind<P, R> {
   output(plan: P, stored: unknown): ApplyOutputResult;
   /** What `action_explain` returns as `plan`. */
   explainPlan(plan: P): unknown;
+  /**
+   * Optional integrity check on the RAW stored plan, run by approve and apply right after the hash check and before
+   * the schema parse: true when the plan was edited in a way the hash does not cover (a drafted body that no longer
+   * matches its stored length and hash). Approve refuses PLAN_MODIFIED (status unchanged); apply fails PLAN_MODIFIED.
+   */
+  tampered?(raw: unknown): boolean;
+  /**
+   * Optional: false when a valid plan can no longer be written (a draft whose body was swept). Approve refuses
+   * PLAN_MODIFIED after its expiry check; apply fails PLAN_MODIFIED after recovery and expiry (gate 7a), before the
+   * re-check, so the provider is never asked to write.
+   */
+  writable?(plan: P): boolean;
+  /** Optional lines `deskhand approve` prints between the diff and the prompt (approver only, display only). */
+  approveSummary?(plan: P): string[];
 }
 
 /** Fixed phrase (no event content): an event is under the action's id but it is not the approved one. */
@@ -133,6 +155,7 @@ function toLookup(l: EventLookup): Lookup<EventRef> {
 export const calendarCreateEvent: PlanKind<CalendarCreateEventPlan, EventRef> = {
   kind: "calendar.create_event",
   schema: calendarCreateEventPlanSchema,
+  phrases: { differs: EVENT_DIFFERS, deleted: EVENT_DELETED },
 
   // Nothing in a calendar plan is withheld from the agent: both audiences see the same lines.
   renderDiff(plan, viewerTimeZone) {
@@ -203,22 +226,38 @@ export const calendarCreateEvent: PlanKind<CalendarCreateEventPlan, EventRef> = 
 /** A plan kind with its plan and result types erased, as the registry holds it. */
 export type AnyPlanKind = PlanKind<unknown, unknown>;
 
-const KINDS = new Map<string, AnyPlanKind>([[calendarCreateEvent.kind, calendarCreateEvent as unknown as AnyPlanKind]]);
+const KINDS = new Map<string, AnyPlanKind>([
+  [calendarCreateEvent.kind, calendarCreateEvent as unknown as AnyPlanKind],
+  [mailCreateDraftReply.kind, mailCreateDraftReply as unknown as AnyPlanKind],
+]);
 
 export function getPlanKind(kind: string): AnyPlanKind | undefined {
   return KINDS.get(kind);
 }
 
 /**
+ * An unknown or invalid plan as action_explain returns it: as stored, except that a string `draft.body` (an edited
+ * or otherwise invalid draft plan, whatever its kind says) is replaced by its omitted marker, so a body never
+ * reaches the agent (ADR 0010).
+ */
+function withoutDraftBody(plan: object): unknown {
+  const draft = (plan as { draft?: unknown }).draft;
+  if (typeof draft !== "object" || draft === null || Array.isArray(draft)) return plan;
+  const body = (draft as { body?: unknown }).body;
+  if (typeof body !== "string") return plan;
+  return { ...plan, draft: { ...draft, body: omittedMarker(body) } };
+}
+
+/**
  * What `action_explain` returns as `plan`: the kind's `explainPlan` of a valid stored plan. It is given the stored
  * object itself (which the schema accepted), so the output keeps the stored key order. An unknown or invalid plan is
- * returned as stored.
+ * returned as stored, with any `draft.body` omitted.
  */
 export function explainStoredPlan(planJson: unknown): unknown {
   if (typeof planJson !== "object" || planJson === null) return planJson;
   const k = (planJson as { kind?: unknown }).kind;
   const pk = typeof k === "string" ? getPlanKind(k) : undefined;
-  if (!pk || !pk.schema.safeParse(planJson).success) return planJson;
+  if (!pk || !pk.schema.safeParse(planJson).success) return withoutDraftBody(planJson);
   return pk.explainPlan(planJson);
 }
 
