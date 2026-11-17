@@ -9,6 +9,7 @@ import { getAction } from "../src/ledger/actions.js";
 import { queryEvents } from "../src/ledger/events.js";
 import { LedgerDb } from "../src/ledger/db.js";
 import { createGoogleCalendarProvider } from "../src/providers/google/calendar.js";
+import { createGoogleMailProvider } from "../src/providers/google/mail.js";
 import { GOOGLE_ENDPOINTS } from "../src/providers/google/oauth.js";
 import { writeToken } from "../src/providers/google/token-store.js";
 import { makeTempHome } from "./helpers/home.js";
@@ -77,6 +78,7 @@ function setup(
     clock: () => NOW,
     ids: { newActionId: () => ACTION_ID },
     provider,
+    mail: createGoogleMailProvider(),
     actor: "tester",
   };
   const plan = validPlan(
@@ -98,6 +100,8 @@ const rowsOf = (id: string) => queryEvents(db, { limit: 100, actionId: id }).rev
 const dump = (): string => JSON.stringify([db.all("SELECT * FROM actions"), db.all("SELECT * FROM events")]);
 const inserts = () => replay!.seen.filter((r) => r.method === "POST" && r.url.includes("/events"));
 
+const wrapped = (content: string) => ({ untrusted: true, source: "calendar:primary", content });
+
 describe("apply with the Google provider", () => {
   it("uses the sha256 of the action id as the event id", () => {
     expect(idempotencyKey(ACTION_ID)).toBe(KEY);
@@ -106,7 +110,7 @@ describe("apply with the Google provider", () => {
   it("a normal apply: lookup 404, free/busy empty, insert 200 -> applied", async () => {
     const { ctx, id } = setup(["events-get-key-404", "freebusy-empty", "events-insert-200"]);
     const r = await applyAction(ctx, id);
-    expect(r).toMatchObject({ ok: true, replayed: false, result: { id: KEY } });
+    expect(r).toMatchObject({ ok: true, replayed: false, output: { id: KEY } });
     expect(getAction(db, id)!.status).toBe("applied");
     expect(replay!.seen.map((q) => q.method)).toEqual(["GET", "POST", "POST"]);
     expect(inserts()).toHaveLength(1);
@@ -115,7 +119,7 @@ describe("apply with the Google provider", () => {
   it("a retry after a crash: the lookup finds the event -> applied, replayed, no insert", async () => {
     const { ctx, id } = setup(["events-get-key-200"]);
     const r = await applyAction(ctx, id);
-    expect(r).toMatchObject({ ok: true, replayed: true, result: { id: KEY } });
+    expect(r).toMatchObject({ ok: true, replayed: true, output: { id: KEY } });
     expect(getAction(db, id)!.status).toBe("applied");
     expect(inserts()).toHaveLength(0);
   });
@@ -123,7 +127,7 @@ describe("apply with the Google provider", () => {
   it("insert 409 then the event is found -> applied with no second insert", async () => {
     const { ctx, id } = setup(["events-get-key-404", "freebusy-empty", "events-insert-409", "events-get-key-200"]);
     const r = await applyAction(ctx, id);
-    expect(r).toMatchObject({ ok: true, result: { id: KEY } });
+    expect(r).toMatchObject({ ok: true, output: { id: KEY } });
     expect(getAction(db, id)!.status).toBe("applied");
     expect(inserts()).toHaveLength(1);
   });
@@ -151,7 +155,7 @@ describe("apply with the Google provider", () => {
     expect(await applyAction(ctx, id)).toMatchObject({ ok: false, errorCode: "PROVIDER_ERROR" });
     expect(getAction(db, id)!.status).toBe("approved");
     const r = await applyAction(ctx, id);
-    expect(r).toMatchObject({ ok: true, replayed: true, result: { id: KEY } });
+    expect(r).toMatchObject({ ok: true, replayed: true, output: { id: KEY } });
     expect(getAction(db, id)!.status).toBe("applied");
     expect((rowsOf(id).at(-1)!.preview as { note: unknown }).note).toBe("recovered");
     expect(inserts()).toHaveLength(1);
@@ -170,7 +174,7 @@ describe("apply with the Google provider", () => {
     ]);
     expect(await applyAction(ctx, id)).toMatchObject({ ok: false, errorCode: "PROVIDER_ERROR" });
     expect(getAction(db, id)!.status).toBe("approved");
-    expect(await applyAction(ctx, id)).toMatchObject({ ok: true, result: { id: KEY } });
+    expect(await applyAction(ctx, id)).toMatchObject({ ok: true, output: { id: KEY } });
     expect(getAction(db, id)!.status).toBe("applied");
     expect(inserts()).toHaveLength(2);
   });
@@ -186,7 +190,7 @@ describe("apply with the Google provider", () => {
     expect(r).toMatchObject({ ok: false, errorCode: "PROVIDER_ERROR" });
     expect(r.ok ? "" : r.message).toContain("timed out");
     expect(getAction(db, id)!.status).toBe("approved");
-    expect(await applyAction(ctx, id)).toMatchObject({ ok: true, replayed: true, result: { id: KEY } });
+    expect(await applyAction(ctx, id)).toMatchObject({ ok: true, replayed: true, output: { id: KEY } });
     expect(getAction(db, id)!.status).toBe("applied");
     expect(attempts).toBe(1);
   });
@@ -280,19 +284,19 @@ describe("apply with the Google provider", () => {
   it("a fresh insert whose response adds the calendar owner (self: true) to attendees -> applied, not 'differs'", async () => {
     const { ctx, id } = setup(["events-get-key-404", "freebusy-empty", "events-insert-200-with-owner"]);
     const r = await applyAction(ctx, id);
-    expect(r).toMatchObject({ ok: true, replayed: false, result: { id: KEY, attendees: ["a@example.com", "b@example.com"] } });
+    expect(r).toMatchObject({ ok: true, replayed: false, output: { id: KEY, attendees: [wrapped("a@example.com"), wrapped("b@example.com")] } });
     expect(getAction(db, id)!.status).toBe("applied");
   });
 
   it("insert 409 then a GET that adds the calendar owner to attendees -> applied", async () => {
     const { ctx, id } = setup(["events-get-key-404", "freebusy-empty", "events-insert-409", "events-get-key-200-with-owner"]);
-    expect(await applyAction(ctx, id)).toMatchObject({ ok: true, result: { id: KEY } });
+    expect(await applyAction(ctx, id)).toMatchObject({ ok: true, output: { id: KEY } });
     expect(getAction(db, id)!.status).toBe("applied");
   });
 
   it("the recovery lookup finds our event with the owner added -> recovered", async () => {
     const { ctx, id } = setup(["events-get-key-200-with-owner"]);
-    expect(await applyAction(ctx, id)).toMatchObject({ ok: true, replayed: true, result: { id: KEY } });
+    expect(await applyAction(ctx, id)).toMatchObject({ ok: true, replayed: true, output: { id: KEY } });
   });
 
   it("a found event with an extra attendee who is not the owner still differs", async () => {
@@ -307,7 +311,7 @@ describe("apply with the Google provider", () => {
       undefined,
       ["Owner@Example.com", "a@example.com"],
     );
-    expect(await applyAction(ctx, id)).toMatchObject({ ok: true, replayed: false, result: { id: KEY } });
+    expect(await applyAction(ctx, id)).toMatchObject({ ok: true, replayed: false, output: { id: KEY } });
     expect(getAction(db, id)!.status).toBe("applied");
   });
 
@@ -432,7 +436,7 @@ describe("apply with the Google provider", () => {
 
   it("an equivalent event (same instants in another offset, attendees in another case and order) is recovered", async () => {
     const { ctx, id } = setup(["events-get-key-200-equivalent"]);
-    expect(await applyAction(ctx, id)).toMatchObject({ ok: true, replayed: true, result: { id: KEY } });
+    expect(await applyAction(ctx, id)).toMatchObject({ ok: true, replayed: true, output: { id: KEY } });
     expect(getAction(db, id)!.status).toBe("applied");
   });
 

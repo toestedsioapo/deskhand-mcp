@@ -2,7 +2,7 @@ import type { AppContext } from "../../src/app-context.js";
 import { createPlan } from "../../src/approval/plans.js";
 import type { ActionStatus } from "../../src/ledger/contract.js";
 import { createIdGenerator, isoNow } from "../../src/ledger/ids.js";
-import { createFixtureProvider } from "../../src/providers/fixture/provider.js";
+import { createFixtureMailProvider, createFixtureProvider } from "../../src/providers/fixture/index.js";
 import type { FixtureWorld } from "../../src/providers/fixture/world.js";
 
 export const SEED_NOW = "2026-11-10T09:00:00.000Z";
@@ -32,10 +32,11 @@ export function makeWorld(overrides: Partial<FixtureWorld> = {}): FixtureWorld {
 }
 
 /** The non-ledger parts of an AppContext for tests that only need the old ServerDeps. */
-export function makeProviderDeps(): Pick<AppContext, "ids" | "provider" | "actor"> {
+export function makeProviderDeps(): Pick<AppContext, "ids" | "provider" | "mail" | "actor"> {
   return {
     ids: createIdGenerator(),
     provider: createFixtureProvider(makeWorld()),
+    mail: createFixtureMailProvider(),
     actor: "tester",
   };
 }

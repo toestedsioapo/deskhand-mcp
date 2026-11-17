@@ -1,30 +1,54 @@
 import { z } from "zod";
-import type { CalendarProvider, EventLookup, EventRef } from "../providers/types.js";
+import type { EventLookup, EventRef, Providers } from "../providers/types.js";
+import { untrusted } from "../util/untrusted.js";
 import { canonicalTimeZone, formatLocalRange, isIanaTimeZone } from "../util/local-time.js";
 import { isPlainLine, VISIBLE_ASCII } from "../util/sanitize.js";
 
 export type RecheckResult = { ok: true } | { ok: false; reason: string };
 
-export interface PlanKind<P> {
+/** The `result` of an `action_apply` success. Its shape is enforced by action_apply's output schema. */
+export type ApplyOutputResult = Record<string, unknown>;
+
+/** What a provider holds under an action's idempotency key: nothing, a deleted write, or a value. */
+export type Lookup<R> = { state: "absent" } | { state: "cancelled" } | { state: "present"; value: R };
+
+/**
+ * Who reads a diff. `approver`: the human at `deskhand pending` / `deskhand approve`, who sees everything that will
+ * be written. `agent`: anything that goes back over MCP or into the ledger, where a kind may omit text (a drafted
+ * body). The default is `agent`, so a forgotten call site omits rather than leaks.
+ */
+export type DiffAudience = "approver" | "agent";
+
+/**
+ * A plan kind: everything the plan store, approval and the apply engine need to know about one kind of write.
+ * `P` is the validated plan, `R` what the provider returns for the write (an event, a draft).
+ */
+export interface PlanKind<P, R> {
   kind: string;
   schema: z.ZodType<P>;
   /**
-   * Deterministic for a given plan and viewer zone; built only from validated plan fields, printed verbatim. The
-   * schema is what makes that safe: the title, the calendar id and every attendee are single lines of visible
-   * text with no hidden character, so what the approver reads is exactly what is stored and written.
-   * `viewerTimeZone` is the reader's zone, never the plan's.
+   * Deterministic for a given plan, viewer zone and audience; built only from validated plan fields, printed
+   * verbatim. The schema is what makes that safe: every field shown is single lines of visible text with no hidden
+   * character, so what the approver reads is exactly what is stored and written. `viewerTimeZone` is the reader's
+   * zone, never the plan's.
    */
-  renderDiff(plan: P, viewerTimeZone: string): string[];
-  recheck(plan: P, provider: CalendarProvider): Promise<RecheckResult>;
+  renderDiff(plan: P, viewerTimeZone: string, audience: DiffAudience): string[];
+  recheck(plan: P, p: Providers): Promise<RecheckResult>;
   /** What the provider holds under the idempotency key: absent, cancelled (deleted) or present. */
-  lookupExisting(plan: P, idempotencyKey: string, provider: CalendarProvider): Promise<EventLookup>;
+  lookupExisting(plan: P, key: string, p: Providers): Promise<Lookup<R>>;
   /**
-   * True only when `event` is the approved plan's own write: our id and every approved field. The apply engine calls
-   * it for every event it would accept (recovery, the re-lookups, and the event `execute` returns, which may be an
-   * existing one), so a foreign or edited event under our id is never recorded as applied.
+   * True only when `r` is the approved plan's own write: our id and every approved field. The apply engine calls
+   * it for every value it would accept (recovery, the re-lookups, and the value `execute` returns, which may be an
+   * existing one), so a foreign or edited write under our id is never recorded as applied.
    */
-  matches(plan: P, idempotencyKey: string, event: EventRef): boolean;
-  execute(plan: P, idempotencyKey: string, provider: CalendarProvider): Promise<EventRef>;
+  matches(plan: P, key: string, r: R): boolean;
+  execute(plan: P, key: string, p: Providers): Promise<R>;
+  /** What is stored as `result_json` (canonical JSON of it). Never holds text the ledger must not keep. */
+  store(r: R): unknown;
+  /** The `action_apply` `result`, built from the parsed `result_json`: the first apply and a replay alike. */
+  output(plan: P, stored: unknown): ApplyOutputResult;
+  /** What `action_explain` returns as `plan`. */
+  explainPlan(plan: P): unknown;
 }
 
 /** Fixed phrase (no event content): an event is under the action's id but it is not the approved one. */
@@ -101,10 +125,16 @@ function notificationLine(sendUpdates: "none" | "all" | "externalOnly", n: numbe
   return `will email the attendees outside your organisation, up to ${n} (sendUpdates=externalOnly)`;
 }
 
-export const calendarCreateEvent: PlanKind<CalendarCreateEventPlan> = {
+/** An `EventLookup` in the generic shape the apply engine reads. */
+function toLookup(l: EventLookup): Lookup<EventRef> {
+  return l.state === "present" ? { state: "present", value: l.event } : l;
+}
+
+export const calendarCreateEvent: PlanKind<CalendarCreateEventPlan, EventRef> = {
   kind: "calendar.create_event",
   schema: calendarCreateEventPlanSchema,
 
+  // Nothing in a calendar plan is withheld from the agent: both audiences see the same lines.
   renderDiff(plan, viewerTimeZone) {
     const e = plan.event;
     const n = e.attendees.length;
@@ -119,7 +149,7 @@ export const calendarCreateEvent: PlanKind<CalendarCreateEventPlan> = {
     return lines;
   },
 
-  async recheck(plan, provider) {
+  async recheck(plan, { calendar: provider }) {
     const { event, observed } = plan;
     const { busy } = await provider.freeBusy(event.calendarId, { start: event.start, end: event.end });
     if (busy.length > 0) return { ok: false, reason: "the slot is no longer free" };
@@ -132,7 +162,7 @@ export const calendarCreateEvent: PlanKind<CalendarCreateEventPlan> = {
     return { ok: true };
   },
 
-  lookupExisting: (plan, key, provider) => provider.lookupEvent(plan.event.calendarId, key),
+  lookupExisting: async (plan, key, p) => toLookup(await p.calendar.lookupEvent(plan.event.calendarId, key)),
 
   // The calendar is fixed by where it is looked up (lookupExisting and execute both use plan.event.calendarId).
   // The organiser must be the calendar owner (a foreign invite under our id is not our write), and a recurring
@@ -147,15 +177,49 @@ export const calendarCreateEvent: PlanKind<CalendarCreateEventPlan> = {
     sameInstant(ev.end, plan.event.end) &&
     sameAttendees(plan.event.attendees, ev),
 
-  execute: (plan, key, provider) => provider.createEvent(plan.event, key),
+  execute: (plan, key, p) => p.calendar.createEvent(plan.event, key),
+
+  store: (ev) => ev,
+
+  // The event as the calendar holds it, shaped like a calendar_list_events item; its text is untrusted data from
+  // the plan's calendar.
+  output(plan, stored) {
+    const e = stored as EventRef;
+    const source = `calendar:${plan.event.calendarId}`;
+    return {
+      id: e.id,
+      etag: e.etag,
+      all_day: e.allDay,
+      start: e.start,
+      end: e.end,
+      title: untrusted(source, e.title),
+      attendees: e.attendees.map((a) => untrusted(source, a)),
+    };
+  },
+
+  explainPlan: (plan) => plan,
 };
 
-const KINDS = new Map<string, PlanKind<unknown>>([
-  [calendarCreateEvent.kind, calendarCreateEvent as unknown as PlanKind<unknown>],
-]);
+/** A plan kind with its plan and result types erased, as the registry holds it. */
+export type AnyPlanKind = PlanKind<unknown, unknown>;
 
-export function getPlanKind(kind: string): PlanKind<unknown> | undefined {
+const KINDS = new Map<string, AnyPlanKind>([[calendarCreateEvent.kind, calendarCreateEvent as unknown as AnyPlanKind]]);
+
+export function getPlanKind(kind: string): AnyPlanKind | undefined {
   return KINDS.get(kind);
+}
+
+/**
+ * What `action_explain` returns as `plan`: the kind's `explainPlan` of a valid stored plan. It is given the stored
+ * object itself (which the schema accepted), so the output keeps the stored key order. An unknown or invalid plan is
+ * returned as stored.
+ */
+export function explainStoredPlan(planJson: unknown): unknown {
+  if (typeof planJson !== "object" || planJson === null) return planJson;
+  const k = (planJson as { kind?: unknown }).kind;
+  const pk = typeof k === "string" ? getPlanKind(k) : undefined;
+  if (!pk || !pk.schema.safeParse(planJson).success) return planJson;
+  return pk.explainPlan(planJson);
 }
 
 // Escapes only: line feed, carriage return, line separator, paragraph separator.
@@ -165,8 +229,9 @@ const LINE_BREAKS = /[\n\r\u2028\u2029]+/g;
  * Diff lines for a stored plan, times shown in `viewerTimeZone` (the caller passes `Config.timeZone`); unknown or
  * invalid plans give a fixed marker. Backstop for every plan kind: a returned line never contains a line break, so a
  * field a kind forgot to flatten still cannot start a new diff line in `deskhand pending` or `deskhand approve`.
+ * `audience` defaults to `agent` (omit, never leak); only `deskhand pending` and `deskhand approve` pass `approver`.
  */
-export function renderDiff(planJson: unknown, viewerTimeZone: string): string[] {
+export function renderDiff(planJson: unknown, viewerTimeZone: string, audience: DiffAudience = "agent"): string[] {
   const unknownKind = ["(unknown plan kind)"];
   if (typeof planJson !== "object" || planJson === null) return unknownKind;
   const k = (planJson as { kind?: unknown }).kind;
@@ -174,5 +239,5 @@ export function renderDiff(planJson: unknown, viewerTimeZone: string): string[] 
   if (!pk) return unknownKind;
   const parsed = pk.schema.safeParse(planJson);
   if (!parsed.success) return ["(invalid plan)"];
-  return pk.renderDiff(parsed.data, viewerTimeZone).map((line) => line.replace(LINE_BREAKS, " "));
+  return pk.renderDiff(parsed.data, viewerTimeZone, audience).map((line) => line.replace(LINE_BREAKS, " "));
 }

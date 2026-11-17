@@ -44,8 +44,9 @@ export async function calendarProposeEventHandler(
   ctx: AppContext,
   input: z.infer<typeof calendarProposeEventInputSchema>,
 ): Promise<ToolOkResult<Output> | ToolErrorResult> {
-  const provider = requireProvider(ctx);
-  if ("isError" in provider) return provider;
+  const providers = requireProvider(ctx);
+  if ("isError" in providers) return providers;
+  const provider = providers.calendar;
 
   const eventZone = input.time_zone === undefined ? ctx.config.timeZone : canonicalTimeZone(input.time_zone);
   if (eventZone === null) {

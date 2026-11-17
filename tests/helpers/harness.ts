@@ -7,7 +7,7 @@ import { LoggingTransport } from "../../src/ledger/logging-transport.js";
 import { createServer } from "../../src/server.js";
 import type { AppContext } from "../../src/app-context.js";
 import { createIdGenerator } from "../../src/ledger/ids.js";
-import { createFixtureProvider } from "../../src/providers/fixture/provider.js";
+import { createFixtureMailProvider, createFixtureProvider } from "../../src/providers/fixture/index.js";
 import { makeTempHome } from "./home.js";
 import { makeWorld } from "./seed.js";
 
@@ -40,6 +40,7 @@ export async function setupHarness(opts: { env?: NodeJS.ProcessEnv } = {}) {
     clock,
     ids: createIdGenerator(),
     provider,
+    mail: createFixtureMailProvider(),
     actor: "tester",
   };
   const server = createServer(ctx);

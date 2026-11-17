@@ -21,7 +21,7 @@ export function pendingCommand(ctx: AppContext, io: CliIo): number {
       `${oneLine(a.id, 64)}  ${oneLine(a.tool, 80)}  expires ${oneLine(a.expires_at, 40)}${expired ? " EXPIRED" : ""}  hash ${hash}`,
     );
     // A plan_json that does not parse is shown, never thrown on: the listing must still work.
-    const diff = a.plan ? renderDiff(a.plan.value, ctx.config.timeZone) : ["(invalid plan)"];
+    const diff = a.plan ? renderDiff(a.plan.value, ctx.config.timeZone, "approver") : ["(invalid plan)"];
     // The CLI wraps long values itself (continuation marker), so terminal wrapping cannot forge a line.
     for (const line of diff) writeRows(io, "    ", line);
   }

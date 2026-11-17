@@ -174,7 +174,7 @@ export async function main(): Promise<void> {
   ensureDirs(config.paths);
   // A bad fixture file is a startup config error too (selectProvider throws ConfigError).
   // With no DESKHAND_PROVIDER there is no provider (ADR 0008): the server still starts.
-  const { provider, clock } = selectProvider(config);
+  const { provider, mail, clock } = selectProvider(config);
   const db = LedgerDb.open(config.paths.ledgerPath, { busyTimeoutMs: config.busyTimeoutMs });
   const ids = createIdGenerator();
   // The client usually closes both pipes when it exits, so a response can hit a
@@ -182,7 +182,7 @@ export async function main(): Promise<void> {
   const stdout = createClientStdout(process.stdout);
   const transport = new LoggingTransport(new StdioServerTransport(process.stdin, stdout.stream), { db, clock });
   const server = createServer(
-    { config, db, clock, ids, provider, actor: resolveActor() },
+    { config, db, clock, ids, provider, mail, actor: resolveActor() },
     { track: transport.track },
   );
   // stdin closing means the client went away: finish in-flight tool calls

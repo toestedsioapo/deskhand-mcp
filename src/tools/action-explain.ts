@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { ACTION_STATUSES, APPROVAL_METHODS } from "../ledger/contract.js";
-import { renderDiff } from "../approval/plan-kinds.js";
+import { explainStoredPlan, renderDiff } from "../approval/plan-kinds.js";
 import { getAction } from "../ledger/actions.js";
 import type { LedgerDb } from "../ledger/db.js";
 import { queryEvents } from "../ledger/events.js";
@@ -66,7 +66,7 @@ export function actionExplainHandler(
       applied_at: a.applied_at,
       error: a.error,
     },
-    plan,
+    plan: explainStoredPlan(plan),
     rationale,
     diff: renderDiff(plan, viewerTimeZone),
     events,

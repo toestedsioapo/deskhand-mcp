@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { AppContext } from "../app-context.js";
 import { applyAction } from "../approval/apply.js";
 import { toolError, toolOk, type ToolErrorResult, type ToolOkResult } from "./result.js";
-import { untrusted, untrustedTextSchema } from "./untrusted.js";
+import { untrustedTextSchema } from "./untrusted.js";
 
 export const actionApplyInputSchema = z.object({ action_id: z.string().max(64) }).strict();
 
@@ -37,16 +37,7 @@ export async function actionApplyHandler(
 ): Promise<ToolOkResult<Output> | ToolErrorResult> {
   const r = await applyAction(ctx, input.action_id);
   if (!r.ok) return toolError(r.errorCode, r.message, { action_id: input.action_id });
-  const e = r.result;
-  const source = `calendar:${r.calendarId}`;
-  const result = {
-    id: e.id,
-    etag: e.etag,
-    all_day: e.allDay,
-    start: e.start,
-    end: e.end,
-    title: untrusted(source, e.title),
-    attendees: e.attendees.map((a) => untrusted(source, a)),
-  };
+  // The plan kind built `output` from result_json (untrusted text already wrapped); the output schema enforces its shape.
+  const result = r.output as Output["result"];
   return toolOk({ action_id: input.action_id, status: "applied", replayed: r.replayed, result }, { action_id: input.action_id });
 }

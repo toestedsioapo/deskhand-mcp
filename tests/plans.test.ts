@@ -2,7 +2,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { AppContext } from "../src/app-context.js";
 import { createPlan, listPending } from "../src/approval/plans.js";
-import { getPlanKind, renderDiff } from "../src/approval/plan-kinds.js";
+import { calendarCreateEvent, getPlanKind, renderDiff } from "../src/approval/plan-kinds.js";
 import { loadConfig } from "../src/config/env.js";
 import { planHash } from "../src/ledger/canonical.js";
 import { LedgerDb } from "../src/ledger/db.js";
@@ -10,7 +10,7 @@ import { getAction } from "../src/ledger/actions.js";
 import { queryEvents } from "../src/ledger/events.js";
 import { last4 } from "../src/ledger/ids.js";
 import type { FixtureProvider } from "../src/providers/fixture/provider.js";
-import { createFixtureProvider } from "../src/providers/fixture/provider.js";
+import { createFixtureMailProvider, createFixtureProvider } from "../src/providers/fixture/index.js";
 import { makeTempHome } from "./helpers/home.js";
 import { makeWorld, validPlan } from "./helpers/seed.js";
 
@@ -28,6 +28,7 @@ function ctxWith(env: NodeJS.ProcessEnv = {}): AppContext {
     clock: () => new Date(NOW),
     ids: { newActionId: () => seq.shift() ?? `act_FALLBACK00000000000${String(++n).padStart(5, "0")}` },
     provider,
+    mail: createFixtureMailProvider(),
     actor: "tester",
   };
 }
@@ -196,6 +197,13 @@ describe("renderDiff", () => {
   });
   // A title, calendar id or attendee that the sanitiser would alter is an invalid plan, not a flattened line:
   // see tests/diff-forgery.test.ts ("a plan row written around the tool cannot be shown as something else").
+  it("the calendar diff is the same for the approver and the agent audience, and the agent is the default", () => {
+    const p = validPlan({}, { timeZone: "Europe/Berlin" });
+    const approver = renderDiff(p, MANILA, "approver");
+    expect(renderDiff(p, MANILA, "agent")).toEqual(approver);
+    expect(renderDiff(p, MANILA)).toEqual(approver);
+  });
+
   it("unknown kind", () => {
     expect(renderDiff({ kind: "nope" }, MANILA)).toEqual(["(unknown plan kind)"]);
     expect(renderDiff("x", MANILA)).toEqual(["(unknown plan kind)"]);
@@ -263,26 +271,34 @@ describe("renderDiff", () => {
 });
 
 describe("calendar.create_event kind", () => {
-  const kind = () => getPlanKind("calendar.create_event")!;
+  const kind = () => calendarCreateEvent;
   const plan = () => kind().schema.parse(validPlan());
+  const ps = () => ({ calendar: provider, mail: createFixtureMailProvider() });
+  it("is the registered kind", () => expect(getPlanKind("calendar.create_event")).toBe(calendarCreateEvent));
+  it("stores the event as is, and explains the plan as is", async () => {
+    const ref = await kind().execute(plan(), "key1", ps());
+    expect(kind().store(ref)).toBe(ref);
+    const p = plan();
+    expect(kind().explainPlan(p)).toBe(p);
+  });
   it("recheck ok when slot free and etags unchanged", async () => {
-    expect(await kind().recheck(plan(), provider)).toEqual({ ok: true });
+    expect(await kind().recheck(plan(), ps())).toEqual({ ok: true });
   });
   it("recheck fails when an etag changed", async () => {
     provider.touchEvent("primary", "evt_standup");
-    expect((await kind().recheck(plan(), provider)).ok).toBe(false);
+    expect((await kind().recheck(plan(), ps())).ok).toBe(false);
   });
   it("recheck fails when the slot is busy", async () => {
     provider.addBusy("primary", { start: "2026-11-12T10:10:00.000Z", end: "2026-11-12T10:20:00.000Z" });
-    expect((await kind().recheck(plan(), provider)).ok).toBe(false);
+    expect((await kind().recheck(plan(), ps())).ok).toBe(false);
   });
   it("execute then lookupExisting by idempotency key", async () => {
-    expect(await kind().lookupExisting(plan(), "key1", provider)).toEqual({ state: "absent" });
-    const ref = await kind().execute(plan(), "key1", provider);
-    expect(await kind().lookupExisting(plan(), "key1", provider)).toEqual({ state: "present", event: ref });
+    expect(await kind().lookupExisting(plan(), "key1", ps())).toEqual({ state: "absent" });
+    const ref = await kind().execute(plan(), "key1", ps());
+    expect(await kind().lookupExisting(plan(), "key1", ps())).toEqual({ state: "present", value: ref });
   });
   it("matches: the approved event under our key; never another id, title, instant or attendee set", async () => {
-    const ref = await kind().execute(plan(), "key1", provider);
+    const ref = await kind().execute(plan(), "key1", ps());
     const k = kind();
     expect(k.matches(plan(), "key1", ref)).toBe(true);
     expect(k.matches(plan(), "key2", ref)).toBe(false);
@@ -298,7 +314,7 @@ describe("calendar.create_event kind", () => {
     expect(k.matches(plan(), "key1", { ...ref, attendees: [...ref.attendees, ref.attendees[0]!] })).toBe(true);
   });
   it("matches: the organiser must be you; a recurring event never matches", async () => {
-    const ref = await kind().execute(plan(), "key1", provider);
+    const ref = await kind().execute(plan(), "key1", ps());
     const k = kind();
     expect(ref.organizerSelf).toBe(true); // the fixture marks its own writes
     expect(k.matches(plan(), "key1", { ...ref, organizerSelf: undefined })).toBe(false);
@@ -306,7 +322,7 @@ describe("calendar.create_event kind", () => {
     expect(k.matches(plan(), "key1", { ...ref, recurring: true })).toBe(false);
   });
   it("matches: the owner as a self attendee counts only when the plan invited the owner", async () => {
-    const ref = await kind().execute(plan(), "key1", provider);
+    const ref = await kind().execute(plan(), "key1", ps());
     const k = kind();
     const p = plan();
     const withOwner = k.schema.parse(validPlan({}, { attendees: [...validPlan().event.attendees, "Me@Example.com"] }));

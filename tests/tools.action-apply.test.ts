@@ -71,6 +71,39 @@ describe("action_apply tool", () => {
     expect(hh.provider.writes).toHaveLength(1);
   });
 
+  it("the replay's result is byte-identical to the first apply's (both are built from result_json)", async () => {
+    const hh = await harness();
+    const id = seedAction(hh.ctx, "approved");
+    const first = await hh.client.callTool({ name: "action_apply", arguments: { action_id: id } });
+    const again = await hh.client.callTool({ name: "action_apply", arguments: { action_id: id } });
+    const resultOf = (r: unknown) => JSON.stringify((r as { structuredContent: { result: unknown } }).structuredContent.result);
+    expect(resultOf(again)).toBe(resultOf(first));
+    expect(JSON.parse(resultOf(first))).toEqual({
+      id: idempotencyKey(id),
+      etag: expect.any(String),
+      all_day: false,
+      start: "2026-11-12T10:00:00.000Z",
+      end: "2026-11-12T10:30:00.000Z",
+      title: { untrusted: true, source: "calendar:primary", content: "Sync" },
+      attendees: ["a@example.com", "b@example.com", "c@example.com"].map((content) => ({
+        untrusted: true,
+        source: "calendar:primary",
+        content,
+      })),
+    });
+  });
+
+  it("no mail provider (calendar set) -> PROVIDER_NOT_CONFIGURED, nothing written", async () => {
+    const hh = await harness();
+    const id = seedAction(hh.ctx, "approved");
+    (hh.ctx as { mail: unknown }).mail = null;
+    const r = await hh.client.callTool({ name: "action_apply", arguments: { action_id: id } });
+    expect(r.isError).toBe(true);
+    expect(deskhandMeta(r)).toEqual({ error_code: "PROVIDER_NOT_CONFIGURED", action_id: id });
+    expect(getAction(hh.db, id)!.status).toBe("approved");
+    expect(hh.provider.writes).toHaveLength(0);
+  });
+
   it("an AuthRequiredError during apply -> AUTH_REQUIRED, tool_call and apply_refused rejected, still approved", async () => {
     const hh = await harness();
     const id = seedAction(hh.ctx, "approved");

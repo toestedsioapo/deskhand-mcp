@@ -193,7 +193,7 @@ export async function approveAction(ctx: AppContext, actionId: string, io: CliIo
   const watch = io.watchWidth?.();
   writeRows(io, "", `Approve ${oneLine(initial.id, 64)} (${oneLine(initial.tool, 80)})`);
   // The CLI wraps long values itself (continuation marker), so terminal wrapping cannot forge a line.
-  for (const line of renderDiff(JSON.parse(initial.plan_json) as unknown, ctx.config.timeZone)) writeRows(io, "    ", line);
+  for (const line of renderDiff(JSON.parse(initial.plan_json) as unknown, ctx.config.timeZone, "approver")) writeRows(io, "    ", line);
   writeRows(io, "", `plan hash ${hashPrefix(hash)}`);
   writeRows(io, "", `expires   ${oneLine(initial.expires_at, 40)}`);
   let typed: string;
