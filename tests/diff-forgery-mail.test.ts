@@ -80,6 +80,7 @@ function headLines(body: string): string[] {
     "in reply to message: m2",
     "from: me@example.com",
     "subject: Re: Q4 budget",
+    "agent's reason: Reply to Ana about the budget",
     "new recipients: 1 not on this thread",
     "to: 2 recipient(s)",
     "  ana@example.com",
@@ -97,10 +98,11 @@ function agentHeadLines(body: string): string[] {
   const m = omittedMarker;
   return [
     HEAD,
-    "thread: th_budget",
-    "in reply to message: m2",
+    `thread: ${m("th_budget")}`,
+    `in reply to message: ${m("m2")}`,
     `from: ${m("me@example.com")}`,
     `subject: ${m("Re: Q4 budget")}`,
+    `agent's reason: ${m("Reply to Ana about the budget")}`,
     "new recipients: 1 not on this thread",
     "to: 2 recipient(s)",
     `  ${m("ana@example.com")}`,
@@ -114,10 +116,11 @@ function agentHeadLines(body: string): string[] {
 }
 
 const withBody = (body: string, over: Record<string, unknown> = {}) => validDraftPlan({}, { ...bodyFields(body), ...over });
-/** The plan as the sweep leaves it: no `body`, `bodyRemoved: true`, the same bodyChars and bodySha256. */
+/** The plan as the sweep leaves it: no `body` or `rationale`, `bodyRemoved: true`, the same lengths and hashes. */
 function swept(plan: ReturnType<typeof validDraftPlan>) {
+  const { rationale: _rationale, ...top } = plan;
   const { body: _body, ...rest } = plan.draft;
-  return { ...plan, draft: { ...rest, bodyRemoved: true } };
+  return { ...top, draft: { ...rest, bodyRemoved: true } };
 }
 
 // ---------------------------------------------------------------- the body rules
@@ -215,8 +218,9 @@ describe("the draft diff (decision 3)", () => {
 
   it("a swept plan prints the body-removed line for both audiences, and no end of body", () => {
     const line = `body removed after the action ended (${DRAFT_BODY.length} chars sha256:${sha8(DRAFT_BODY)})`;
-    expect(renderDiff(swept(validDraftPlan()), "UTC", "approver")).toEqual([...headLines(DRAFT_BODY).slice(0, -1), line]);
-    expect(renderDiff(swept(validDraftPlan()), "UTC", "agent")).toEqual([...agentHeadLines(DRAFT_BODY).slice(0, -1), line]);
+    const noReason = (lines: string[]) => lines.slice(0, -1).filter((l) => !l.startsWith("agent's reason: "));
+    expect(renderDiff(swept(validDraftPlan()), "UTC", "approver")).toEqual([...noReason(headLines(DRAFT_BODY)), line]);
+    expect(renderDiff(swept(validDraftPlan()), "UTC", "agent")).toEqual([...noReason(agentHeadLines(DRAFT_BODY)), line]);
   });
 
   it("body lines that read like fields are printed only after `  > `", () => {

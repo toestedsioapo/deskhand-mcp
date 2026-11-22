@@ -236,35 +236,88 @@ export function getPlanKind(kind: string): AnyPlanKind | undefined {
 }
 
 /**
- * An unknown or invalid plan as action_explain returns it: as stored, except that every mailbox-text field of a
- * `draft` (an edited or otherwise invalid draft plan, whatever its kind says), of any type, is replaced by its omitted
- * marker, so neither a body nor unwrapped mail text reaches the agent (ADR 0010). `bodyRemoved: true` is kept.
+ * An invalid draft plan names no thread that can be trusted, so its wrappers carry this fixed source.
  */
-const DRAFT_TEXT_FIELDS = ["body", "bodyRemoved", "subject", "from", "to", "cc", "bcc", "inReplyTo", "references"];
+const INVALID_PLAN_SOURCE = "mail:invalid-plan";
+const DRAFT_KEYS = new Set([
+  "threadId",
+  "messageIdHeader",
+  "inReplyTo",
+  "references",
+  "from",
+  "to",
+  "cc",
+  "bcc",
+  "subject",
+  "bodyChars",
+  "bodySha256",
+]);
+const OBSERVED_KEYS = new Set(["latestMessageId", "onThread"]);
+const PLAN_KEYS = new Set(["rationale", "rationaleSha256"]);
 
-function withoutDraftBody(plan: object): unknown {
-  const draft = (plan as { draft?: unknown }).draft;
-  if (typeof draft !== "object" || draft === null || Array.isArray(draft)) return plan;
-  const masked: Record<string, unknown> = { ...draft };
-  for (const key of DRAFT_TEXT_FIELDS) {
-    const v = masked[key];
-    if (v === undefined || v === null || (key === "bodyRemoved" && v === true)) continue;
-    masked[key] = omittedMarker(typeof v === "string" ? v : (JSON.stringify(v) ?? "null"));
+const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+const wrapInvalid = (s: string) => untrusted(INVALID_PLAN_SOURCE, s);
+
+/** Strings and arrays of strings wrapped as untrusted; an object as one wrapped JSON text; numbers, booleans, null kept. */
+function wrapStored(v: unknown): unknown {
+  if (typeof v === "string") return wrapInvalid(v);
+  if (Array.isArray(v)) return v.map(wrapStored);
+  return isRecord(v) ? wrapInvalid(JSON.stringify(v)) : v;
+}
+
+/** `value`'s known keys with wrapped values; every other key (its name may be mail text too) in one wrapped text. */
+function wrapKnown(value: Record<string, unknown>, known: ReadonlySet<string>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  const other: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(value)) {
+    if (known.has(k)) out[k] = wrapStored(v);
+    else other[k] = v;
   }
-  return { ...plan, draft: masked };
+  if (Object.keys(other).length > 0) out["unrecognised"] = wrapInvalid(JSON.stringify(other));
+  return out;
+}
+
+/** An invalid plan's `draft`: as wrapKnown, with the body (of any type) only ever an omitted marker. */
+function wrapInvalidDraft(draft: unknown): unknown {
+  if (!isRecord(draft)) return wrapStored(draft);
+  const { body, bodyRemoved, ...rest } = draft;
+  const marker = (v: unknown) => omittedMarker(typeof v === "string" ? v : (JSON.stringify(v) ?? "null"));
+  return {
+    ...wrapKnown(rest, DRAFT_KEYS),
+    ...(body === undefined ? {} : { body: marker(body) }),
+    ...(bodyRemoved === undefined ? {} : { bodyRemoved: bodyRemoved === true ? true : marker(bodyRemoved) }),
+  };
+}
+
+/**
+ * An invalid draft plan (edited, or stored before a rule tightened; whatever its kind says) as action_explain returns
+ * it: every field that can hold mailbox text wrapped as untrusted, and the body an omitted marker (ADR 0010).
+ */
+function explainInvalidDraft(plan: Record<string, unknown>): unknown {
+  const { kind, draft, observed, ...rest } = plan;
+  return {
+    ...(kind === undefined ? {} : { kind: kind === mailCreateDraftReply.kind ? kind : wrapStored(kind) }),
+    ...wrapKnown(rest, PLAN_KEYS),
+    ...(draft === undefined ? {} : { draft: wrapInvalidDraft(draft) }),
+    ...(observed === undefined ? {} : { observed: isRecord(observed) ? wrapKnown(observed, OBSERVED_KEYS) : wrapStored(observed) }),
+  };
 }
 
 /**
  * What `action_explain` returns as `plan`: the kind's `explainPlan` of a valid stored plan. It is given the stored
- * object itself (which the schema accepted), so the output keeps the stored key order. An unknown or invalid plan is
- * returned as stored, with any `draft.body` omitted.
+ * object itself (which the schema accepted), so the output keeps the stored key order. An unknown or invalid plan
+ * that is draft-shaped (the draft kind, or any plan with a `draft` key) goes through explainInvalidDraft; any other is
+ * returned as stored.
  */
 export function explainStoredPlan(planJson: unknown): unknown {
   if (typeof planJson !== "object" || planJson === null) return planJson;
   const k = (planJson as { kind?: unknown }).kind;
   const pk = typeof k === "string" ? getPlanKind(k) : undefined;
-  if (!pk || !pk.schema.safeParse(planJson).success) return withoutDraftBody(planJson);
-  return pk.explainPlan(planJson);
+  if (pk?.schema.safeParse(planJson).success) return pk.explainPlan(planJson);
+  if (isRecord(planJson) && (k === mailCreateDraftReply.kind || Object.hasOwn(planJson, "draft"))) {
+    return explainInvalidDraft(planJson);
+  }
+  return planJson;
 }
 
 // Escapes only: line feed, carriage return, line separator, paragraph separator.

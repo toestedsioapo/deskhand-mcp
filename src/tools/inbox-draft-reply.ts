@@ -9,6 +9,7 @@ import {
   MAX_RECIPIENTS,
   MAX_REFERENCES,
   mailDraftPlanSchema,
+  rationaleSchema,
   type MailDraftPlan,
 } from "../approval/mail-draft-kind.js";
 import { renderDiff } from "../approval/plan-kinds.js";
@@ -42,7 +43,7 @@ export const inboxDraftReplyInputSchema = z
     cc: addressList.optional(),
     bcc: addressList.optional(),
     reply_all: z.boolean().default(false),
-    rationale: z.string().max(500).optional(),
+    rationale: rationaleSchema.optional(),
   })
   .strict();
 
@@ -102,15 +103,16 @@ function defaultRecipients(messages: readonly MailMessage[], owner: string, repl
 }
 
 /**
- * Decision 5: every From, Reply-To, To and Cc address of every message, plus the owner, lowercased. Only addresses
- * that pass the address rule count, checked before lowercasing (a non-ASCII address such as one with U+212A KELVIN
- * SIGN would otherwise lowercase to an ASCII one and hide a flag).
+ * Decision 5 (owner amendment, 2026-11-23): every From, To and Cc address of every message, plus the owner,
+ * lowercased. Reply-To does not count: one mail can set it to any address, so a reply to an address seen only there is
+ * flagged as new. Only addresses that pass the address rule count, checked before lowercasing (a non-ASCII address
+ * such as one with U+212A KELVIN SIGN would otherwise lowercase to an ASCII one and hide a flag).
  */
 function participants(messages: readonly MailMessage[], owner: string): Set<string> {
   const all = [owner];
   for (const m of messages) {
     if (m.from) all.push(m.from.address);
-    for (const a of [...m.replyTo, ...m.to, ...m.cc]) all.push(a.address);
+    for (const a of [...m.to, ...m.cc]) all.push(a.address);
   }
   return new Set(all.filter(isDraftAddress).map(lc));
 }
@@ -195,7 +197,9 @@ export async function inboxDraftReplyHandler(ctx: AppContext, input: Input): Pro
 
   const build = (actionId: string): MailDraftPlan => ({
     kind: "mail.create_draft_reply",
-    ...(input.rationale !== undefined ? { rationale: input.rationale } : {}),
+    ...(input.rationale !== undefined
+      ? { rationale: input.rationale, rationaleSha256: createHash("sha256").update(input.rationale, "utf8").digest("hex") }
+      : {}),
     draft: {
       threadId: input.thread_id,
       messageIdHeader: draftHeaderFor(idempotencyKey(actionId)),

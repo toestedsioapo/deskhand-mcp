@@ -64,10 +64,11 @@ interface Row {
 const row = (hh: H, id: string) => hh.db.get<Row>("SELECT * FROM actions WHERE id = ?", [id])!;
 const eventCount = (hh: H) => hh.db.get<{ n: number }>("SELECT count(*) AS n FROM events")!.n;
 
-/** The plan as the sweep must leave it: body deleted, bodyRemoved true, bodyChars and bodySha256 kept. */
+/** The plan as the sweep must leave it: body and rationale deleted, bodyRemoved true, the lengths and hashes kept. */
 function swept(plan: { draft: Record<string, unknown> } & Record<string, unknown>) {
+  const { rationale: _r, ...top } = plan;
   const { body: _b, ...rest } = plan.draft;
-  return { ...plan, draft: { ...rest, bodyRemoved: true } };
+  return { ...top, draft: { ...rest, bodyRemoved: true } };
 }
 
 /** 40 random hex characters: a body line nothing else in the ledger can contain by chance. */

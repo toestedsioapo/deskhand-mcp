@@ -221,9 +221,38 @@ exports[`action_explain schemas > output schema is stable 1`] = `
     },
     "plan": {},
     "rationale": {
-      "type": [
-        "string",
-        "null",
+      "anyOf": [
+        {
+          "anyOf": [
+            {
+              "type": "string",
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "content": {
+                  "type": "string",
+                },
+                "source": {
+                  "type": "string",
+                },
+                "untrusted": {
+                  "const": true,
+                  "type": "boolean",
+                },
+              },
+              "required": [
+                "untrusted",
+                "source",
+                "content",
+              ],
+              "type": "object",
+            },
+          ],
+        },
+        {
+          "type": "null",
+        },
       ],
     },
   },

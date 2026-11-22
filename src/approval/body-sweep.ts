@@ -6,8 +6,8 @@ import { canonicalJson, planHash } from "../ledger/canonical.js";
  * `actions.plan_json` only while the action can still be written. This removes it from every
  * `mail.create_draft_reply` row that still has `draft.body` and whose status is `applied`, `rejected` or `failed`,
  * or `planned` / `approved` with `now >= expires_at` (an unparseable `expires_at` counts as expired, as at gate 7).
- * The row's plan_json becomes the canonical JSON of the plan with `body` deleted and `bodyRemoved: true`; no other
- * column changes and no event row is written. `planHash` leaves `body` and `bodyRemoved` out, so the hash of the new
+ * The row's plan_json becomes the canonical JSON of the plan with `body` and `rationale` deleted and
+ * `bodyRemoved: true`; no other column changes and no event row is written. `planHash` leaves those out, so the hash of the new
  * plan equals the hash of the old one by construction (checked per row; a row where it would not is left alone).
  *
  * Runs in one BEGIN IMMEDIATE and returns the number of rows rewritten. It then always runs
@@ -22,7 +22,8 @@ export function sweepDraftBodies(ctx: AppContext, now: Date = ctx.clock()): numb
     // never pass the apply or approve canonical-text check.
     const rows = ctx.db.all<{ id: string; plan_json: string; status: string; expires_at: string }>(
       `SELECT id, plan_json, status, expires_at FROM actions
-       WHERE status IN ('applied','rejected','failed','planned','approved') AND instr(plan_json, '"body":') > 0`,
+       WHERE status IN ('applied','rejected','failed','planned','approved')
+         AND (instr(plan_json, '"body":') > 0 OR instr(plan_json, '"rationale":') > 0)`,
     );
     let n = 0;
     for (const r of rows) {
@@ -82,7 +83,10 @@ export function sweepDraftBodiesQuietly(ctx: AppContext, now?: Date): number {
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 
-/** The canonical plan_json without the body, or undefined when the row is not a draft plan with a body. */
+/**
+ * The canonical plan_json without the body and the agent's reason (`rationaleSha256` stays), or undefined when the
+ * row is not a draft plan holding either.
+ */
 function withoutBody(planJson: string): string | undefined {
   let plan: unknown;
   try {
@@ -92,9 +96,12 @@ function withoutBody(planJson: string): string | undefined {
   }
   if (!isObject(plan) || plan["kind"] !== "mail.create_draft_reply") return undefined;
   const draft = plan["draft"];
-  if (!isObject(draft) || !Object.hasOwn(draft, "body")) return undefined;
+  if (!isObject(draft)) return undefined;
+  const hasBody = Object.hasOwn(draft, "body");
+  if (!hasBody && !(draft["bodyRemoved"] === true && Object.hasOwn(plan, "rationale"))) return undefined;
   const { body: _body, ...rest } = draft;
-  const next = { ...plan, draft: { ...rest, bodyRemoved: true } };
+  const { rationale: _rationale, ...top } = plan;
+  const next = { ...top, draft: { ...rest, bodyRemoved: true } };
   try {
     // Decision 2: removing the body never changes the hash. If it somehow would, leave the row as it is.
     if (planHash(next) !== planHash(plan)) return undefined;

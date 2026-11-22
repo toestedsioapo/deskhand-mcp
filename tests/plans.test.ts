@@ -139,7 +139,7 @@ describe("createPlan", () => {
   });
 
   it("refuses a plan whose kind says it cannot be written (a draft whose body was removed) and writes nothing", () => {
-    const p = validDraftPlan();
+    const { rationale: _rationale, ...p } = validDraftPlan();
     const { body: _body, ...rest } = p.draft;
     const swept = { ...p, draft: { ...rest, bodyRemoved: true } };
     expect(() => createPlan(ctxWith(), { tool: "inbox_draft_reply", input: {}, plan: swept })).toThrow(/cannot be written/);
@@ -380,17 +380,20 @@ describe("hashablePlan (decision 2)", () => {
       "3b02acb450a4f58a3cafe3e7fd7f82ddab927c6385ad182433158ce8d44a75ea",
     );
   });
-  it("a draft plan loses draft.body and draft.bodyRemoved, nothing else", () => {
+  it("a draft plan loses rationale, draft.body and draft.bodyRemoved, nothing else", () => {
     const p = validDraftPlan();
+    const { rationale: _rationale, ...top } = p;
     const { body: _body, ...rest } = p.draft;
-    expect(hashablePlan(p)).toEqual({ ...p, draft: rest });
-    expect(hashablePlan({ ...p, draft: { ...rest, bodyRemoved: true } })).toEqual({ ...p, draft: rest });
+    expect(hashablePlan(p)).toEqual({ ...top, draft: rest });
+    expect(hashablePlan({ ...top, draft: { ...rest, bodyRemoved: true } })).toEqual({ ...top, draft: rest });
     expect(p.draft.body).toBe(DRAFT_BODY); // the input is not mutated
+    expect(p.rationale).toBe("Reply to Ana about the budget");
   });
-  it("the hash of a draft plan with its body equals the hash with bodyRemoved and no body", () => {
+  it("the hash of a draft plan with its body and reason equals the hash after the sweep removes them", () => {
     const p = validDraftPlan();
+    const { rationale: _rationale, ...top } = p;
     const { body: _body, ...rest } = p.draft;
-    expect(planHash({ ...p, draft: { ...rest, bodyRemoved: true } })).toBe(planHash(p));
+    expect(planHash({ ...top, draft: { ...rest, bodyRemoved: true } })).toBe(planHash(p));
   });
   it("anything else is returned unchanged", () => {
     for (const v of [null, "x", 1, [], { kind: "mail.create_draft_reply" }, { kind: "mail.create_draft_reply", draft: "x" }, { kind: "other", draft: { body: "b" } }]) {

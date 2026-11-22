@@ -44,6 +44,7 @@ exports[`inbox_draft_reply schemas > input schema is stable 1`] = `
     },
     "rationale": {
       "maxLength": 500,
+      "minLength": 1,
       "type": "string",
     },
     "reply_all": {

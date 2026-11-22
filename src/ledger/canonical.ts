@@ -46,14 +46,15 @@ const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "obj
 
 /**
  * What plan_hash covers (ADR 0010). For an object with `kind: "mail.create_draft_reply"` and an object `draft`: a
- * copy without `draft.body` and `draft.bodyRemoved` (the hash covers the body through `draft.bodySha256`, so the
- * sweep that removes the body never changes the hash). Anything else is returned unchanged, so every calendar hash
- * is the hash of the plan itself, as before. The input is never mutated.
+ * copy without `rationale`, `draft.body` and `draft.bodyRemoved` (the hash covers them through `rationaleSha256` and
+ * `draft.bodySha256`, so the sweep that removes them never changes the hash). Anything else is returned unchanged, so
+ * every calendar hash is the hash of the plan itself, as before. The input is never mutated.
  */
 export function hashablePlan(plan: unknown): unknown {
   if (!isObject(plan) || plan["kind"] !== "mail.create_draft_reply" || !isObject(plan["draft"])) return plan;
+  const { rationale: _rationale, ...rest } = plan;
   const { body: _body, bodyRemoved: _removed, ...draft } = plan["draft"];
-  return { ...plan, draft };
+  return { ...rest, draft };
 }
 
 /** sha256 of the canonical JSON of hashablePlan(plan). The plan store, approve, apply and pending all hash through it. */

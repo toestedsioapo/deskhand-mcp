@@ -156,20 +156,21 @@ describe("inbox_draft_reply: planning", () => {
     expect((p as unknown as { rationale: string }).rationale).toBe("answer Ben");
     expect(out.diff).toEqual([
       "create draft reply (not sent; Deskhand cannot send mail)",
-      "thread: th_budget",
-      "in reply to message: m2",
+      `thread: ${omittedMarker("th_budget")}`,
+      `in reply to message: ${omittedMarker("m2")}`,
       `from: ${omittedMarker("me@example.com")}`,
       `subject: ${omittedMarker("Re: Q4 budget")}`,
-      "new recipients: none",
+      `agent's reason: ${omittedMarker("answer Ben")}`,
+      "new recipients: 1 not on this thread",
       "to: 1 recipient(s)",
-      `  ${omittedMarker("ben-reply@example.com")}`,
+      `  ${omittedMarker("ben-reply@example.com")}  (new: not on this thread)`,
       "cc: 0 recipient(s)",
       "bcc: 0 recipient(s)",
       `body: 6 lines, ${BODY.length} chars, sha256:${sha256(BODY).slice(0, 8)}`,
       `  ${omittedMarker(BODY)}`,
       "end of body",
     ]);
-    expect(out.new_recipients).toEqual([]);
+    expect(out.new_recipients).toEqual(["ben-reply@example.com"]);
   });
 
   it("from follows the mailbox profile, whatever its case in the thread", async () => {
@@ -201,7 +202,7 @@ describe("inbox_draft_reply: planning", () => {
     expect(d.cc).toEqual(["cara@example.com"]);
     expect(d.bcc).toEqual([]);
     expect(JSON.stringify(d.to.concat(d.cc)).toLowerCase()).not.toContain("me@example.com");
-    expect(out.new_recipients).toEqual([]);
+    expect(out.new_recipients).toEqual(["ben-reply@example.com"]); // seen only in a Reply-To
   });
 
   it("an explicit to: cc and bcc default to [] and nothing is added, even with reply_all", async () => {
@@ -233,15 +234,14 @@ describe("inbox_draft_reply: planning", () => {
     expect(p.observed.onThread).toEqual(["ben@example.com"]);
   });
 
-  it("onThread is computed from the thread (From, Reply-To, To, Cc and the owner), case-insensitively", async () => {
+  it("onThread is computed from the thread (From, To, Cc and the owner, not Reply-To), case-insensitively", async () => {
     world();
     const to = ["ANA@example.com", "ben-reply@example.com"];
     const cc = ["cara@example.com", "me@example.com"];
     const out = await ok({ thread_id: "th_budget", body: BODY, to, cc, bcc: ["zed@example.com"] });
-    expect(out.new_recipients).toEqual(["zed@example.com"]);
+    expect(out.new_recipients).toEqual(["ben-reply@example.com", "zed@example.com"]);
     expect(storedPlan(out.action_id).observed.onThread).toEqual([
       "ana@example.com",
-      "ben-reply@example.com",
       "cara@example.com",
       "me@example.com",
     ]);

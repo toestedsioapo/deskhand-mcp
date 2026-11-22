@@ -120,9 +120,12 @@ export const DRAFT_BODY = "Thanks Ana,\n\nThe numbers look right to me.\n\n-- \n
  * not on the thread. `draftOver` replaces draft fields (pass `bodyFields(...)` to change the body consistently).
  */
 export function validDraftPlan(over: Record<string, unknown> = {}, draftOver: Record<string, unknown> = {}) {
+  const rationale = "rationale" in over ? over["rationale"] : "Reply to Ana about the budget";
   return {
     kind: "mail.create_draft_reply",
     rationale: "Reply to Ana about the budget",
+    // Follows the reason given in `over`, unless `over` sets its own.
+    ...(typeof rationale === "string" ? { rationaleSha256: sha256Hex(rationale) } : {}),
     draft: {
       threadId: "th_budget",
       messageIdHeader: `<deskhand.${"0".repeat(64)}@deskhand.invalid>`,

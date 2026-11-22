@@ -13,7 +13,7 @@ Sources: ARCHITECTURE.md (Ledger, vocabulary and row sequences, Expenses), SPEC 
 - **`expenses.id`:** same format as the action id (`act_` + 26-character ULID). It is a separate id space from `actions.id` and is never typed by a human.
 - **`events.id`:** `INTEGER PRIMARY KEY AUTOINCREMENT`; the append order is the ordering. Never reused.
 - **Idempotency key:** the lowercase hex SHA-256 of the action id string (UTF-8). The provider derives its own write id from it (for example a deterministic Calendar event id). Stable across retries and crashes.
-- **`plan_hash`, `approved_plan_hash`:** lowercase hex SHA-256 of the canonical JSON of `hashablePlan(plan)` (ARCHITECTURE, "Canonical JSON"). `hashablePlan` returns the plan unchanged for every kind except `mail.create_draft_reply`, where it deletes `draft.body` and `draft.bodyRemoved` first (ADR 0010). Calendar hashes are therefore the hash of `plan_json` itself, as before.
+- **`plan_hash`, `approved_plan_hash`:** lowercase hex SHA-256 of the canonical JSON of `hashablePlan(plan)` (ARCHITECTURE, "Canonical JSON"). `hashablePlan` returns the plan unchanged for every kind except `mail.create_draft_reply`, where it deletes `rationale`, `draft.body` and `draft.bodyRemoved` first (ADR 0010). Calendar hashes are therefore the hash of `plan_json` itself, as before.
 - **`approved_by`:** OS username of the approving process (`os.userInfo()`, falling back to `USER`, then `USERNAME`, then `unknown`). It records what the process claims, not a verified identity (SECURITY.md, Limits).
 - **Money:** `expenses.amount_minor` is an integer count of the currency's minor unit (2 decimals for USD, 0 for JPY, 3 for KWD per ISO 4217); `currency` is an upper-case ISO-4217 code. The exponent is not stored; it comes from the currency code.
 - **Foreign keys:** the connection sets `PRAGMA foreign_keys = ON`. An event about an action that does not exist (for example `UNKNOWN_ACTION`) has `action_id = NULL`; the id the caller supplied is in the redacted preview input.
@@ -342,7 +342,7 @@ No diff line ever contains a line break or a hidden character: the schema above 
 Added in M4a (ADR 0010). `actions.plan_json` for this kind (strict):
 
 ```
-{ kind: "mail.create_draft_reply", rationale?,
+{ kind: "mail.create_draft_reply", rationale?, rationaleSha256? /* 64 lowercase hex */,
   draft: { threadId, messageIdHeader, inReplyTo: string | null, references: string[],
            from: email, to: email[], cc: email[], bcc: email[], subject,
            body?: string, bodyRemoved?: true, bodyChars: number, bodySha256: string /* 64 lowercase hex */ },
@@ -350,6 +350,8 @@ Added in M4a (ADR 0010). `actions.plan_json` for this kind (strict):
 ```
 
 Exactly one of `body` and `bodyRemoved` is present. When `body` is present, `bodyChars` (its UTF-16 length) and `bodySha256` (the SHA-256 of its UTF-8 bytes) must match it. `from` is the owner's address (`MailProvider.profile()`). `messageIdHeader` is `<deskhand.<idempotency key>@deskhand.invalid>`. `observed.onThread` is computed by the tool from the provider and never taken from the agent, so the hash covers it. The plan is hashed with `hashablePlan` (see Conventions), which leaves out `body` and `bodyRemoved`: the hash covers the body through `bodySha256`, so removing the body never changes `plan_hash`. `plan_json` must still equal the canonical JSON of the plan byte for byte, body included.
+
+**The agent's reason (owner decision, 2026-11-23).** `rationale` is optional, 1 to 500 characters, and follows the subject's rule (`isPlainLine`). While the body is present, `rationale` and `rationaleSha256` (the SHA-256 of its UTF-8 bytes) are both absent or both present and matching; an edited, added or removed reason is `PLAN_MODIFIED` at approve and apply. `hashablePlan` leaves `rationale` out and keeps `rationaleSha256`, so the hash covers the reason and the sweep can remove it. A swept plan has no `rationale`.
 
 **Display equals write for drafts.** As for calendar plans, the schema only accepts what the diff can print verbatim. A stored row that breaks a rule below is an invalid plan: `pending` shows `(invalid plan)`, `approve` refuses it with `INTERNAL` before the prompt (check 5b, except the body-integrity case above, which is `PLAN_MODIFIED`) and `action_apply` does not write it. The tool applies the same rules to its input and answers `INVALID_INPUT` with no plan row.
 
@@ -366,6 +368,7 @@ thread: <threadId>
 in reply to message: <latestMessageId>
 from: <owner address>
 subject: <subject>
+agent's reason: <rationale>           (only when the plan still holds one)
 new recipients: none                  (or: new recipients: <n> not on this thread)
 to: <n> recipient(s)
   <address>                           (followed by "  (new: not on this thread)" when not in observed.onThread)
@@ -397,7 +400,7 @@ The subject comes first because the sender controls it and it may wrap, so the l
 
 **The body exception and its limits (ADR 0010).** This is the only place a mailbox-derived body is stored. It lives only in `actions.plan_json` under `draft.body`. It is replaced by `[omitted N chars sha256:<8 hex>]` everywhere else: `actions.input_json` (the tool input key is `body`), every `events.preview_json`, `ledger_query`, `action_explain` (`plan` through the kind's `explainPlan`, and `diff`), the `inbox_draft_reply` and `action_apply` results, and the fixture `write_log` line. `result_json` stores the `DraftRef` (ids, header, addresses, subject) and `bodySha256`, never the text.
 
-**The sweep and `bodyRemoved`.** `sweepDraftBodies` rewrites the `plan_json` of a draft row that still has `draft.body` to the canonical JSON of the plan with `body` deleted and `bodyRemoved: true` (keeping `bodyChars` and `bodySha256`) when its status is `applied`, `rejected` or `failed`, or when its status is `planned` or `approved` and `now >= expires_at` (an unparseable `expires_at` counts as expired). It runs in one `BEGIN IMMEDIATE`, changes no other column (`plan_hash` and `approved_plan_hash` stay valid because `hashablePlan` leaves out `body` and `bodyRemoved`), writes no `events` row, and never touches an unexpired `approved` row. It runs at server start, after every `action_apply`, after `deskhand reject`, and at the start of `deskhand pending` and of `createPlan`. Every sweep, including one that changed no rows, then runs `PRAGMA wal_checkpoint(TRUNCATE)` with `busy_timeout` 0 (restored afterwards), best effort: a busy checkpoint returns at once and the next sweep retries it. The database sets `PRAGMA secure_delete = ON`. Copies and backups of `ledger.db` made before the sweep still hold the text (SECURITY.md). Editing a body of an unswept plan is caught by the body-integrity rule (approve and apply give `PLAN_MODIFIED`); a plan that has lost its body can never be written (approve and apply refusals above).
+**The sweep and `bodyRemoved`.** `sweepDraftBodies` rewrites the `plan_json` of a draft row that still has `draft.body` (or a swept row that still has `rationale`) to the canonical JSON of the plan with `body` and `rationale` deleted and `bodyRemoved: true` (keeping `bodyChars`, `bodySha256` and `rationaleSha256`) when its status is `applied`, `rejected` or `failed`, or when its status is `planned` or `approved` and `now >= expires_at` (an unparseable `expires_at` counts as expired). It runs in one `BEGIN IMMEDIATE`, changes no other column (`plan_hash` and `approved_plan_hash` stay valid because `hashablePlan` leaves out `rationale`, `body` and `bodyRemoved`), writes no `events` row, and never touches an unexpired `approved` row. It runs at server start, after every `action_apply`, after `deskhand reject`, and at the start of `deskhand pending` and of `createPlan`. Every sweep, including one that changed no rows, then runs `PRAGMA wal_checkpoint(TRUNCATE)` with `busy_timeout` 0 (restored afterwards), best effort: a busy checkpoint returns at once and the next sweep retries it. The database sets `PRAGMA secure_delete = ON`. Copies and backups of `ledger.db` made before the sweep still hold the text (SECURITY.md). Editing a body of an unswept plan is caught by the body-integrity rule (approve and apply give `PLAN_MODIFIED`); a plan that has lost its body can never be written (approve and apply refusals above).
 
 ## `preview_json`
 

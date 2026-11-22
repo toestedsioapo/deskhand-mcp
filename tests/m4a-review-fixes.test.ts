@@ -162,7 +162,11 @@ describe("re-review 1", () => {
     hh.db.run("UPDATE actions SET plan_json = ? WHERE id = ?", [JSON.stringify(plan), id]);
     const r = await hh.client.callTool({ name: "action_explain", arguments: { action_id: id } });
     expect(r.isError).toBeFalsy();
-    expect(JSON.stringify((r.structuredContent as { plan: unknown }).plan)).not.toContain(S);
+    const shown = (r.structuredContent as { plan: { draft: Record<string, unknown> } }).plan.draft;
+    // Owner decision 3 (2026-11-23): mailbox text is wrapped as untrusted; the body stays an omitted marker.
+    expect(shown["subject"]).toEqual({ untrusted: true, source: "mail:invalid-plan", content: `${S} subject` });
+    expect(shown["inReplyTo"]).toMatchObject({ untrusted: true });
+    expect(JSON.stringify([shown["body"], shown["bodyRemoved"]])).not.toContain(S);
     expect(await previews(hh)).not.toContain(S);
   });
 

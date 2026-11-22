@@ -167,13 +167,13 @@ describe("action_explain on a draft plan never shows the body (ADR 0010)", () =>
   it("plan and diff carry the omitted marker; no output, preview or ledger_query row holds body text", async () => {
     const { actionId } = createPlan(h.ctx, { tool: "inbox_draft_reply", input: { body: DRAFT_BODY }, plan: validDraftPlan() });
     const { r, text } = await everything(actionId);
-    const out = r.structuredContent as { plan: { draft: Record<string, unknown> }; diff: string[]; rationale: string };
+    const out = r.structuredContent as { plan: { draft: Record<string, unknown> }; diff: string[]; rationale: unknown };
     expect(out.plan.draft["body"]).toBe(omittedMarker(DRAFT_BODY));
     expect(out.plan.draft["bodySha256"]).toBe(validDraftPlan().draft.bodySha256);
     expect(Object.keys(out.plan.draft)).toEqual(Object.keys((getAction(h.db, actionId)!.plan_json as unknown as { draft: object }).draft));
     expect(out.diff).toContain(`  ${omittedMarker(DRAFT_BODY)}`);
     expect(out.diff.at(-1)).toBe("end of body");
-    expect(out.rationale).toBe("Reply to Ana about the budget");
+    expect(out.rationale).toEqual({ untrusted: true, source: "mail:th_budget", content: "Reply to Ana about the budget" });
     expect(text).not.toContain(SECRET);
     expect(text).not.toContain("Thanks Ana");
   });
@@ -192,7 +192,7 @@ describe("action_explain on a draft plan never shows the body (ADR 0010)", () =>
   });
 
   it("a swept plan is explained as stored, with the body-removed diff line", async () => {
-    const p = validDraftPlan();
+    const { rationale: _rationale, ...p } = validDraftPlan();
     const { body: _body, ...rest } = p.draft;
     insertAction(h.db, "act_SWEPT", { ...p, draft: { ...rest, bodyRemoved: true } });
     const { r } = await everything("act_SWEPT");

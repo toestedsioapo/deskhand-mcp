@@ -49,6 +49,12 @@ function bodyMatches(body: string, bodyChars: unknown, bodySha256: unknown): boo
   return body.length === bodyChars && sha256Hex(body) === bodySha256;
 }
 
+/** True when both are absent, or `rationale` is the text `rationaleSha256` describes. */
+function rationaleMatches(rationale: unknown, sha: unknown): boolean {
+  if (rationale === undefined) return sha === undefined;
+  return typeof rationale === "string" && sha256Hex(rationale) === sha;
+}
+
 const draftSchema = z
   .object({
     threadId: z.string().min(1).max(256).regex(VISIBLE_ASCII),
@@ -88,10 +94,20 @@ const draftSchema = z
     }
   });
 
+/** Longest agent's reason, in UTF-16 code units. */
+export const MAX_RATIONALE = 500;
+/** The agent's reason, as the tool states it when it refuses one. */
+export const RATIONALE_RULE =
+  "rationale must be one line of visible text, 1 to 500 characters: no control, invisible or blank filler characters, no line breaks or tabs, single spaces only between words";
+/** The agent's reason follows the subject's rule: the approver reads it exactly as it is stored. */
+export const rationaleSchema = z.string().min(1).max(MAX_RATIONALE).refine(isPlainLine, { message: RATIONALE_RULE });
+
 export const mailDraftPlanSchema = z
   .object({
     kind: z.literal("mail.create_draft_reply"),
-    rationale: z.string().optional(),
+    // Until the sweep. plan_hash covers it through rationaleSha256, which stays.
+    rationale: rationaleSchema.optional(),
+    rationaleSha256: z.string().regex(SHA256).optional(),
     draft: draftSchema,
     observed: z
       .object({
@@ -103,7 +119,16 @@ export const mailDraftPlanSchema = z
       })
       .strict(),
   })
-  .strict();
+  .strict()
+  .superRefine((p, ctx) => {
+    if (p.draft.bodyRemoved === true) {
+      if (p.rationale !== undefined) {
+        ctx.addIssue({ code: "custom", message: "a swept plan has no rationale", path: ["rationale"] });
+      }
+    } else if (!rationaleMatches(p.rationale, p.rationaleSha256)) {
+      ctx.addIssue({ code: "custom", message: "rationale does not match rationaleSha256", path: ["rationale"] });
+    }
+  });
 
 export type MailDraftPlan = z.infer<typeof mailDraftPlanSchema>;
 type Draft = MailDraftPlan["draft"];
@@ -152,10 +177,11 @@ export const mailCreateDraftReply: PlanKind<MailDraftPlan, DraftRef> = {
     const show = (v: string): string => (audience === "approver" ? v : omittedMarker(v));
     const lines = [
       "create draft reply (not sent; Deskhand cannot send mail)",
-      `thread: ${d.threadId}`,
-      `in reply to message: ${plan.observed.latestMessageId}`,
+      `thread: ${show(d.threadId)}`,
+      `in reply to message: ${show(plan.observed.latestMessageId)}`,
       `from: ${show(d.from)}`,
       `subject: ${show(d.subject)}`,
+      ...(plan.rationale === undefined ? [] : [`agent's reason: ${show(plan.rationale)}`]),
       newRecipientsLine(fresh.size),
     ];
     for (const [label, list] of [
@@ -195,7 +221,9 @@ export const mailCreateDraftReply: PlanKind<MailDraftPlan, DraftRef> = {
   tampered(raw) {
     if (!isObject(raw) || !isObject(raw["draft"])) return false;
     const d = raw["draft"];
-    return typeof d["body"] === "string" && !bodyMatches(d["body"], d["bodyChars"], d["bodySha256"]);
+    if (typeof d["body"] !== "string") return false;
+    // The hash leaves the reason out too: while the body is present, the reason must be the one the hash describes.
+    return !bodyMatches(d["body"], d["bodyChars"], d["bodySha256"]) || !rationaleMatches(raw["rationale"], raw["rationaleSha256"]);
   },
 
   // A plan whose body was swept can never be written (decision 2).
@@ -284,16 +312,18 @@ export const mailCreateDraftReply: PlanKind<MailDraftPlan, DraftRef> = {
     };
   },
 
-  // The stored plan with the body replaced by its omitted marker (key order kept); a swept plan has no body.
-  // Ruling R3: the subject and every address (from, to, cc, bcc, observed.onThread) wrapped as untrusted mailbox
-  // text, the body as its omitted marker (a swept plan has none). Spreads keep the stored key order.
+  // The stored plan with every mailbox-derived field (thread and message ids, Message-IDs, subject, addresses) and the
+  // agent's reason wrapped as untrusted, and the body as its omitted marker (a swept plan has neither body nor reason).
+  // Spreads keep the stored key order.
   explainPlan(plan) {
     const d = plan.draft;
     const wrap = (s: string) => untrusted(`mail:${d.threadId}`, s);
     return {
       ...plan,
+      ...(plan.rationale === undefined ? {} : { rationale: wrap(plan.rationale) }),
       draft: {
         ...d,
+        threadId: wrap(d.threadId),
         // Message-IDs come from mail headers, so the sender controls them.
         inReplyTo: d.inReplyTo === null ? null : wrap(d.inReplyTo),
         references: d.references.map(wrap),
@@ -304,7 +334,11 @@ export const mailCreateDraftReply: PlanKind<MailDraftPlan, DraftRef> = {
         subject: wrap(d.subject),
         ...(d.body === undefined ? {} : { body: bodyMarker(d) }),
       },
-      observed: { ...plan.observed, onThread: plan.observed.onThread.map(wrap) },
+      observed: {
+        ...plan.observed,
+        latestMessageId: wrap(plan.observed.latestMessageId),
+        onThread: plan.observed.onThread.map(wrap),
+      },
     };
   },
 };
