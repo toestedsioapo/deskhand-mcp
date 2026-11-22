@@ -170,7 +170,7 @@ describe("inbox_draft_reply: planning", () => {
       `  ${omittedMarker(BODY)}`,
       "end of body",
     ]);
-    expect(out.new_recipients).toEqual(["ben-reply@example.com"]);
+    expect(out.new_recipients.map((r) => r.content)).toEqual(["ben-reply@example.com"]);
   });
 
   it("from follows the mailbox profile, whatever its case in the thread", async () => {
@@ -202,7 +202,7 @@ describe("inbox_draft_reply: planning", () => {
     expect(d.cc).toEqual(["cara@example.com"]);
     expect(d.bcc).toEqual([]);
     expect(JSON.stringify(d.to.concat(d.cc)).toLowerCase()).not.toContain("me@example.com");
-    expect(out.new_recipients).toEqual(["ben-reply@example.com"]); // seen only in a Reply-To
+    expect(out.new_recipients.map((r) => r.content)).toEqual(["ben-reply@example.com"]); // seen only in a Reply-To
   });
 
   it("an explicit to: cc and bcc default to [] and nothing is added, even with reply_all", async () => {
@@ -226,7 +226,7 @@ describe("inbox_draft_reply: planning", () => {
   it("a new bcc is listed in new_recipients (lowercased) and flagged in the diff", async () => {
     world();
     const out = await ok({ thread_id: "th_budget", body: BODY, to: ["ben@example.com"], bcc: ["Dan@Example.com"] });
-    expect(out.new_recipients).toEqual(["dan@example.com"]);
+    expect(out.new_recipients.map((r) => r.content)).toEqual(["dan@example.com"]);
     expect(out.diff).toContain("new recipients: 1 not on this thread");
     expect(out.diff).toContain(`  ${omittedMarker("Dan@Example.com")}  (new: not on this thread)`);
     expect(out.diff).toContain(`  ${omittedMarker("ben@example.com")}`);
@@ -239,7 +239,7 @@ describe("inbox_draft_reply: planning", () => {
     const to = ["ANA@example.com", "ben-reply@example.com"];
     const cc = ["cara@example.com", "me@example.com"];
     const out = await ok({ thread_id: "th_budget", body: BODY, to, cc, bcc: ["zed@example.com"] });
-    expect(out.new_recipients).toEqual(["ben-reply@example.com", "zed@example.com"]);
+    expect(out.new_recipients.map((r) => r.content)).toEqual(["ben-reply@example.com", "zed@example.com"]);
     expect(storedPlan(out.action_id).observed.onThread).toEqual([
       "ana@example.com",
       "cara@example.com",
@@ -397,7 +397,7 @@ describe("inbox_draft_reply: refusals (INVALID_INPUT or NOT_FOUND, no plan row)"
       ],
     });
     const out = await ok({ thread_id: "th_kelvin", body: BODY, to: ["kate@example.com"] });
-    expect(out.new_recipients).toEqual(["kate@example.com"]);
+    expect(out.new_recipients.map((r) => r.content)).toEqual(["kate@example.com"]);
     expect(out.diff).toContain(`  ${omittedMarker("kate@example.com")}  (new: not on this thread)`);
     expect(storedPlan(out.action_id).observed.onThread).toEqual([]);
   });

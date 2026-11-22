@@ -108,7 +108,25 @@ exports[`inbox_draft_reply schemas > output schema is stable 1`] = `
     },
     "new_recipients": {
       "items": {
-        "type": "string",
+        "additionalProperties": false,
+        "properties": {
+          "content": {
+            "type": "string",
+          },
+          "source": {
+            "type": "string",
+          },
+          "untrusted": {
+            "const": true,
+            "type": "boolean",
+          },
+        },
+        "required": [
+          "untrusted",
+          "source",
+          "content",
+        ],
+        "type": "object",
       },
       "type": "array",
     },

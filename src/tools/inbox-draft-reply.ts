@@ -21,6 +21,7 @@ import { isPlainLine, MAX_BODY_CHARS, MAX_BODY_LINES, normaliseBody, VISIBLE_ASC
 import { providerFailure, requireProvider } from "./provider-guard.js";
 import { toolError, toolOk, type ToolErrorResult, type ToolOkResult } from "./result.js";
 import { threadIdSchema } from "./thread-id.js";
+import { untrusted, untrustedTextSchema } from "./untrusted.js";
 
 /** Messages read to plan a reply: the newest 100, as inbox_read_thread shows them. */
 const MAX_MESSAGES = 100;
@@ -52,7 +53,7 @@ export const inboxDraftReplyOutputSchema = z.object({
   plan_hash: z.string(),
   expires_at: z.string(),
   diff: z.array(z.string()),
-  new_recipients: z.array(z.string()),
+  new_recipients: z.array(untrustedTextSchema),
   body: z.string(),
 });
 
@@ -228,7 +229,8 @@ export async function inboxDraftReplyHandler(ctx: AppContext, input: Input): Pro
       plan_hash: created.planHash,
       expires_at: created.expiresAt,
       diff: renderDiff(created.plan, ctx.config.timeZone, "agent"),
-      new_recipients: newRecipients,
+      // A default recipient can come straight from a mail header (Reply-To).
+      new_recipients: newRecipients.map((a) => untrusted(`mail:${input.thread_id}`, a)),
       body: omittedMarker(body),
     },
     { action_id: created.actionId },

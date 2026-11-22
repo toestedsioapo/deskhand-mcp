@@ -1,6 +1,8 @@
 import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import type { AppContext } from "../src/app-context.js";
 import { approveAction } from "../src/approval/approve.js";
 import { sweepDraftBodies } from "../src/approval/body-sweep.js";
 import type { CliIo } from "../src/cli/io.js";
@@ -8,7 +10,8 @@ import { LedgerDb } from "../src/ledger/db.js";
 import { last4 } from "../src/ledger/ids.js";
 import { MINIMAL_INPUT, previewFields } from "../src/ledger/logging-transport.js";
 import { isBodyLine, normaliseBody } from "../src/util/sanitize.js";
-import { setupHarness } from "./helpers/harness.js";
+import { insertAction, setupHarness } from "./helpers/harness.js";
+import { makeTempHome } from "./helpers/home.js";
 import { msg, useMail } from "./helpers/mail-world.js";
 import { bodyFields, seedAction, validDraftPlan } from "./helpers/seed.js";
 
@@ -96,6 +99,32 @@ describe("I3: a busy checkpoint is retried", () => {
     expect(hh.ctx.db.get<{ timeout: number }>("PRAGMA busy_timeout")?.timeout).toBe(5000);
     expect(sweepDraftBodies(hh.ctx)).toBe(0);
     if (existsSync(wal)) expect(readFileSync(wal).includes(marker)).toBe(false);
+  });
+});
+
+describe("when a removed body leaves the WAL (ADR 0010, point 5)", () => {
+  it("a sweep blocked by a reader: the text is gone once the last connection closes", () => {
+    const home = makeTempHome();
+    const path = join(home.home, "ledger.db");
+    const db = LedgerDb.open(path);
+    const reader = LedgerDb.open(path);
+    try {
+      const m = randomBytes(20).toString("hex");
+      insertAction(db, "act_WAL", validDraftPlan({}, bodyFields(`Hi,\n${m}`)), "rejected");
+      reader.run("BEGIN");
+      reader.get("SELECT count(*) AS n FROM actions");
+      expect(sweepDraftBodies({ db, clock: () => new Date() } as unknown as AppContext)).toBe(1);
+      expect(readFileSync(`${path}-wal`).includes(m)).toBe(true); // the busy checkpoint left it there
+      reader.run("COMMIT");
+      reader.close();
+      db.close();
+      if (existsSync(`${path}-wal`)) expect(readFileSync(`${path}-wal`).includes(m)).toBe(false);
+      expect(readFileSync(path).includes(m)).toBe(false);
+    } finally {
+      reader.close();
+      db.close();
+      home.cleanup();
+    }
   });
 });
 

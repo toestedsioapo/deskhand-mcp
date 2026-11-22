@@ -367,9 +367,10 @@ Output:
   plan_hash: string,           // 64 hex characters
   expires_at: string,
   diff: string[],              // the agent audience: body rows replaced by "  [omitted <c> chars sha256:<8 hex>]",
-                               // the subject and every address value replaced by its omitted marker (ruling R3)
-  new_recipients: string[],    // recipients not on the thread, lowercased; [] when none. Not wrapped: these are
-                               // addresses the agent supplied or that it can already read, like calendar attendees
+                               // the thread id, message id, subject, agent's reason and every address value
+                               // replaced by its omitted marker
+  new_recipients: UntrustedText[], // recipients not on the thread, lowercased, each wrapped with source
+                               // "mail:<thread_id>" (one can come from a Reply-To header); [] when none
   body: string                 // the omitted marker, never the text
 }
 ```
