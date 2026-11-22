@@ -64,12 +64,15 @@ function firstText(result: Record<string, unknown>): string | undefined {
 
 const isInboxTool = (tool: string): boolean => tool.startsWith("inbox_");
 const INBOX_REFUSED_NOTE = "inbox call refused or failed; details omitted";
+/** The input of the minimal row written when the full row could not be built or stored. */
+export const MINIMAL_INPUT = "[omitted]";
 
 /**
  * The input and output a `tool_call` row stores. A failed inbox call may hold mail text under any key (or in a key
  * name), so its whole input becomes one omitted marker. An accepted one keeps its shape without its free-text fields.
  */
-function previewFields(call: PendingCall, outcome: EventOutcome, output: unknown): { input: unknown; output: unknown } {
+export function previewFields(call: PendingCall, outcome: EventOutcome, output: unknown): { input: unknown; output: unknown } {
+  if (call.input === MINIMAL_INPUT) return { input: MINIMAL_INPUT, output };
   if (isInboxTool(call.tool)) {
     if (outcome !== "ok") return { input: omittedMarker(JSON.stringify(call.input) ?? "null"), output };
     return { input: omitInboxFreeText(call.input), output: omitInboxFreeText(output) };
@@ -319,7 +322,7 @@ export class LoggingTransport implements Transport {
     const named = meta?.valid ? meta.actionId : undefined;
     const actionId = named !== undefined && actionExists(this.deps.db, named) ? named : null;
     if (minimal) {
-      this.writeRow({ tool: call.tool, input: "[omitted]" }, outcome, errorCode, "[omitted]", actionId, "preview failed");
+      this.writeRow({ tool: call.tool, input: MINIMAL_INPUT }, outcome, errorCode, "[omitted]", actionId, "preview failed");
       return;
     }
     // Error rows store no output; ok rows store the structured result.
@@ -331,10 +334,10 @@ export class LoggingTransport implements Transport {
     let note: string | null = null;
     if (outcome !== "ok") {
       note = error ? String(error.message) : result ? (firstText(result) ?? null) : null;
-      if (note !== null && !(meta?.valid && meta.errorCode !== undefined)) {
-        // The SDK's validation text quotes unrecognised keys, which on an inbox call may be mail text.
-        note = isInboxTool(call.tool) ? INBOX_REFUSED_NOTE : scrubSecrets(note);
-      }
+      // Error text on an inbox call can quote its input (an unrecognised key, a thread id), so the row stores a fixed
+      // note; error_code still says what happened.
+      if (isInboxTool(call.tool)) note = INBOX_REFUSED_NOTE;
+      else if (note !== null && !(meta?.valid && meta.errorCode !== undefined)) note = scrubSecrets(note);
     }
     this.writeRow(call, outcome, errorCode, output, actionId, note);
   }

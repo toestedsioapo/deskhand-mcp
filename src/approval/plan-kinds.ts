@@ -236,16 +236,22 @@ export function getPlanKind(kind: string): AnyPlanKind | undefined {
 }
 
 /**
- * An unknown or invalid plan as action_explain returns it: as stored, except that a string `draft.body` (an edited
- * or otherwise invalid draft plan, whatever its kind says) is replaced by its omitted marker, so a body never
- * reaches the agent (ADR 0010).
+ * An unknown or invalid plan as action_explain returns it: as stored, except that every mailbox-text field of a
+ * `draft` (an edited or otherwise invalid draft plan, whatever its kind says), of any type, is replaced by its omitted
+ * marker, so neither a body nor unwrapped mail text reaches the agent (ADR 0010). `bodyRemoved: true` is kept.
  */
+const DRAFT_TEXT_FIELDS = ["body", "bodyRemoved", "subject", "from", "to", "cc", "bcc", "inReplyTo", "references"];
+
 function withoutDraftBody(plan: object): unknown {
   const draft = (plan as { draft?: unknown }).draft;
   if (typeof draft !== "object" || draft === null || Array.isArray(draft)) return plan;
-  const body = (draft as { body?: unknown }).body;
-  if (typeof body !== "string") return plan;
-  return { ...plan, draft: { ...draft, body: omittedMarker(body) } };
+  const masked: Record<string, unknown> = { ...draft };
+  for (const key of DRAFT_TEXT_FIELDS) {
+    const v = masked[key];
+    if (v === undefined || v === null || (key === "bodyRemoved" && v === true)) continue;
+    masked[key] = omittedMarker(typeof v === "string" ? v : (JSON.stringify(v) ?? "null"));
+  }
+  return { ...plan, draft: masked };
 }
 
 /**

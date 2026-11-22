@@ -6,6 +6,7 @@ import { sweepDraftBodies } from "../src/approval/body-sweep.js";
 import type { CliIo } from "../src/cli/io.js";
 import { LedgerDb } from "../src/ledger/db.js";
 import { last4 } from "../src/ledger/ids.js";
+import { MINIMAL_INPUT, previewFields } from "../src/ledger/logging-transport.js";
 import { isBodyLine, normaliseBody } from "../src/util/sanitize.js";
 import { setupHarness } from "./helpers/harness.js";
 import { msg, useMail } from "./helpers/mail-world.js";
@@ -130,6 +131,52 @@ describe("F1 and F2: the summary above the approve prompt", () => {
     expect(isBodyLine(`${" ".repeat(17)}indented`)).toBe(false);
     expect(isBodyLine(`a${"　".repeat(17)}b`)).toBe(false);
     expect(normaliseBody(`Thanks.${" ".repeat(9000)}wire the money`)).toBeNull();
+  });
+});
+
+describe("re-review 1", () => {
+  it.each([
+    ["inbox_read_thread", { thread_id: `${S}_quoted_mail` }],
+    ["inbox_draft_reply", { thread_id: `${S}_quoted_mail`, body: "Thanks" }],
+    ["inbox_triage", { proposals: [{ thread_id: `${S}_quoted_mail`, priority: "low", next_action: "none" }] }],
+  ])("%s: a NOT_FOUND row does not store the id in its note", async (name, args) => {
+    const hh = await harness();
+    const r = await hh.client.callTool({ name, arguments: args });
+    expect(r.isError).toBe(true);
+    expect(await previews(hh)).not.toContain(S);
+  });
+
+  it("an invalid stored draft plan shows no mailbox text to the agent or in a preview", async () => {
+    const hh = await harness();
+    const id = seedAction(hh.ctx, "planned", validDraftPlan());
+    const row = hh.db.get<{ plan_json: string }>("SELECT plan_json FROM actions WHERE id = ?", [id])!;
+    const plan = JSON.parse(row.plan_json) as { draft: Record<string, unknown> };
+    Object.assign(plan.draft, {
+      inReplyTo: `<${S}_irt@evil.example>`,
+      references: [`<${S}_ref@evil.example>`],
+      subject: `${S} subject`,
+      to: [`${S}@evil.example`],
+      body: [`${S} body in an array`],
+      bodyRemoved: `${S} removed`,
+    });
+    hh.db.run("UPDATE actions SET plan_json = ? WHERE id = ?", [JSON.stringify(plan), id]);
+    const r = await hh.client.callTool({ name: "action_explain", arguments: { action_id: id } });
+    expect(r.isError).toBeFalsy();
+    expect(JSON.stringify((r.structuredContent as { plan: unknown }).plan)).not.toContain(S);
+    expect(await previews(hh)).not.toContain(S);
+  });
+
+  it("refuses more than 16 consecutive empty lines in a body", () => {
+    const blank = (n: number) => `Wire the money.${"\n".repeat(n + 1)}Thanks`;
+    expect(normaliseBody(blank(16))).not.toBeNull();
+    expect(normaliseBody(blank(17))).toBeNull();
+    expect(normaliseBody(`${"\n".repeat(17)}Thanks`)).toBeNull();
+    expect(normaliseBody("Thanks\n")).toBe("Thanks\n");
+  });
+
+  it("the minimal retry row stores the placeholder, not a hash of it", () => {
+    const fields = previewFields({ tool: "inbox_search", input: MINIMAL_INPUT }, "error", MINIMAL_INPUT);
+    expect(fields.input).toBe(MINIMAL_INPUT);
   });
 });
 

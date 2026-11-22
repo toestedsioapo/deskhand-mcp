@@ -29,7 +29,7 @@ const SUBJECT_RULE =
   "subject must be one line of visible text, 1 to 250 characters: no control, invisible or blank filler characters, no line breaks or tabs, single spaces only between words";
 const BODY_RULE =
   `body must be 1 to ${MAX_BODY_CHARS} characters and at most ${MAX_BODY_LINES} lines of visible text: ` +
-  "CR LF line ends become LF, a lone CR, a tab, a hidden character, more than 16 spaces in a row or a trailing space (except on the line `-- `) is refused";
+  "CR LF line ends become LF, a lone CR, a tab, a hidden character, more than 16 spaces in a row, more than 16 empty lines in a row or a trailing space (except on the line `-- `) is refused";
 
 const addressList = z.array(draftAddressSchema).max(MAX_RECIPIENTS);
 

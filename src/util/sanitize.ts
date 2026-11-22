@@ -103,10 +103,13 @@ export function isBodyLine(s: string): boolean {
 export const MAX_BODY_CHARS = 20_000;
 /** Most lines in a draft body. */
 export const MAX_BODY_LINES = 500;
+/** Most consecutive empty lines in a draft body: more is filler that moves text out of the approver's view. */
+const MAX_BLANK_LINES = 16;
 
 /**
  * A draft body as it is stored, hashed and shown: CR LF becomes LF. null when the result is empty, still holds a CR,
- * is over MAX_BODY_CHARS characters or MAX_BODY_LINES lines, or has a line that fails isBodyLine. A trailing newline
+ * is over MAX_BODY_CHARS characters or MAX_BODY_LINES lines, has more than MAX_BLANK_LINES consecutive empty lines, or
+ * has a line that fails isBodyLine. A trailing newline
  * is one empty last line.
  */
 export function normaliseBody(s: string): string | null {
@@ -114,6 +117,11 @@ export function normaliseBody(s: string): string | null {
   if (body.length === 0 || body.length > MAX_BODY_CHARS || body.includes("\r")) return null;
   const lines = body.split("\n");
   if (lines.length > MAX_BODY_LINES) return null;
+  let blank = 0;
+  for (const line of lines) {
+    blank = line === "" ? blank + 1 : 0;
+    if (blank > MAX_BLANK_LINES) return null;
+  }
   return lines.every(isBodyLine) ? body : null;
 }
 

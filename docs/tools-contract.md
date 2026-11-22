@@ -349,7 +349,7 @@ Input (strict):
 | Field | Type | Default | Notes |
 |---|---|---|---|
 | `thread_id` | string | required | unknown is `NOT_FOUND` |
-| `body` | string, 1 to 20 000 characters | required | `\r\n` becomes `\n`; a lone `\r`, a tab, a trailing space (except the exact line `-- `), a hidden character, more than 500 lines or more than 20 000 characters is `INVALID_INPUT`; see the ledger contract, "Plan shape: `mail.create_draft_reply`" |
+| `body` | string, 1 to 20 000 characters | required | `\r\n` becomes `\n`; a lone `\r`, a tab, a trailing space (except the exact line `-- `), a hidden character, a run of more than 16 whitespace characters, more than 16 consecutive empty lines, more than 500 lines or more than 20 000 characters is `INVALID_INPUT`; see the ledger contract, "Plan shape: `mail.create_draft_reply`" |
 | `subject` | string, 1 to 250 characters | `Re: <latest subject>` (not doubled if it already starts with `Re:`, any case) | one plain line (`isPlainLine`). If the thread's subject is not a plain line and no `subject` is given, `INVALID_INPUT` tells the agent to pass `subject` explicitly. A given subject is checked on its own |
 | `to` | email[] | see below | |
 | `cc` | email[] | `[]` | |
