@@ -11,7 +11,7 @@ import { ERROR_CODES, type ErrorCode, type EventOutcome } from "./contract.js";
 import type { LedgerDb } from "./db.js";
 import { appendEvent } from "./events.js";
 import { isoNow, type Clock } from "./ids.js";
-import { scrubSecrets } from "./redact.js";
+import { omitInboxFreeText, omitRationale, omittedMarker, scrubSecrets } from "./redact.js";
 
 export interface LoggingTransportDeps {
   db: LedgerDb;
@@ -60,6 +60,22 @@ function firstText(result: Record<string, unknown>): string | undefined {
     return first["text"];
   }
   return undefined;
+}
+
+const isInboxTool = (tool: string): boolean => tool.startsWith("inbox_");
+const INBOX_REFUSED_NOTE = "inbox call refused or failed; details omitted";
+
+/**
+ * The input and output a `tool_call` row stores. A failed inbox call may hold mail text under any key (or in a key
+ * name), so its whole input becomes one omitted marker. An accepted one keeps its shape without its free-text fields.
+ */
+function previewFields(call: PendingCall, outcome: EventOutcome, output: unknown): { input: unknown; output: unknown } {
+  if (isInboxTool(call.tool)) {
+    if (outcome !== "ok") return { input: omittedMarker(JSON.stringify(call.input) ?? "null"), output };
+    return { input: omitInboxFreeText(call.input), output: omitInboxFreeText(output) };
+  }
+  if (call.tool === "action_explain") return { input: call.input, output: omitRationale(output) };
+  return { input: call.input, output };
 }
 
 function outcomeOf(code: ErrorCode): EventOutcome {
@@ -315,7 +331,10 @@ export class LoggingTransport implements Transport {
     let note: string | null = null;
     if (outcome !== "ok") {
       note = error ? String(error.message) : result ? (firstText(result) ?? null) : null;
-      if (note !== null && !(meta?.valid && meta.errorCode !== undefined)) note = scrubSecrets(note);
+      if (note !== null && !(meta?.valid && meta.errorCode !== undefined)) {
+        // The SDK's validation text quotes unrecognised keys, which on an inbox call may be mail text.
+        note = isInboxTool(call.tool) ? INBOX_REFUSED_NOTE : scrubSecrets(note);
+      }
     }
     this.writeRow(call, outcome, errorCode, output, actionId, note);
   }
@@ -335,7 +354,7 @@ export class LoggingTransport implements Transport {
       kind: "tool_call",
       outcome,
       errorCode,
-      preview: { v: 1, input: call.input, output, note },
+      preview: { v: 1, ...previewFields(call, outcome, output), note },
     });
   }
 

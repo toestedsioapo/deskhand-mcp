@@ -43,6 +43,9 @@ const LEADING_EXTENDER = /^[\p{M}\p{Grapheme_Extend}]/u;
 /** Code points in one user-perceived character: more than this is a run built to be one unbreakable character. */
 const MAX_GRAPHEME_CODE_POINTS = 8;
 
+/** More whitespace in a row than indentation needs: filler that moves body text out of the approver's view. */
+const WHITESPACE_RUN = /\s{17,}/u;
+
 const graphemes = new Intl.Segmenter("en", { granularity: "grapheme" });
 
 /**
@@ -82,11 +85,13 @@ export function isPlainLine(s: string): boolean {
  * True when `s` is one line of a draft body that the approve diff prints exactly as it is written (decision 4): empty,
  * or no hidden character (the stripControl set, line breaks included), no tab, no more than four stacked combining
  * marks, no character of more than 8 code points and no leading extender. Leading and repeated spaces are allowed
- * (quoting, indentation); trailing whitespace is not, except on the exact signature separator line `-- `.
+ * (quoting, indentation) up to 16 in a run, so blank filler cannot push text out of view; trailing whitespace is not,
+ * except on the exact signature separator line `-- `.
  */
 export function isBodyLine(s: string): boolean {
   if (s === "" || s === "-- ") return true;
   if (/\s$/u.test(s) || s.includes("\t") || s.includes("\n")) return false;
+  if (WHITESPACE_RUN.test(s)) return false;
   if (MARK_STACK.test(s) || LEADING_EXTENDER.test(s)) return false;
   for (const { segment } of graphemes.segment(s)) {
     if ([...segment].length > MAX_GRAPHEME_CODE_POINTS) return false;

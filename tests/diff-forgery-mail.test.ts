@@ -406,8 +406,12 @@ describe("approve prints a summary next to the prompt (owner ruling)", () => {
     const io = scripted([last4(id)], 80);
     expect(await approveAction(hh.ctx, id, io)).toEqual({ ok: true });
     const rows = io.outText().split("\n").filter((l) => l.length > 0);
-    expect(rows.slice(-3)).toEqual(["summary: to 2, cc 1, bcc 1", "new recipients: 1 not on this thread", "subject: Re: Q4 budget"]);
-    expect(rows.slice(-20)).toEqual(expect.arrayContaining(["summary: to 2, cc 1, bcc 1"]));
+    expect(rows.slice(-4)).toEqual([
+      "subject: Re: Q4 budget",
+      `body: 300 lines, ${body.length} chars`,
+      "summary: to 2, cc 1, bcc 1",
+      "new recipients: 1 not on this thread",
+    ]);
   });
   it("a long subject in the summary is wrapped like the diff", async () => {
     const hh = await harness();
@@ -417,12 +421,13 @@ describe("approve prints a summary next to the prompt (owner ruling)", () => {
     expect(await approveAction(hh.ctx, id, io)).toEqual({ ok: true });
     const rows = io.outText().split("\n").filter((l) => l.length > 0);
     for (const row of rows) expect(termWidth(row)).toBeLessThanOrEqual(40);
-    const tail = rows.slice(rows.indexOf("summary: to 2, cc 1, bcc 1"));
-    expect(tail[1]).toBe("new recipients: 1 not on this thread");
-    expect(tail[2]!.startsWith("subject: Re: ")).toBe(true);
-    expect(tail.length).toBeGreaterThan(3);
-    for (const r of tail.slice(3)) expect(r.startsWith(CONTINUATION)).toBe(true);
-    expect([tail[2], ...tail.slice(3).map((r) => r.slice(CONTINUATION.length))].join("")).toBe(`subject: ${subject}`);
+    const start = rows.findLastIndex((r) => r.startsWith("subject: Re: "));
+    const bodyRow = rows.findLastIndex((r) => r.startsWith("body: "));
+    const wrapped = rows.slice(start + 1, bodyRow);
+    expect(wrapped.length).toBeGreaterThan(0);
+    for (const r of wrapped) expect(r.startsWith(CONTINUATION)).toBe(true);
+    expect([rows[start], ...wrapped.map((r) => r.slice(CONTINUATION.length))].join("")).toBe(`subject: ${subject}`);
+    expect(rows.slice(bodyRow + 1)).toEqual(["summary: to 2, cc 1, bcc 1", "new recipients: 1 not on this thread"]);
   });
   it("a calendar approve prints no summary", async () => {
     const hh = await harness();

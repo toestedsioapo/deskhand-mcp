@@ -10,9 +10,9 @@ import { canonicalJson, planHash } from "../ledger/canonical.js";
  * column changes and no event row is written. `planHash` leaves `body` and `bodyRemoved` out, so the hash of the new
  * plan equals the hash of the old one by construction (checked per row; a row where it would not is left alone).
  *
- * Runs in one BEGIN IMMEDIATE and returns the number of rows rewritten. When that is above 0 it runs
- * `PRAGMA wal_checkpoint(TRUNCATE)` so the old page leaves the WAL; a busy result (or a checkpoint error, e.g.
- * inside an outer transaction) is ignored. Throws only when the ledger itself fails; the call sites use
+ * Runs in one BEGIN IMMEDIATE and returns the number of rows rewritten. It then always runs
+ * `PRAGMA wal_checkpoint(TRUNCATE)` so an old page leaves the WAL; a busy result (or a checkpoint error, e.g.
+ * inside an outer transaction) is retried by the next sweep. Throws only when the ledger itself fails; the call sites use
  * `sweepDraftBodiesQuietly`. `now` defaults to one read of `ctx.clock` (createPlan passes its own single read).
  */
 export function sweepDraftBodies(ctx: AppContext, now: Date = ctx.clock()): number {
@@ -36,14 +36,34 @@ export function sweepDraftBodies(ctx: AppContext, now: Date = ctx.clock()): numb
     }
     return n;
   }, "immediate");
-  if (count > 0) {
-    try {
-      ctx.db.get("PRAGMA wal_checkpoint(TRUNCATE)");
-    } catch {
-      // Best effort: the rows are committed; the WAL is checkpointed later (by the next sweep or on close).
+  // Every sweep, even one that removed nothing: an earlier sweep's checkpoint may have been busy, and its removed body
+  // stays in the WAL until a checkpoint succeeds.
+  checkpointWithoutWaiting(ctx);
+  return count;
+}
+
+/**
+ * `wal_checkpoint(TRUNCATE)` with busy_timeout 0, because sweeps run inside ordinary calls and must not stall behind
+ * another connection's reader. Best effort: the rows are committed, and the next sweep (or the last connection
+ * closing) checkpoints the WAL.
+ */
+function checkpointWithoutWaiting(ctx: AppContext): void {
+  let timeout: number | undefined;
+  try {
+    timeout = ctx.db.get<{ timeout: number }>("PRAGMA busy_timeout")?.timeout;
+    ctx.db.exec("PRAGMA busy_timeout = 0");
+    ctx.db.get("PRAGMA wal_checkpoint(TRUNCATE)");
+  } catch {
+    // Busy, or inside an outer transaction.
+  } finally {
+    if (timeout !== undefined) {
+      try {
+        ctx.db.exec(`PRAGMA busy_timeout = ${Math.trunc(timeout)}`);
+      } catch {
+        // The connection is failing; its next statement reports that.
+      }
     }
   }
-  return count;
 }
 
 /**

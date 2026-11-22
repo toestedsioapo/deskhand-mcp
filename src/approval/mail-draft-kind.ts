@@ -181,10 +181,12 @@ export const mailCreateDraftReply: PlanKind<MailDraftPlan, DraftRef> = {
 
   approveSummary(plan) {
     const d = plan.draft;
+    // The subject is sender-controlled and may wrap, so it comes first: the last rows above the prompt are fixed text.
     return [
+      `subject: ${d.subject}`,
+      d.body === undefined ? "body: removed" : `body: ${d.body.split("\n").length} lines, ${d.bodyChars} chars`,
       `summary: to ${d.to.length}, cc ${d.cc.length}, bcc ${d.bcc.length}`,
       newRecipientsLine(newRecipients(plan).size),
-      `subject: ${d.subject}`,
     ];
   },
 
@@ -292,6 +294,9 @@ export const mailCreateDraftReply: PlanKind<MailDraftPlan, DraftRef> = {
       ...plan,
       draft: {
         ...d,
+        // Message-IDs come from mail headers, so the sender controls them.
+        inReplyTo: d.inReplyTo === null ? null : wrap(d.inReplyTo),
+        references: d.references.map(wrap),
         from: wrap(d.from),
         to: d.to.map(wrap),
         cc: d.cc.map(wrap),

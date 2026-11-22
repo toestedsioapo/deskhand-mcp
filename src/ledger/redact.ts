@@ -85,6 +85,30 @@ export function redactInput(value: unknown): unknown {
   return redact(value, 0);
 }
 
+const INBOX_FREE_TEXT = /^(rationale|reason|labels|query)$/;
+const RATIONALE = /^rationale$/;
+
+function omitKeys(value: unknown, keys: RegExp, depth: number): unknown {
+  if (depth > MAX_DEPTH) return TOO_DEEP;
+  if (Array.isArray(value)) return value.map((v) => omitKeys(v, keys, depth + 1));
+  if (value === null || typeof value !== "object") return value;
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    out[k] = keys.test(k) && v !== null && v !== undefined ? omitted(v) : omitKeys(v, keys, depth + 1);
+  }
+  return out;
+}
+
+/** An inbox tool's arguments or result with its free-text fields, which may quote mail, as omitted markers. */
+export function omitInboxFreeText(value: unknown): unknown {
+  return omitKeys(value, INBOX_FREE_TEXT, 0);
+}
+
+/** A value with every `rationale` as its omitted marker (the action_explain preview). */
+export function omitRationale(value: unknown): unknown {
+  return omitKeys(value, RATIONALE, 0);
+}
+
 /** What scrubSecrets returns for any text that holds, or may hide, a secret (Ruling 18). */
 export const SECRET_LIKE = "[redacted: text contained secret-like data]";
 

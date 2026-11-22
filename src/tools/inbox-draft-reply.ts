@@ -14,7 +14,7 @@ import {
 import { renderDiff } from "../approval/plan-kinds.js";
 import { createPlan } from "../approval/plans.js";
 import { idempotencyKey } from "../ledger/ids.js";
-import { omittedMarker } from "../ledger/redact.js";
+import { omitInboxFreeText, omittedMarker } from "../ledger/redact.js";
 import type { MailMessage } from "../providers/types.js";
 import { isPlainLine, MAX_BODY_CHARS, MAX_BODY_LINES, normaliseBody, VISIBLE_ASCII } from "../util/sanitize.js";
 import { providerFailure, requireProvider } from "./provider-guard.js";
@@ -29,7 +29,7 @@ const SUBJECT_RULE =
   "subject must be one line of visible text, 1 to 250 characters: no control, invisible or blank filler characters, no line breaks or tabs, single spaces only between words";
 const BODY_RULE =
   `body must be 1 to ${MAX_BODY_CHARS} characters and at most ${MAX_BODY_LINES} lines of visible text: ` +
-  "CR LF line ends become LF, a lone CR, a tab, a hidden character or a trailing space (except on the line `-- `) is refused";
+  "CR LF line ends become LF, a lone CR, a tab, a hidden character, more than 16 spaces in a row or a trailing space (except on the line `-- `) is refused";
 
 const addressList = z.array(draftAddressSchema).max(MAX_RECIPIENTS);
 
@@ -217,7 +217,7 @@ export async function inboxDraftReplyHandler(ctx: AppContext, input: Input): Pro
   const check = mailDraftPlanSchema.safeParse(build("act_00000000000000000000000000"));
   if (!check.success) return invalid(`The draft breaks a plan rule: ${check.error.issues.map((i) => `${i.path.join(".")} ${i.message}`).join("; ")}.`);
 
-  const created = createPlan(ctx, { tool: "inbox_draft_reply", input, buildPlan: build });
+  const created = createPlan(ctx, { tool: "inbox_draft_reply", input: omitInboxFreeText(input), buildPlan: build });
   return toolOk(
     {
       action_id: created.actionId,
