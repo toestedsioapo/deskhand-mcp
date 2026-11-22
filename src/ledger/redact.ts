@@ -85,7 +85,7 @@ export function redactInput(value: unknown): unknown {
   return redact(value, 0);
 }
 
-const INBOX_FREE_TEXT = /^(rationale|reason|labels|query)$/;
+const INBOX_FREE_TEXT = /^(rationale|reason|labels|query|to|cc|bcc)$/;
 const RATIONALE = /^rationale$/;
 
 function omitKeys(value: unknown, keys: RegExp, depth: number): unknown {

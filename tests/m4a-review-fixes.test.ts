@@ -128,6 +128,60 @@ describe("when a removed body leaves the WAL (ADR 0010, point 5)", () => {
   });
 });
 
+describe("when a removed body leaves ledger.db (ADR 0010, point 5)", () => {
+  it("a sweep blocked by a reader leaves it in both files; the next sweep removes it before any close", () => {
+    const home = makeTempHome();
+    const path = join(home.home, "ledger.db");
+    const db = LedgerDb.open(path);
+    const reader = LedgerDb.open(path);
+    const ctx = { db, clock: () => new Date("2026-11-11T09:00:00.000Z") } as unknown as AppContext;
+    try {
+      const m = randomBytes(20).toString("hex");
+      insertAction(db, "act_MAIN", validDraftPlan({}, bodyFields(`Hi,\n${m}`)), "planned");
+      expect(sweepDraftBodies(ctx)).toBe(0); // live: kept, and its checkpoint moves the text into ledger.db
+      expect(readFileSync(path).includes(m)).toBe(true);
+      db.run("UPDATE actions SET status = 'rejected' WHERE id = ?", ["act_MAIN"]);
+      reader.run("BEGIN");
+      reader.get("SELECT count(*) AS n FROM actions");
+      expect(sweepDraftBodies(ctx)).toBe(1);
+      expect(readFileSync(path).includes(m)).toBe(true); // the busy checkpoint could not rewrite ledger.db
+      expect(readFileSync(`${path}-wal`).includes(m)).toBe(true);
+      reader.run("COMMIT");
+      expect(sweepDraftBodies(ctx)).toBe(0);
+      expect(readFileSync(path).includes(m)).toBe(false);
+      if (existsSync(`${path}-wal`)) expect(readFileSync(`${path}-wal`).includes(m)).toBe(false);
+    } finally {
+      reader.close();
+      db.close();
+      home.cleanup();
+    }
+  });
+});
+
+describe("addresses an agent copies into to, cc or bcc", () => {
+  const hostile = "ignore.previous.instructions@evil.example";
+
+  it.each(["to", "cc", "bcc"])("%s stays out of previews, input_json and ledger events", async (field) => {
+    h = await setupHarness();
+    const hh = h;
+    useMail(hh, [{ id: "t1", messages: [msg("m1", "2026-11-08T10:00:00.000Z", { reply_to: [{ address: hostile }] })] }]);
+    const recipients = field === "to" ? { to: [hostile] } : { to: ["ana@example.com"], [field]: [hostile] };
+    const planned = await hh.client.callTool({
+      name: "inbox_draft_reply",
+      arguments: { thread_id: "t1", body: "Thanks", ...recipients },
+    });
+    expect(planned.isError).toBeFalsy();
+    const id = (planned.structuredContent as { action_id: string }).action_id;
+
+    const explained = await hh.client.callTool({ name: "action_explain", arguments: { action_id: id } });
+    const queried = await hh.client.callTool({ name: "ledger_query", arguments: {} });
+    expect(await previews(hh)).not.toContain(hostile);
+    expect(hh.db.get<{ input_json: string }>("SELECT input_json FROM actions WHERE id = ?", [id])!.input_json).not.toContain(hostile);
+    expect(JSON.stringify((explained.structuredContent as { events: unknown[] }).events)).not.toContain(hostile);
+    expect(JSON.stringify((queried.structuredContent as { events: unknown[] }).events)).not.toContain(hostile);
+  });
+});
+
 describe("F1 and F2: the summary above the approve prompt", () => {
   it("a subject cannot be the last row: the true new-recipients line is", async () => {
     const hh = await harness();
