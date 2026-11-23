@@ -178,6 +178,7 @@ Safety items now covered in SECURITY.md / TEST_PLAN: logging around SDK input va
 - **`singleSend` on the draft POST.** A `401` refreshes the token but never re-sends the POST. The 60 s claim hold (plan decision 8) relies on this.
 - **A literal `=?` in an ASCII subject is encoded** (RFC 2047), so what a mail client shows equals what was approved.
 - **The draft match does not cover** attachments or extra text parts added to a draft later (also in `docs/SECURITY.md`).
-- **A Gmail rate limit returned as `403` is treated as a definite failure**, so the plan must be re-planned. To decide after live check item 10.
-- **A custom subject or a missing `In-Reply-To` may make Gmail start a new thread (unverified).** The draft's thread id would then differ from the plan's, so the apply ends `STALE_PLAN` with a draft left in Gmail. To be decided from the live check's optional step 8b.
+- **A Gmail rate limit returned as `403` is treated as a definite failure**, so the plan must be re-planned. **Owner decision (2026-11-24): accepted for v1.** Revisit if live check item 10 shows Gmail returns `429` instead.
+- **A custom subject or a missing `In-Reply-To` may make Gmail start a new thread (unverified).** The draft's thread id would then differ from the plan's, so the apply ends `STALE_PLAN` with a draft left in Gmail. **Owner decision (2026-11-24, Ruling 12): decide after the live check**, from its optional step 8b.
+- **CSS- or attribute-hidden text reaches the assistant. Owner decision (2026-11-24, Ruling 10, red-team F4): accepted for v1.** The text stays wrapped as untrusted and nothing is written without approval. It is documented in `docs/SECURITY.md` as a known prompt-injection channel.
 - **M4a follow-ups 5, 6, 7, 8 and 12 stay open by owner decision.**
