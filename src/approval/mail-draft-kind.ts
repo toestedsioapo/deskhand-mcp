@@ -16,6 +16,13 @@ import type { PlanKind } from "./plan-kinds.js";
 
 const sha256Hex = (s: string): string => createHash("sha256").update(s, "utf8").digest("hex");
 
+/**
+ * Decision 7: lowercase hex SHA-256 of `JSON.stringify` of the unique message ids, sorted by code unit. The plan stores
+ * it and the apply re-check recomputes it, so a message added anywhere in the thread, or removed, changes it.
+ */
+export const threadMessageIdsHash = (ids: readonly string[]): string =>
+  sha256Hex(JSON.stringify([...new Set(ids)].sort()));
+
 /** The address rule (decision 4), as the tool states it when it refuses an address. */
 export const ADDRESS_RULE =
   "must be an email address of at most 254 printable ASCII characters (internationalised addresses are not supported)";
@@ -112,6 +119,8 @@ export const mailDraftPlanSchema = z
     observed: z
       .object({
         latestMessageId: z.string().min(1).max(256).regex(VISIBLE_ASCII),
+        // SHA-256 of the thread's whole message-id set (threadMessageIdsHash). Optional so applied M4a plans stay valid.
+        messageIdsSha256: z.string().regex(SHA256).optional(),
         // Computed by the tool from the provider (never from the agent), lowercased.
         onThread: z
           .array(address.refine((a) => a === a.toLowerCase(), { message: "must be lowercase" }))
@@ -157,6 +166,8 @@ const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "obj
 
 export const DRAFT_DIFFERS = "a draft with this action's id exists but differs from the approved plan";
 /** Re-check phrases (decision 8 and the account check); apply prefixes each with `The world changed since planning: `. */
+export const THREAD_CHANGED = "the thread's messages changed since planning";
+export const THREAD_UNVERIFIED = "the plan has no record of the thread's messages";
 export const THREAD_GONE = "the thread no longer exists";
 export const THREAD_NEW_MESSAGE = "the thread has a new message since planning";
 export const ACCOUNT_CHANGED = "the mailbox account changed since planning";
@@ -235,10 +246,14 @@ export const mailCreateDraftReply: PlanKind<MailDraftPlan, DraftRef> = {
   async recheck(plan, { mail }) {
     const { email } = await mail.profile();
     if (email.toLowerCase() !== plan.draft.from.toLowerCase()) return { ok: false, reason: ACCOUNT_CHANGED };
-    const thread = await mail.getThread(plan.draft.threadId, 1);
+    const ids = await mail.threadMessageIds(plan.draft.threadId);
+    const thread = ids === null ? null : await mail.getThread(plan.draft.threadId, 1);
     const latest = thread?.messages.at(-1);
-    if (!thread || !latest) return { ok: false, reason: THREAD_GONE };
+    if (ids === null || !thread || !latest) return { ok: false, reason: THREAD_GONE };
     if (latest.id !== plan.observed.latestMessageId) return { ok: false, reason: THREAD_NEW_MESSAGE };
+    // Any other difference in the whole set (a backdated message, a removed one) is stale too (decision 7).
+    if (plan.observed.messageIdsSha256 === undefined) return { ok: false, reason: THREAD_UNVERIFIED };
+    if (threadMessageIdsHash(ids) !== plan.observed.messageIdsSha256) return { ok: false, reason: THREAD_CHANGED };
     return { ok: true };
   },
 

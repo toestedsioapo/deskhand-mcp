@@ -252,7 +252,7 @@ const DRAFT_KEYS = new Set([
   "bodyChars",
   "bodySha256",
 ]);
-const OBSERVED_KEYS = new Set(["latestMessageId", "onThread"]);
+const OBSERVED_KEYS = new Set(["latestMessageId", "messageIdsSha256", "onThread"]);
 const PLAN_KEYS = new Set(["rationale", "rationaleSha256"]);
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);

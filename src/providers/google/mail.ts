@@ -12,6 +12,7 @@ export function createGoogleMailProvider(): MailProvider {
     profile: () => refuse("profile"),
     searchThreads: () => refuse("searchThreads"),
     getThread: () => refuse("getThread"),
+    threadMessageIds: () => refuse("threadMessageIds"),
     lookupDraft: () => refuse("lookupDraft"),
     createDraft: () => refuse("createDraft"),
   };

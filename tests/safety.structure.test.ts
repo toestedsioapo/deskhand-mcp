@@ -410,6 +410,7 @@ describe("safety structure", () => {
           ["profile", () => mail.profile()],
           ["searchThreads", () => mail.searchThreads("x", 1)],
           ["getThread", () => mail.getThread("t", 1)],
+          ["threadMessageIds", () => mail.threadMessageIds("t")],
           ["lookupDraft", () => mail.lookupDraft("<a@b>")],
           [
             "createDraft",

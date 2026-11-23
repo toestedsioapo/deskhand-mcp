@@ -92,6 +92,7 @@ export function createFixtureMailProvider(
       profile: () => refuse("profile"),
       searchThreads: () => refuse("searchThreads"),
       getThread: () => refuse("getThread"),
+      threadMessageIds: () => refuse("threadMessageIds"),
       lookupDraft: () => refuse("lookupDraft"),
       createDraft: () => refuse("createDraft"),
     };
@@ -152,6 +153,12 @@ export function createFixtureMailProvider(
         messages: kept.map((m) => toMessage(threadId, m)),
         truncated: kept.length < messages.length,
       };
+    },
+
+    async threadMessageIds(threadId) {
+      await delay();
+      const messages = threads.get(threadId);
+      return messages ? messages.map((m) => m.id) : null;
     },
 
     async lookupDraft(messageIdHeader): Promise<DraftLookup> {

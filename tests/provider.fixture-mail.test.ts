@@ -108,6 +108,21 @@ describe("fixture mailbox search", () => {
   });
 });
 
+describe("fixture mailbox threadMessageIds", () => {
+  it("leaves out drafts, has no cap, and returns null for an unknown thread", async () => {
+    const messages = [
+      ...Array.from({ length: 150 }, (_, i) => msg(`m${i}`, new Date(Date.UTC(2026, 0, 1, 0, i)).toISOString())),
+      msg("md", "2026-11-09T11:00:00.000Z", { draft: true }),
+    ];
+    const mail = createFixtureMailProvider(world([{ id: "t1", messages }]));
+    const ids = await mail.threadMessageIds("t1");
+    expect(ids).toHaveLength(150);
+    expect(ids).not.toContain("md");
+    expect(new Set(ids)).toEqual(new Set(messages.slice(0, 150).map((m) => m.id)));
+    expect(await mail.threadMessageIds("nope")).toBeNull();
+  });
+});
+
 describe("fixture mailbox getThread", () => {
   it("returns oldest first, drops drafts, null for unknown", async () => {
     const w = world([

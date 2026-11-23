@@ -154,6 +154,11 @@ export interface MailProvider {
   searchThreads(query: string, limit: number): Promise<{ threads: ThreadSummary[]; truncated: boolean }>;
   /** null when the thread does not exist. At most the newest `maxMessages` messages. */
   getThread(threadId: string, maxMessages: number): Promise<MailThread | null>;
+  /**
+   * Every message id of the thread except drafts, trash and spam, in no particular order and with no cap; null when
+   * the thread does not exist. Ids only: no bodies or headers (M4b decision 7).
+   */
+  threadMessageIds(threadId: string): Promise<string[] | null>;
   lookupDraft(messageIdHeader: string): Promise<DraftLookup>;
   /** Existing messageIdHeader: returns the existing draft, never a second one. */
   createDraft(draft: NewDraft): Promise<DraftRef>;

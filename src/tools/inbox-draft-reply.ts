@@ -9,6 +9,7 @@ import {
   MAX_RECIPIENTS,
   MAX_REFERENCES,
   mailDraftPlanSchema,
+  threadMessageIdsHash,
   rationaleSchema,
   type MailDraftPlan,
 } from "../approval/mail-draft-kind.js";
@@ -127,7 +128,12 @@ export async function inboxDraftReplyHandler(ctx: AppContext, input: Input): Pro
 
   let thread;
   let owner: string;
+  let messageIds: string[] | null;
   try {
+    // Before getThread: a message that arrives between the two reads is then missing from the stored hash, so the
+    // plan goes stale at apply instead of being hashed without the planner having seen it (decision 7).
+    messageIds = await mail.threadMessageIds(input.thread_id);
+    if (messageIds === null) return toolError("NOT_FOUND", `No thread with id ${input.thread_id}.`);
     thread = await mail.getThread(input.thread_id, MAX_MESSAGES);
     if (thread === null) return toolError("NOT_FOUND", `No thread with id ${input.thread_id}.`);
     owner = (await mail.profile()).email;
@@ -215,7 +221,7 @@ export async function inboxDraftReplyHandler(ctx: AppContext, input: Input): Pro
       bodyChars: body.length,
       bodySha256: createHash("sha256").update(body, "utf8").digest("hex"),
     },
-    observed: { latestMessageId: latest.id, onThread },
+    observed: { latestMessageId: latest.id, messageIdsSha256: threadMessageIdsHash(messageIds), onThread },
   });
   // Every rule is checked above; this catches anything left (for example an address the agent did not choose), so a
   // plan the schema would refuse is an INVALID_INPUT answer and never a thrown INTERNAL.

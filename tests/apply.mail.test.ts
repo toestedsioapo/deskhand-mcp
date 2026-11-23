@@ -4,8 +4,17 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { applyAction, idempotencyKey } from "../src/approval/apply.js";
+import { createPlan } from "../src/approval/plans.js";
 import { approveAction } from "../src/approval/approve.js";
-import { DRAFT_DIFFERS, draftHeaderFor, type MailDraftPlan } from "../src/approval/mail-draft-kind.js";
+import { sweepDraftBodies } from "../src/approval/body-sweep.js";
+import {
+  DRAFT_DIFFERS,
+  draftHeaderFor,
+  THREAD_CHANGED,
+  THREAD_UNVERIFIED,
+  threadMessageIdsHash,
+  type MailDraftPlan,
+} from "../src/approval/mail-draft-kind.js";
 import type { CliIo } from "../src/cli/io.js";
 import { getAction } from "../src/ledger/actions.js";
 import { canonicalJson } from "../src/ledger/canonical.js";
@@ -239,6 +248,115 @@ describe("the re-check (decision 8) and the differs phrase", () => {
     expect(DRAFT_DIFFERS).toBe("a draft with this action's id exists but differs from the approved plan");
     expect(getAction(hh.db, id)!.status).toBe("failed");
     expect(drafts(hh)).toHaveLength(1);
+  });
+});
+
+describe("the re-check compares the thread's whole message set (decision 7)", () => {
+  const CHANGED = `STALE_PLAN: The world changed since planning: the thread's messages changed since planning.`;
+  const M0 = msg("m0", "2026-11-09T09:00:00.000Z", { message_id: "<m0@example.com>" });
+  const MB = msg("mb", "2026-11-09T10:30:00.000Z", { message_id: "<mb@example.com>" });
+
+  async function expectStale(hh: H, id: string, expected: string): Promise<void> {
+    const r = await apply(hh, id);
+    expect(r.isError).toBe(true);
+    expect(text(r)).toBe(expected);
+    expect(getAction(hh.db, id)!.status).toBe("failed");
+    expect(drafts(hh)).toHaveLength(0);
+  }
+
+  it("the constants hold the contract phrases", () => {
+    expect(THREAD_CHANGED).toBe("the thread's messages changed since planning");
+    expect(THREAD_UNVERIFIED).toBe("the plan has no record of the thread's messages");
+  });
+
+  it("a backdated message older than the latest: STALE_PLAN", async () => {
+    const { hh } = await harness();
+    const id = await proposeAndApprove(hh);
+    useMail(hh, [{ ...THREAD, messages: [M0, M1, M2] }]);
+    await expectStale(hh, id, CHANGED);
+  });
+
+  it("a backdated message between two messages: STALE_PLAN", async () => {
+    const { hh } = await harness();
+    const id = await proposeAndApprove(hh);
+    useMail(hh, [{ ...THREAD, messages: [M1, MB, M2] }]);
+    await expectStale(hh, id, CHANGED);
+  });
+
+  it("a backdated message outside the newest 100: STALE_PLAN", async () => {
+    const base = Array.from({ length: 101 }, (_, i) =>
+      msg(`x${String(i).padStart(3, "0")}`, new Date(Date.UTC(2026, 10, 1, 0, i)).toISOString(), { message_id: `<x${i}@example.com>` }),
+    );
+    const { hh } = await harness([{ id: "th_budget", messages: base }]);
+    const id = await proposeAndApprove(hh);
+    // Older than every message the plan's getThread (newest 100) could have shown.
+    const old = msg("old", "2026-10-01T00:00:00.000Z", { message_id: "<old@example.com>" });
+    useMail(hh, [{ id: "th_budget", messages: [old, ...base] }]);
+    await expectStale(hh, id, CHANGED);
+  });
+
+  it("an older message removed: STALE_PLAN", async () => {
+    const { hh } = await harness();
+    const id = await proposeAndApprove(hh);
+    useMail(hh, [{ ...THREAD, messages: [M2] }]);
+    await expectStale(hh, id, CHANGED);
+  });
+
+  it("a message arriving between the plan's two reads: STALE_PLAN", async () => {
+    const { hh } = await harness();
+    const real = hh.ctx.mail!;
+    const withMb = createFixtureMailProvider(mailWorld([{ ...THREAD, messages: [M1, MB, M2] }]));
+    // The message arrives right after threadMessageIds returns, so getThread sees it and the stored hash does not.
+    hh.ctx.mail = { ...real, getThread: (t, n) => withMb.getThread(t, n) };
+    const id = await proposeAndApprove(hh);
+    hh.ctx.mail = withMb;
+    await expectStale(hh, id, CHANGED);
+  });
+
+  it("a read-state change or a draft in the thread does not stale the plan", async () => {
+    const { hh } = await harness();
+    const id = await proposeAndApprove(hh);
+    const draftMsg = msg("md", "2026-11-09T13:00:00.000Z", { draft: true });
+    useMail(hh, [{ ...THREAD, messages: [{ ...M1, unread: true }, { ...M2, unread: true }, draftMsg] }]);
+    expect(await applyAction(hh.ctx, id)).toMatchObject({ ok: true, replayed: false });
+    expect(drafts(hh)).toHaveLength(1);
+  });
+
+  it("a plan without messageIdsSha256 cannot be applied: THREAD_UNVERIFIED", async () => {
+    const { hh } = await harness();
+    const id = await propose(hh);
+    const plan = planOf(hh, id);
+    const { messageIdsSha256: _m, ...observed } = plan.observed;
+    // An M4a-era plan: stored without the field, with the hash of what is stored, then approved.
+    const { actionId } = createPlan(hh.ctx, { tool: "inbox_draft_reply", input: {}, plan: { ...plan, observed } });
+    expect(await approveAction(hh.ctx, actionId, approvalIo(actionId))).toEqual({ ok: true });
+    await expectStale(hh, actionId, `STALE_PLAN: The world changed since planning: ${THREAD_UNVERIFIED}.`);
+  });
+
+  it("an edited messageIdsSha256 is PLAN_MODIFIED", async () => {
+    const { hh } = await harness();
+    const id = await proposeAndApprove(hh);
+    const plan = planOf(hh, id);
+    hh.db.run("UPDATE actions SET plan_json = ? WHERE id = ?", [
+      canonicalJson({ ...plan, observed: { ...plan.observed, messageIdsSha256: "0".repeat(64) } }),
+      id,
+    ]);
+    expect(await applyAction(hh.ctx, id)).toMatchObject({ ok: false, errorCode: "PLAN_MODIFIED" });
+    expect(drafts(hh)).toHaveLength(0);
+  });
+
+  it("a swept plan keeps messageIdsSha256 and plan_hash", async () => {
+    const { hh } = await harness();
+    const id = await proposeAndApprove(hh);
+    const before = getAction(hh.db, id)!;
+    const hash = threadMessageIdsHash(["m1", "m2"]);
+    expect((before.plan_json as MailDraftPlan).observed.messageIdsSha256).toBe(hash);
+    hh.db.run("UPDATE actions SET expires_at = ? WHERE id = ?", ["2000-01-01T00:00:00.000Z", id]);
+    expect(sweepDraftBodies(hh.ctx)).toBe(1);
+    const after = getAction(hh.db, id)!;
+    expect((after.plan_json as MailDraftPlan).draft.bodyRemoved).toBe(true);
+    expect((after.plan_json as MailDraftPlan).observed.messageIdsSha256).toBe(hash);
+    expect(after.plan_hash).toBe(before.plan_hash);
   });
 });
 

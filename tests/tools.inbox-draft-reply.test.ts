@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { z } from "zod";
 import { idempotencyKey } from "../src/approval/apply.js";
-import { draftHeaderFor } from "../src/approval/mail-draft-kind.js";
+import { draftHeaderFor, threadMessageIdsHash } from "../src/approval/mail-draft-kind.js";
 import { getAction } from "../src/ledger/actions.js";
 import { omittedMarker } from "../src/ledger/redact.js";
 import { createFixtureMailProvider } from "../src/providers/fixture/index.js";
@@ -89,7 +89,7 @@ async function refused(args: Record<string, unknown>, code = "INVALID_INPUT"): P
 }
 interface StoredDraftPlan {
   draft: Record<string, unknown> & { to: string[]; cc: string[]; bcc: string[]; subject: string; from: string };
-  observed: { latestMessageId: string; onThread: string[] };
+  observed: { latestMessageId: string; messageIdsSha256?: string; onThread: string[] };
 }
 const storedPlan = (id: string) => getAction(h.db, id)!.plan_json as StoredDraftPlan;
 /** The stored JSON columns as text. */
@@ -132,6 +132,21 @@ describe("inbox_draft_reply: planning", () => {
     expect(out.plan_hash).toBe(a.plan_hash);
     expect(out.expires_at).toBe(a.expires_at);
     expect(JSON.stringify(out)).not.toContain("numbers look right");
+  });
+
+  it("stores the thread's message-id set hash (decision 7), and action_explain on an invalid plan keeps it under observed", async () => {
+    world();
+    const out = await ok({ thread_id: "th_budget", body: BODY });
+    const hash = storedPlan(out.action_id).observed.messageIdsSha256;
+    expect(hash).toBe(threadMessageIdsHash((await h.ctx.mail!.threadMessageIds("th_budget"))!));
+    expect(hash).toBe(sha256(JSON.stringify(["m1", "m2"])));
+    const p = getAction(h.db, out.action_id)!.plan_json as Record<string, unknown>;
+    h.db.run("UPDATE actions SET plan_json = ? WHERE id = ?", [JSON.stringify({ ...p, bogus: 1 }), out.action_id]);
+    const r = await h.client.callTool({ name: "action_explain", arguments: { action_id: out.action_id } });
+    const ex = r.structuredContent as { plan: { observed: Record<string, unknown>; unrecognised?: unknown } };
+    expect(ex.plan.observed["messageIdsSha256"]).toEqual({ untrusted: true, source: expect.any(String), content: hash });
+    expect(ex.plan.observed["unrecognised"]).toBeUndefined();
+    expect(JSON.stringify(ex.plan.unrecognised)).not.toContain("messageIdsSha256");
   });
 
   it("stores the decision-3 plan: from is profile().email, our Message-ID, In-Reply-To and References", async () => {
