@@ -107,3 +107,17 @@ Follow `docs/google-oauth-setup.md`, then in a real terminal with `DESKHAND_PROV
 | 6 | Organiser is you: read the event from check 5 with the API Explorer (`events.get`, calendar `primary`, the event id from the `action_apply` result) | `organizer.self` is `true`; if you are listed among the attendees, that entry has `self: true` | |
 | 7 | Owner as attendee: `calendar_propose_event` with attendees = your own address and one other you control, `sendUpdates: none`; approve; `action_apply` | `applied` (not `STALE_PLAN` "differs"); the event lists both; a second `action_apply` is `replayed: true` | |
 | 8 | Delete the test events (from checks 5 and 7) in Google Calendar. Check `ledger.db` rows and `token.json`'s directory | no token text in the ledger | |
+
+## Manual Gmail check (M4b, owner, real account, not CI)
+
+Not yet run. The owner's exact PowerShell steps are in `m4b-live-check.md` (outside the repo), after `docs/google-oauth-setup.md`. Record each result in the PR description; any difference from the recorded responses is fixed (recording and adapter together) before merge. M4 is done only after this passes.
+
+| # | Check | Expected | Result |
+|---|---|---|---|
+| 1 | `deskhand auth login`, then `deskhand auth status` | the two read scopes (Calendar and Gmail) | |
+| 2 | `inbox_search`, then `inbox_read_thread` on a thread of yours | subjects, snippets and bodies wrapped as untrusted; `ledger_query` shows no body text | |
+| 3 | `inbox_draft_reply` with a bcc to a second address not on the thread; `deskhand pending` | every recipient, the subject and the whole body shown; the new bcc flagged | |
+| 4 | `approve`, then `action_apply` with writes on before `upgrade` | `AUTH_REQUIRED` naming `deskhand auth upgrade` | |
+| 5 | `upgrade`, then `action_apply` | one draft in the thread under Drafts; Sent unchanged; the draft keeps our `Message-ID` and the Bcc | |
+| 6 | `action_apply` again | `replayed: true`, still one draft | |
+| 7 | `ledger.db` after the body sweep | no body text | |

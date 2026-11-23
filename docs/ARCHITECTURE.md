@@ -55,7 +55,7 @@ Transitions are compare-and-set inside `BEGIN IMMEDIATE`: `UPDATE actions SET st
 ## Ledger vocabulary and row sequences (proposed; part of the contract)
 
 - `events.tool`: MCP tool name, or `cli:pending|approve|reject|export|auth` for CLI-originated rows.
-- `events.kind ∈ tool_call | cli_command | plan_created | approved | approve_refused | rejected | applied | apply_refused | apply_failed`.
+- `events.kind ∈ tool_call | cli_command | plan_created | approved | approve_refused | rejected | applied | apply_refused | apply_failed | write_claimed` (`write_claimed` is new in ledger schema v4: a claim taken before a draft write, ledger contract gate 8b).
 - `events.outcome ∈ ok | error | rejected`; `error_code ∈ INVALID_INPUT | WRITES_DISABLED | UNKNOWN_ACTION | PLAN_EXPIRED | NOT_APPROVED | ALREADY_APPROVED | NOT_A_TTY | CONFIRMATION_MISMATCH | ID_COLLISION | UNKNOWN_TOOL | NOT_PENDING | PLAN_MODIFIED | STALE_PLAN | PROVIDER_ERROR | AUTH_REQUIRED | INTERNAL | UNTRUSTED_RUNTIME`. `UNTRUSTED_RUNTIME` is `deskhand approve` refused under a preload, loader or inspector flag (speed bump, SECURITY.md). `UNKNOWN_TOOL` is for a `tools/call` naming an unregistered tool; `NOT_PENDING` is the approve/reject refusal for a plan whose status is `rejected`, `failed` or `applied` (`ALREADY_APPROVED` is for `approved`). The final set is fixed in `docs/ledger-contract.md`, which wins on any difference.
 - Types: ids `TEXT` (`act_` + 26-char ULID; format fixed in `docs/ledger-contract.md`), timestamps `TEXT` ISO-8601 UTC with milliseconds and `Z`, JSON columns `TEXT`. Nullability per column is specified in `docs/ledger-contract.md` (M2 deliverable, written before migration 1).
 

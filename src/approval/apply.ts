@@ -236,7 +236,7 @@ export async function applyAction(ctx: AppContext, actionId: string): Promise<Ap
       actionId,
       row !== undefined,
       "PROVIDER_NOT_CONFIGURED",
-      "No provider is configured (set DESKHAND_PROVIDER=fixture).",
+      "No provider is configured (set DESKHAND_PROVIDER).",
     );
   }
   // 2. Exists.

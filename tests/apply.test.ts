@@ -153,7 +153,7 @@ describe("no provider configured", () => {
     expect(r).toEqual({
       ok: false,
       errorCode: "PROVIDER_NOT_CONFIGURED",
-      message: "No provider is configured (set DESKHAND_PROVIDER=fixture).",
+      message: "No provider is configured (set DESKHAND_PROVIDER).",
     });
     expect(status(id)).toBe("approved");
     expect(provider.writes).toHaveLength(0);
