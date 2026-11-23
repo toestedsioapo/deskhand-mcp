@@ -49,6 +49,7 @@ function toMessage(threadId: string, m: FixtureMessage): MailMessage {
     bodyText: m.body_text.slice(0, BODY_CHARS),
     bodyTruncated: m.body_text.length > BODY_CHARS,
     unread: m.unread === true,
+    sentByOwner: m.sent === true,
   };
 }
 

@@ -84,13 +84,12 @@ function uniqueWithout(xs: readonly string[], exclude: ReadonlySet<string>): str
 }
 
 /**
- * Decision 6. The latest message not sent by the owner: its Reply-To, else its From; `reply_all` adds its To (to) and
+ * Decisions 6 and 9. The latest message not sent by the owner (`sentByOwner`, not its From header): its Reply-To, else its From; `reply_all` adds its To (to) and
  * Cc (cc). When every message is the owner's: the latest message's To (and with `reply_all` its Cc). Never the owner.
  */
 function defaultRecipients(messages: readonly MailMessage[], owner: string, replyAll: boolean): { to: string[]; cc: string[] } {
-  // The same address rule as participants(): an address that only lowercases to the owner's is not the owner.
-  const isOwner = (m: MailMessage) => m.from !== null && isDraftAddress(m.from.address) && lc(m.from.address) === lc(owner);
-  const target = messages.filter((m) => !isOwner(m)).at(-1);
+  // "Mine" is a provider fact (sentByOwner), never the From header, which the sender controls (decision 9).
+  const target = messages.filter((m) => !m.sentByOwner).at(-1);
   const ownerSet = new Set([lc(owner)]);
   if (target) {
     const primary = target.replyTo.length > 0 ? target.replyTo.map((a) => a.address) : target.from ? [target.from.address] : [];

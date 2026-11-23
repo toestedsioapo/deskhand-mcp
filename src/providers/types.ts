@@ -97,6 +97,8 @@ export interface MailMessage {
   bodyText: string;
   bodyTruncated: boolean;
   unread: boolean;
+  /** True only when the provider says the owner sent it (Gmail `SENT` label; fixture `sent: true`). A From header proves nothing. */
+  sentByOwner: boolean;
 }
 
 /** Messages oldest first; drafts, trash and spam excluded. `truncated`: older messages were left out. */

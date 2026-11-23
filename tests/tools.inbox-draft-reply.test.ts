@@ -51,8 +51,9 @@ const FROM_ONLY: Thread = { id: "th_from", messages: [msg("f1", "2026-11-09T10:0
 const MINE: Thread = {
   id: "th_mine",
   messages: [
-    msg("o1", "2026-11-08T10:00:00.000Z", { from: { address: "me@example.com" }, to: [{ address: "ana@example.com" }] }),
+    msg("o1", "2026-11-08T10:00:00.000Z", { sent: true, from: { address: "me@example.com" }, to: [{ address: "ana@example.com" }] }),
     msg("o2", "2026-11-09T10:00:00.000Z", {
+      sent: true,
       from: { address: "Me@Example.com" },
       to: [{ address: "ana@example.com" }, { address: "ben@example.com" }, { address: "me@example.com" }],
       cc: [{ address: "cara@example.com" }],
@@ -236,6 +237,55 @@ describe("inbox_draft_reply: planning", () => {
     expect(out.new_recipients).toEqual([]);
     expect(out.diff).toContain("new recipients: none");
     for (const a of [...d.to, ...d.cc, ...d.bcc]) expect(a.toLowerCase()).not.toBe("me@example.com");
+  });
+
+  it("a spoofed From: <owner> is not mine: it is the reply target, its Reply-To is the default and is flagged new", async () => {
+    useMail(h, [
+      {
+        id: "th_spoof",
+        messages: [
+          msg("s1", "2026-11-09T10:00:00.000Z", { message_id: "<s1@example.com>" }),
+          msg("s2", "2026-11-09T11:00:00.000Z", {
+            message_id: "<s2@example.com>",
+            from: { address: "me@example.com" },
+            reply_to: [{ address: "evil@example.net" }],
+            to: [{ address: "ana@example.com" }],
+          }),
+        ],
+      },
+    ]);
+    const out = await ok({ thread_id: "th_spoof", body: BODY });
+    expect(storedPlan(out.action_id).draft.to).toEqual(["evil@example.net"]);
+    expect(out.new_recipients.map((r) => r.content)).toEqual(["evil@example.net"]);
+  });
+
+  it("a spoofed From: <owner> with no Reply-To leaves no recipient: pass `to` explicitly", async () => {
+    useMail(h, [
+      {
+        id: "th_spoof2",
+        messages: [
+          msg("p1", "2026-11-09T10:00:00.000Z"),
+          msg("p2", "2026-11-09T11:00:00.000Z", { from: { address: "ME@example.com" }, to: [{ address: "ana@example.com" }] }),
+        ],
+      },
+    ]);
+    const text = await refused({ thread_id: "th_spoof2", body: BODY });
+    expect(text).toContain("pass `to` explicitly");
+  });
+
+  it("a message with sent: true is mine and is skipped as the reply target", async () => {
+    useMail(h, [
+      {
+        id: "th_sent",
+        messages: [
+          msg("t1", "2026-11-09T10:00:00.000Z"),
+          msg("t2", "2026-11-09T11:00:00.000Z", { sent: true, from: { address: "me@example.com" }, to: [{ address: "ana@example.com" }] }),
+        ],
+      },
+    ]);
+    const out = await ok({ thread_id: "th_sent", body: BODY });
+    expect(storedPlan(out.action_id).draft.to).toEqual(["ana@example.com"]);
+    expect(out.new_recipients).toEqual([]);
   });
 
   it("a new bcc is listed in new_recipients (lowercased) and flagged in the diff", async () => {

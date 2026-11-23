@@ -144,6 +144,23 @@ describe("fixture mailbox getThread", () => {
     expect(await mail.getThread("nope", 100)).toBeNull();
   });
 
+  it("sentByOwner is true only for an explicit sent: true, never from the From address", async () => {
+    const mail = createFixtureMailProvider(
+      world([
+        {
+          id: "t1",
+          messages: [
+            msg("m1", "2026-11-08T10:00:00.000Z"),
+            msg("m2", "2026-11-09T10:00:00.000Z", { from: { address: "me@example.com" } }),
+            msg("m3", "2026-11-09T11:00:00.000Z", { from: { address: "me@example.com" }, sent: true }),
+          ],
+        },
+      ]),
+    );
+    const t = await mail.getThread("t1", 100);
+    expect(t!.messages.map((m) => m.sentByOwner)).toEqual([false, false, true]);
+  });
+
   it("keeps the newest maxMessages and flags truncation", async () => {
     const messages = Array.from({ length: 150 }, (_, i) =>
       msg(`m${i}`, new Date(Date.UTC(2026, 0, 1, 0, i)).toISOString()),

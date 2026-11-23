@@ -89,13 +89,14 @@ An optional top-level `mail` key holds the mailbox of the account owner. It is o
 | `messages[].reply_to`, `to`, `cc` | `{ address, name? }[]` | `to` yes; the others no (default `[]`) | |
 | `messages[].subject`, `body_text` | string | yes | text only; there is no HTML in the fixture |
 | `messages[].unread` | boolean | no, default `false` | |
+| `messages[].sent` | boolean | no, default `false` | the owner sent this message (`MailMessage.sentByOwner`). Only this makes a message "mine" for default recipients; a `From` equal to the owner does not. Additive: `fixture_version` is unchanged |
 | `messages[].draft` | boolean | no, default `false` | a draft message; kept out of `getThread` and of the "on the thread" set |
 
 Provider behaviour (the fixture `MailProvider`, `src/providers/fixture/mail.ts`):
 
 - `searchThreads(query, limit)`: the query is split on whitespace and every term must match. `from:<x>` matches a substring of the From address or name; `is:unread` matches threads with an unread message; any other term is a case-insensitive substring of subject, body or addresses. A term with a `:` that is none of these is a `ProviderError` with the phrase `query operator not supported by the fixture provider`. Results are newest `lastDate` first, at most `limit`; `snippet` is the first 100 characters of the latest body.
 - `getThread(id, maxMessages)`: drops `draft: true` messages, keeps the newest `maxMessages` (`truncated` when it cut), oldest first, and cuts each `bodyText` at 20 000 characters (`bodyTruncated`). An unknown id gives `null`.
-- `lookupDraft(messageIdHeader)` and `createDraft(draft)`: `createDraft` records the draft in the world (`draftId` is `dr_<n>`, `messageId` is `msg_dr_<n>`) and appends one line to the write log. A `createDraft` with a `messageIdHeader` that already exists returns the existing draft and writes nothing, which is how crash recovery is simulated. There is no `cancelled` state for drafts (Gmail cannot report a deleted draft).
+- `lookupDraft(messageIdHeader, threadId)` and `createDraft(draft)`: `createDraft` records the draft in the world (`draftId` is `dr_<n>`, `messageId` is `msg_dr_<n>`) and appends one line to the write log. A `createDraft` with a `messageIdHeader` that already exists returns the existing draft and writes nothing, which is how crash recovery is simulated. There is no `cancelled` state for drafts (Gmail cannot report a deleted draft).
 - There is no send operation, by design.
 
 ## All-day events
