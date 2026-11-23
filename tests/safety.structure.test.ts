@@ -192,11 +192,17 @@ describe("safety structure", () => {
       ],
       "oauth.ts": ["fetch: typeof fetch;", "res = await deps.fetch(deps.endpoints.tokenUrl, {"],
     });
-    // Every line naming googleRequest in src/: its definition, calendar.ts's import and its three calls.
+    // Every line naming googleRequest in src/: its definition, calendar.ts's import and its three calls, gmail.ts's
+    // import and its one call.
     expect(Object.fromEntries(FILES.map((f) => [f.path, linesNaming(f.text, "googleRequest").length]).filter(([, n]) => n !== 0))).toEqual({
       "src/providers/google/calendar.ts": 4,
+      "src/providers/google/gmail.ts": 2,
       "src/providers/google/http.ts": 1,
     });
+    // gmail.ts's one call is an inline GET under the read scope: until the draft write exists it cannot write.
+    expect(callArgs(google.find((f) => f.path.endsWith("/gmail.ts"))!.text, "googleRequest")).toEqual([
+      'deps, op, { service: "gmail", method: "GET", url, requiredScope: SCOPE_GMAIL_READ }',
+    ]);
     expect(FILES.filter((f) => INDIRECT.test(f.text)).map((f) => f.path)).toEqual([]);
     // The googleRequest import is never aliased, and no call spreads a request object into its arguments
     // (tests/google.write-surface.test.ts is the behavioural guard behind these).
@@ -213,11 +219,16 @@ describe("safety structure", () => {
       "SCOPE_CALENDAR_READ",
       "SCOPE_CALENDAR_WRITE",
     ]);
-    // googleRequest is called from calendar.ts only, from exactly three places (get, freeBusy, createEvent).
+    // googleRequest is called from exactly three places in calendar.ts (get, freeBusy, createEvent) and one in gmail.ts (get).
     const calls = FILES.flatMap((f) =>
       [...f.text.matchAll(/(?<!function )\bgoogleRequest\s*\(/g)].map(() => f.path),
     );
-    expect(calls).toEqual(["src/providers/google/calendar.ts", "src/providers/google/calendar.ts", "src/providers/google/calendar.ts"]);
+    expect(calls).toEqual([
+      "src/providers/google/calendar.ts",
+      "src/providers/google/calendar.ts",
+      "src/providers/google/calendar.ts",
+      "src/providers/google/gmail.ts",
+    ]);
     // calendar.ts never passes a method by shorthand (`{ method }`), so every method is a visible literal.
     const cal = google.find((f) => f.path.endsWith("/calendar.ts"))!.text;
     expect(cal).not.toMatch(/[{,]\s*method\s*[,}]/);
@@ -400,32 +411,29 @@ describe("safety structure", () => {
     }
   });
 
-  it("until a mailbox exists, the fixture and google mail providers refuse every call with a fixed ProviderError", async () => {
+  it("until a mailbox exists, the fixture refuses every call, and google refuses the draft calls not built yet", async () => {
     const home = makeTempHome();
     try {
       const cases = [
-        ["fixture", "fixture mail", "no mailbox in this world"],
-        ["google", "google mail", "mail is not available for this provider yet"],
+        ["fixture", "fixture mail", "no mailbox in this world", ["profile", "searchThreads", "getThread", "threadMessageIds", "lookupDraft", "createDraft"]],
+        ["google", "google gmail", "mail is not available for this provider yet", ["lookupDraft", "createDraft"]],
       ] as const;
-      for (const [name, label, phrase] of cases) {
+      for (const [name, label, phrase, ops] of cases) {
         const mail = selectProvider(loadConfig({ ...home.env, DESKHAND_PROVIDER: name })).mail!;
-        const calls: [string, () => Promise<unknown>][] = [
-          ["profile", () => mail.profile()],
-          ["searchThreads", () => mail.searchThreads("x", 1)],
-          ["getThread", () => mail.getThread("t", 1)],
-          ["threadMessageIds", () => mail.threadMessageIds("t")],
-          ["lookupDraft", () => mail.lookupDraft("<a@b>", "t")],
-          [
-            "createDraft",
-            () =>
-              mail.createDraft({
-                threadId: "t", messageIdHeader: "<a@b>", inReplyTo: null, references: [],
-                to: ["a@example.com"], cc: [], bcc: [], subject: "s", body: "b",
-              }),
-          ],
-        ];
-        for (const [op, call] of calls) {
-          const err = await call().then(() => undefined, (e: unknown) => e);
+        const calls: Record<string, () => Promise<unknown>> = {
+          profile: () => mail.profile(),
+          searchThreads: () => mail.searchThreads("x", 1),
+          getThread: () => mail.getThread("t", 1),
+          threadMessageIds: () => mail.threadMessageIds("t"),
+          lookupDraft: () => mail.lookupDraft("<a@b>", "t"),
+          createDraft: () =>
+            mail.createDraft({
+              threadId: "t", messageIdHeader: "<a@b>", inReplyTo: null, references: [],
+              to: ["a@example.com"], cc: [], bcc: [], subject: "s", body: "b",
+            }),
+        };
+        for (const op of ops) {
+          const err = await calls[op]!().then(() => undefined, (e: unknown) => e);
           expect(err, `${name} ${op}`).toBeInstanceOf(ProviderError);
           expect((err as ProviderError).message).toBe(`${label} ${op} failed: ${phrase}`);
           expect((err as ProviderError).retryable).toBe(false);

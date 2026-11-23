@@ -5,7 +5,7 @@ import { ensureDirs } from "./config/paths.js";
 import { LedgerDb } from "./ledger/db.js";
 import { createIdGenerator, type Clock } from "./ledger/ids.js";
 import { createGoogleCalendarProvider } from "./providers/google/calendar.js";
-import { createGoogleMailProvider } from "./providers/google/mail.js";
+import { createGmailProvider } from "./providers/google/gmail.js";
 import { GOOGLE_ENDPOINTS } from "./providers/google/oauth.js";
 import { createFixtureMailProvider, createFixtureProvider, loadFixtureWorld } from "./providers/fixture/index.js";
 import type { CalendarProvider, MailProvider } from "./providers/types.js";
@@ -30,14 +30,13 @@ export function selectProvider(config: Config): {
   if (config.provider === "google") {
     // No token is read here: a missing or expired sign-in surfaces as AUTH_REQUIRED on the first call.
     const now = (): Date => new Date();
-    const provider = createGoogleCalendarProvider({
+    const deps = {
       fetch: globalThis.fetch,
       configDir: config.paths.configDir,
       now,
       oauth: { fetch: globalThis.fetch, endpoints: GOOGLE_ENDPOINTS, now },
-    });
-    // Gmail arrives in M4b; until then every mail call refuses with a fixed ProviderError.
-    return { provider, mail: createGoogleMailProvider(), clock: now };
+    };
+    return { provider: createGoogleCalendarProvider(deps), mail: createGmailProvider(deps), clock: now };
   }
   return { provider: null, mail: null, clock: () => new Date() };
 }

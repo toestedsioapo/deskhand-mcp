@@ -1,0 +1,24 @@
+{
+  "request": {
+    "method": "GET",
+    "url": "https://www.googleapis.com/gmail/v1/users/me/threads?q=budget&maxResults=5"
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "threads": [
+        {
+          "id": "t-one",
+          "snippet": "s1",
+          "historyId": "1"
+        },
+        {
+          "id": "t-two",
+          "snippet": "s2",
+          "historyId": "2"
+        }
+      ],
+      "resultSizeEstimate": 2
+    }
+  }
+}
