@@ -1,4 +1,4 @@
-import { readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { ConfigError } from "../../config/env.js";
 
@@ -54,16 +54,42 @@ export function readToken(configDir: string): StoredToken | null {
   return parsed;
 }
 
-/** Temp file then rename, so a failure leaves the previous file intact. Mode 0600 on POSIX. */
+const MAX_TEMP_TRIES = 5;
+
+/**
+ * Temp file then rename, so a failure leaves the previous file intact. Mode 0600 on POSIX. The temp file is created
+ * exclusively (`wx`): a file or symlink already at that path is never followed or overwritten, and a fresh name is
+ * tried instead (at most 5 times).
+ */
 export function writeToken(configDir: string, token: StoredToken): void {
   const file = tokenPath(configDir);
-  const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
   const body = JSON.stringify(token, null, 2) + "\n";
-  try {
-    writeFileSync(tmp, body, { mode: 0o600 });
-    renameSync(tmp, file);
-  } catch (e) {
-    rmSync(tmp, { force: true });
-    throw e;
+  for (let attempt = 0; attempt < MAX_TEMP_TRIES; attempt++) {
+    const tmp = `${file}.${process.pid}.${Date.now()}.${attempt}.tmp`;
+    let fd: number;
+    try {
+      fd = openSync(tmp, "wx", 0o600);
+    } catch (e) {
+      // The open failed, so nothing here is ours: never remove the entry at this path, whatever the error.
+      if ((e as NodeJS.ErrnoException).code === "EEXIST") continue;
+      throw e;
+    }
+    try {
+      try {
+        writeFileSync(fd, body);
+      } finally {
+        closeSync(fd);
+      }
+      renameSync(tmp, file);
+    } catch (e) {
+      try {
+        rmSync(tmp, { force: true });
+      } catch {
+        // A failed cleanup must not replace the original error.
+      }
+      throw e;
+    }
+    return;
   }
+  throw new Error("could not create a temporary token file");
 }

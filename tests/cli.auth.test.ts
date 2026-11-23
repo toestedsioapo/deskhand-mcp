@@ -7,7 +7,7 @@ import { createCliContext } from "../src/cli/context.js";
 import { runCli } from "../src/cli/index.js";
 import type { CliIo } from "../src/cli/io.js";
 import { loadConfig } from "../src/config/env.js";
-import { SCOPE_CALENDAR_READ, SCOPE_CALENDAR_WRITE } from "../src/config/scopes.js";
+import { SCOPE_CALENDAR_READ, SCOPE_CALENDAR_WRITE, SCOPE_GMAIL_COMPOSE, SCOPE_GMAIL_READ } from "../src/config/scopes.js";
 import { LedgerDb } from "../src/ledger/db.js";
 import { queryEvents } from "../src/ledger/events.js";
 import { createIdGenerator } from "../src/ledger/ids.js";
@@ -15,6 +15,9 @@ import { OAuthError, type OAuthDeps } from "../src/providers/google/oauth.js";
 import { readToken, writeToken } from "../src/providers/google/token-store.js";
 import { jsonReply, startFakeOAuth, type FakeOAuth } from "./helpers/fake-oauth.js";
 import { makeTempHome } from "./helpers/home.js";
+
+const READ_SET = [SCOPE_CALENDAR_READ, SCOPE_GMAIL_READ];
+const ALL_SET = [SCOPE_CALENDAR_READ, SCOPE_GMAIL_READ, SCOPE_CALENDAR_WRITE, SCOPE_GMAIL_COMPOSE];
 
 const NOW = new Date("2026-11-14T10:00:00.000Z");
 const SECRET = "SECRET-XYZ-do-not-leak";
@@ -112,50 +115,52 @@ function rows() {
 
 describe("auth login", () => {
   it("writes token.json, prints the link and scope, exit 0, one ok row", async () => {
-    replyScopes([SCOPE_CALENDAR_READ]);
+    replyScopes(READ_SET);
     const s = scriptedIo();
     const code = await authCommand(ctx(), s.io, ["login"], deps());
     await s.settle();
     expect(code).toBe(0);
     expect(s.outText()).toContain("Open this link in your browser to sign in:");
     expect(s.outText()).toContain(SCOPE_CALENDAR_READ);
+    expect(s.outText()).toContain(SCOPE_GMAIL_READ);
     expect(s.outText()).toContain("Sign-in saved. In Testing mode Google expires it after about 7 days.");
-    expect(readToken(home.home)?.scopes).toEqual([SCOPE_CALENDAR_READ]);
+    expect(readToken(home.home)?.scopes).toEqual(READ_SET);
     const r = rows();
     expect(r).toHaveLength(1);
     expect(r[0]).toMatchObject({ kind: "cli_command", outcome: "ok", error_code: null });
     expect(r[0]?.preview).toEqual({
       v: 1,
       input: { subcommand: "login" },
-      output: { scopes: [SCOPE_CALENDAR_READ] },
+      output: { scopes: READ_SET },
       note: null,
     });
   });
 
-  it("with DESKHAND_ALLOW_WRITES=1 still asks for the read scope only", async () => {
-    replyScopes([SCOPE_CALENDAR_READ]);
+  it("with DESKHAND_ALLOW_WRITES=1 still asks for the two read scopes only", async () => {
+    replyScopes(READ_SET);
     const s = scriptedIo();
     expect(await authCommand(ctx({ DESKHAND_ALLOW_WRITES: "1" }), s.io, ["login"], deps())).toBe(0);
     await s.settle();
-    expect(s.browser.urls[0]?.searchParams.get("scope")).toBe(SCOPE_CALENDAR_READ);
+    expect(s.browser.urls[0]?.searchParams.get("scope")).toBe(`${SCOPE_CALENDAR_READ} ${SCOPE_GMAIL_READ}`);
   });
 
   it("the consent URL has no include_granted_scopes, so earlier grants are not folded in", async () => {
-    replyScopes([SCOPE_CALENDAR_READ]);
+    replyScopes(READ_SET);
     const s = scriptedIo();
     expect(await authCommand(ctx(), s.io, ["login"], deps())).toBe(0);
     await s.settle();
     expect(s.browser.urls[0]?.searchParams.has("include_granted_scopes")).toBe(false);
   });
 
-  it("a login whose token response also lists the write scope (an earlier upgrade) stores the read scope only", async () => {
-    replyScopes([SCOPE_CALENDAR_READ, SCOPE_CALENDAR_WRITE]);
+  it("a login whose token response also lists the write scope (an earlier upgrade) stores the read scopes only", async () => {
+    replyScopes(ALL_SET);
     const s = scriptedIo();
     expect(await authCommand(ctx({ DESKHAND_ALLOW_WRITES: "1" }), s.io, ["login"], deps())).toBe(0);
     await s.settle();
-    expect(readToken(home.home)?.scopes).toEqual([SCOPE_CALENDAR_READ]);
+    expect(readToken(home.home)?.scopes).toEqual(READ_SET);
     expect(s.outText()).not.toContain(SCOPE_CALENDAR_WRITE);
-    expect(rows()[0]?.preview).toMatchObject({ output: { scopes: [SCOPE_CALENDAR_READ] } });
+    expect(s.outText()).not.toContain(SCOPE_GMAIL_COMPOSE);
+    expect(rows()[0]?.preview).toMatchObject({ output: { scopes: READ_SET } });
   });
 
   it("denied: exit 1, one stderr line, AUTH_REQUIRED row, no token.json", async () => {
@@ -212,7 +217,7 @@ describe("auth upgrade", () => {
     expect(rows()[0]).toMatchObject({ outcome: "error", error_code: "AUTH_REQUIRED" });
   });
 
-  it("with the flag and a token requests both scopes and stores both", async () => {
+  it("with the flag and a token requests all four scopes and stores all four", async () => {
     writeToken(home.home, {
       version: 1,
       client_id: "cid.apps.googleusercontent.com",
@@ -222,13 +227,13 @@ describe("auth upgrade", () => {
       expires_at: NOW.toISOString(),
       obtained_at: NOW.toISOString(),
     });
-    replyScopes([SCOPE_CALENDAR_READ, SCOPE_CALENDAR_WRITE]);
+    replyScopes(ALL_SET);
     const s = scriptedIo();
     expect(await authCommand(ctx({ DESKHAND_ALLOW_WRITES: "1" }), s.io, ["upgrade"], deps())).toBe(0);
     await s.settle();
-    expect(s.browser.urls[0]?.searchParams.get("scope")).toBe(`${SCOPE_CALENDAR_READ} ${SCOPE_CALENDAR_WRITE}`);
+    expect(s.browser.urls[0]?.searchParams.get("scope")).toBe(ALL_SET.join(" "));
     expect(s.browser.urls[0]?.searchParams.get("include_granted_scopes")).toBe("true");
-    expect(readToken(home.home)?.scopes).toEqual([SCOPE_CALENDAR_READ, SCOPE_CALENDAR_WRITE]);
+    expect(readToken(home.home)?.scopes).toEqual(ALL_SET);
     expect(rows()[0]).toMatchObject({ outcome: "ok" });
   });
 });
@@ -245,12 +250,30 @@ describe("auth status", () => {
       obtained_at: NOW.toISOString(),
     });
 
+  const readSeed = () => ({
+    version: 1 as const,
+    client_id: "cid.apps.googleusercontent.com",
+    scopes: [SCOPE_CALENDAR_READ],
+    refresh_token: REFRESH,
+    access_token: ACCESS,
+    expires_at: NOW.toISOString(),
+    obtained_at: NOW.toISOString(),
+  });
+
   it("with no token exits 1 and says how to log in", async () => {
     const s = scriptedIo();
     expect(await authCommand(ctx(), s.io, ["status"], deps())).toBe(1);
     expect(s.outText()).toContain("client_secret.json: found");
     expect(s.outText()).toContain("deskhand auth login");
     expect(rows()[0]).toMatchObject({ outcome: "error", error_code: "AUTH_REQUIRED" });
+  });
+
+  it("lists the Gmail scopes a token holds", async () => {
+    writeToken(home.home, { ...readSeed(), scopes: ALL_SET });
+    const s = scriptedIo();
+    expect(await authCommand(ctx(), s.io, ["status"], deps())).toBe(0);
+    for (const sc of ALL_SET) expect(s.outText()).toContain(sc);
+    expect(s.outText()).toContain("Write access: yes");
   });
 
   it("3 days after obtained_at says about 4 days left", async () => {
@@ -315,7 +338,7 @@ describe("usage and mapping", () => {
 
 describe("leaks", () => {
   it("no secret, token or code appears in output, ledger rows or sibling files", async () => {
-    replyScopes([SCOPE_CALENDAR_READ]);
+    replyScopes(READ_SET);
     const ok = scriptedIo();
     await authCommand(ctx(), ok.io, ["login"], deps());
     await ok.settle();

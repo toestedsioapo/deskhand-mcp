@@ -1,4 +1,4 @@
-import { SCOPE_CALENDAR_WRITE } from "../../config/scopes.js";
+import { SCOPE_CALENDAR_WRITE, SCOPE_GMAIL_COMPOSE } from "../../config/scopes.js";
 import { AuthRequiredError, ProviderError } from "../errors.js";
 import { loadOAuthClient } from "./client-file.js";
 import { OAuthError, refreshAccessToken, type OAuthDeps } from "./oauth.js";
@@ -18,7 +18,9 @@ export interface GoogleResponse {
   json: unknown;
 }
 
-const PROVIDER = "google calendar";
+export type GoogleService = "calendar" | "gmail";
+/** The provider label in error text. */
+const providerOf = (service: GoogleService): string => `google ${service}`;
 const API_HOST = "www.googleapis.com";
 const REFRESH_MARGIN_MS = 60_000;
 const NOT_SIGNED_IN = "Not signed in to Google. Run: deskhand auth login";
@@ -27,7 +29,45 @@ const EXPIRED = "The Google sign-in has expired or was revoked. Run: deskhand au
 const NO_CLIENT_FILE = "The Google OAuth client file is missing or unreadable. See docs/google-oauth-setup.md";
 
 /** Only a missing write scope is fixed by `auth upgrade`; a missing read scope means signing in again. */
-const missingScopeMessage = (scope: string): string => (scope === SCOPE_CALENDAR_WRITE ? NO_WRITE : NOT_SIGNED_IN);
+const missingScopeMessage = (scope: string): string =>
+  scope === SCOPE_CALENDAR_WRITE || scope === SCOPE_GMAIL_COMPOSE ? NO_WRITE : NOT_SIGNED_IN;
+
+const GMAIL_ID = /^[A-Za-z0-9_-]{1,64}$/;
+const GMAIL_BASE = ["gmail", "v1", "users", "me"];
+
+/** A Gmail id path segment: the raw form and the once-decoded form must both match the id pattern. */
+function isGmailId(raw: string | undefined): boolean {
+  if (raw === undefined || !GMAIL_ID.test(raw)) return false;
+  try {
+    return GMAIL_ID.test(decodeURIComponent(raw));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The only Gmail calls Deskhand makes (M4b decision 2): read the profile, threads and drafts, and create a draft.
+ * Anything else, a send URL included, throws before any token is loaded and before any network call. The caller
+ * adds the operation name; this carries no request content.
+ */
+export function assertAllowedGmailRequest(method: string, url: URL): void {
+  const segments = url.pathname.split("/").slice(1);
+  const rest = segments.slice(GMAIL_BASE.length);
+  const [kind, id] = rest;
+  let ok = false;
+  if (GMAIL_BASE.every((s, i) => segments[i] === s)) {
+    if (method === "GET" && rest.length === 1) ok = kind === "profile" || kind === "threads" || kind === "drafts";
+    else if (method === "GET" && rest.length === 2) ok = (kind === "threads" || kind === "drafts") && isGmailId(id);
+    else if (method === "POST" && rest.length === 1) ok = kind === "drafts";
+  }
+  if (!ok) throw new NotAllowed();
+}
+
+class NotAllowed extends Error {
+  constructor() {
+    super("refused request to an endpoint outside the allowlist");
+  }
+}
 
 const nearExpiry = (t: StoredToken, now: Date): boolean => !(Date.parse(t.expires_at) - now.getTime() >= REFRESH_MARGIN_MS);
 
@@ -46,10 +86,10 @@ function loadToken(configDir: string): StoredToken {
 /** One in-flight refresh per config dir, so parallel requests do not both rotate and write the token. */
 const inflight = new Map<string, Promise<StoredToken>>();
 
-function refresh(deps: GoogleHttpDeps, op: string, staleAccessToken: string): Promise<StoredToken> {
+function refresh(deps: GoogleHttpDeps, service: GoogleService, op: string, staleAccessToken: string): Promise<StoredToken> {
   let p = inflight.get(deps.configDir);
   if (p === undefined) {
-    p = doRefresh(deps, op, staleAccessToken).finally(() => inflight.delete(deps.configDir));
+    p = doRefresh(deps, service, op, staleAccessToken).finally(() => inflight.delete(deps.configDir));
     inflight.set(deps.configDir, p);
   }
   return p;
@@ -71,7 +111,7 @@ function withTimeout<T>(deps: GoogleHttpDeps, run: (signal: AbortSignal) => Prom
   return Promise.race([run(ctl.signal), timeout]).finally(() => clearTimeout(timer));
 }
 
-async function doRefresh(deps: GoogleHttpDeps, op: string, staleAccessToken: string): Promise<StoredToken> {
+async function doRefresh(deps: GoogleHttpDeps, service: GoogleService, op: string, staleAccessToken: string): Promise<StoredToken> {
   // Re-read: another process (or an earlier request) may already have refreshed.
   const current = loadToken(deps.configDir);
   if (current.access_token !== staleAccessToken && !nearExpiry(current, deps.now())) return current;
@@ -89,9 +129,9 @@ async function doRefresh(deps: GoogleHttpDeps, op: string, staleAccessToken: str
     );
   } catch (e) {
     // The API request was not sent: trying again is safe (retryable).
-    if (e instanceof TimedOut) throw new ProviderError(PROVIDER, op, { phrase: "timed out", retryable: true });
+    if (e instanceof TimedOut) throw new ProviderError(providerOf(service), op, { phrase: "timed out", retryable: true });
     if (e instanceof OAuthError && e.code === "AUTH_REQUIRED") throw new AuthRequiredError(EXPIRED);
-    throw new ProviderError(PROVIDER, op, { phrase: "token refresh failed", retryable: true });
+    throw new ProviderError(providerOf(service), op, { phrase: "token refresh failed", retryable: true });
   }
   // Re-read before writing: a `deskhand auth login` or `upgrade` in another process may have saved a new sign-in
   // while we waited for Google. That token is newer than ours: keep the file as it is and use it.
@@ -100,7 +140,7 @@ async function doRefresh(deps: GoogleHttpDeps, op: string, staleAccessToken: str
   try {
     writeToken(deps.configDir, next);
   } catch {
-    throw new ProviderError(PROVIDER, op, { phrase: "could not save token", retryable: true });
+    throw new ProviderError(providerOf(service), op, { phrase: "could not save token", retryable: true });
   }
   return next;
 }
@@ -113,6 +153,7 @@ const reasonOf = (json: unknown): string | undefined => {
 
 async function send(
   deps: GoogleHttpDeps,
+  service: GoogleService,
   op: string,
   req: { method: "GET" | "POST"; url: string; body?: unknown },
   accessToken: string,
@@ -137,7 +178,7 @@ async function send(
   } catch (e) {
     const timedOut = (e as { name?: string } | null)?.name === "TimeoutError";
     // The outcome is unknown (the request may have reached Google): retryable, never a definite rejection.
-    throw new ProviderError(PROVIDER, op, { phrase: timedOut ? "timed out" : "network error", retryable: true });
+    throw new ProviderError(providerOf(service), op, { phrase: timedOut ? "timed out" : "network error", retryable: true });
   }
 }
 
@@ -156,31 +197,40 @@ async function send(
 export async function googleRequest(
   deps: GoogleHttpDeps,
   op: string,
-  req: { method: "GET" | "POST"; url: string; body?: unknown; requiredScope: string; singleSend?: boolean },
+  req: { service: GoogleService; method: "GET" | "POST"; url: string; body?: unknown; requiredScope: string; singleSend?: boolean },
 ): Promise<GoogleResponse> {
   let url: URL;
   try {
     url = new URL(req.url);
   } catch {
-    throw new ProviderError(PROVIDER, op, { phrase: "invalid request URL" });
+    throw new ProviderError(providerOf(req.service), op, { phrase: "invalid request URL" });
   }
   if (url.protocol !== "https:" || url.hostname !== API_HOST || url.port !== "" || url.username !== "" || url.password !== "") {
-    throw new ProviderError(PROVIDER, op, { phrase: "refused request to an unexpected host" });
+    throw new ProviderError(providerOf(req.service), op, { phrase: "refused request to an unexpected host" });
+  }
+  // The service label is bound to the path (checked on the parsed URL, the form that is sent), so a Gmail URL cannot
+  // pass under the calendar label and skip the allowlist.
+  try {
+    if (req.service === "gmail") assertAllowedGmailRequest(req.method, url);
+    else if (!url.pathname.startsWith("/calendar/v3/")) throw new NotAllowed();
+  } catch (e) {
+    if (e instanceof NotAllowed) throw new ProviderError(providerOf(req.service), op, { phrase: e.message });
+    throw e;
   }
 
   let token = loadToken(deps.configDir);
   if (!token.scopes.includes(req.requiredScope)) throw new AuthRequiredError(missingScopeMessage(req.requiredScope));
-  if (nearExpiry(token, deps.now())) token = await refresh(deps, op, token.access_token);
+  if (nearExpiry(token, deps.now())) token = await refresh(deps, req.service, op, token.access_token);
 
-  let res = await send(deps, op, req, token.access_token);
+  let res = await send(deps, req.service, op, req, token.access_token);
   if (res.status === 401) {
-    token = await refresh(deps, op, token.access_token);
-    if (req.singleSend === true) throw new ProviderError(PROVIDER, op, { phrase: "access token refreshed; retry", retryable: true });
-    res = await send(deps, op, req, token.access_token);
+    token = await refresh(deps, req.service, op, token.access_token);
+    if (req.singleSend === true) throw new ProviderError(providerOf(req.service), op, { phrase: "access token refreshed; retry", retryable: true });
+    res = await send(deps, req.service, op, req, token.access_token);
     if (res.status === 401) throw new AuthRequiredError(EXPIRED);
   }
   const reason = reasonOf(res.json);
   if (res.status === 403 && reason === "insufficientPermissions") throw new AuthRequiredError(missingScopeMessage(req.requiredScope));
   if ((res.status >= 200 && res.status < 300) || res.status === 404 || res.status === 409) return res;
-  throw new ProviderError(PROVIDER, op, { status: res.status, reason });
+  throw new ProviderError(providerOf(req.service), op, { status: res.status, reason });
 }

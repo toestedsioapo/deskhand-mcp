@@ -91,7 +91,7 @@ const instant = (op: string, v: unknown): string => {
 export function createGoogleCalendarProvider(deps: GoogleHttpDeps): CalendarProvider {
   const cal = (id: string): string => `${BASE}/calendars/${encodeURIComponent(id)}`;
   /** A read: GET only, under the read scope. The two POSTs (freeBusy, insert) are spelled out where they are sent. */
-  const get = (op: string, url: string) => googleRequest(deps, op, { method: "GET", url, requiredScope: SCOPE_CALENDAR_READ });
+  const get = (op: string, url: string) => googleRequest(deps, op, { service: "calendar", method: "GET", url, requiredScope: SCOPE_CALENDAR_READ });
 
   /** One event by id: 404 is absent, `status: cancelled` is cancelled (a deleted event), anything else is mapped. */
   const lookup = async (op: string, calendarId: string, id: string): Promise<EventLookup> => {
@@ -106,6 +106,7 @@ export function createGoogleCalendarProvider(deps: GoogleHttpDeps): CalendarProv
       const op = "freebusy";
       // A query, not a write: POST is how the API takes it, under the read scope.
       const res = await googleRequest(deps, op, {
+        service: "calendar",
         method: "POST",
         url: `${BASE}/freeBusy`,
         body: { timeMin: range.start, timeMax: range.end, items: [{ id: calendarId }] },
@@ -162,6 +163,7 @@ export function createGoogleCalendarProvider(deps: GoogleHttpDeps): CalendarProv
       // No spread inside the request's arguments (a structural guard forbids it): build the times here.
       const at = (dateTime: string) => (event.timeZone === undefined ? { dateTime } : { dateTime, timeZone: event.timeZone });
       const res = await googleRequest(deps, op, {
+        service: "calendar",
         method: "POST",
         url,
         body: {

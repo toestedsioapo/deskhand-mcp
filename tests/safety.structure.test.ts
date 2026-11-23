@@ -74,8 +74,8 @@ function linesNaming(text: string, word: string): string[] {
 /** An indirect call (`.call(`/`.apply(`/`.bind(`) or an alias (`= fetch`, `= deps.fetch`, `= googleRequest`). */
 const INDIRECT = /\b(?:fetch|googleRequest)\s*\.\s*(?:call|apply|bind)\b|=\s*(?:[\w.]+\.)?(?:fetch|googleRequest)\s*(?:[;,)]|$)/m;
 
-/** googleRequest's arguments: `deps, op,` then an inline object literal whose first property is a literal method. */
-const INLINE_REQUEST = /^deps, op, \{\s*method: "(?:GET|POST)",/;
+/** googleRequest's arguments: `deps, op,` then an inline object literal whose first properties are the literal calendar service and a literal method. */
+const INLINE_REQUEST = /^deps, op, \{\s*service: "calendar",\s*method: "(?:GET|POST)",/;
 
 /** An import that renames googleRequest (`googleRequest as x`). */
 const ALIASED_IMPORT = /\bimport\b[^;]*\bgoogleRequest\s+as\b/;
@@ -162,7 +162,8 @@ describe("safety structure", () => {
     // A "POST" string anywhere (a variable, an argument, a property), except the `"GET" | "POST"` type of http.ts.
     expect(
       Object.fromEntries(google.map((f) => [name(f.path), postLiterals(f.text)]).filter(([, n]) => n !== 0)),
-    ).toEqual({ "calendar.ts": 2, "oauth.ts": 1 });
+    ).toEqual({ "calendar.ts": 2, "http.ts": 1, "oauth.ts": 1 });
+    // http.ts's one "POST" is the Gmail allowlist's only write row (create a draft); it sends nothing by itself.
     // Network calls: http.ts `send` (deps.fetch) and the refresh pass-through to the token endpoint; oauth.ts postToken.
     expect(Object.fromEntries(google.map((f) => [name(f.path), fetchCalls(f.text)]).filter(([, c]) => c.length > 0))).toEqual({
       "http.ts": ["deps.fetch(req.url,", "deps.oauth.fetch(u,"],
@@ -180,6 +181,7 @@ describe("safety structure", () => {
       '"GET" | "POST"',
       '"GET" | "POST"',
       "req.method",
+      "string", // assertAllowedGmailRequest(method: string, url): it only compares the method
     ]);
     // Every line naming fetch at all, pinned: no `.call`/`.bind`, alias or extra reference can slip in.
     expect(Object.fromEntries(google.map((f) => [name(f.path), linesNaming(f.text, "fetch")]).filter(([, l]) => l.length > 0))).toEqual({
@@ -253,7 +255,8 @@ describe("safety structure", () => {
       "}",
     ].join("\n");
     expect(callArgs(mutant, "googleRequest").filter((a) => !INLINE_REQUEST.test(a))).toEqual(["deps, op, r"]);
-    expect(INLINE_REQUEST.test('deps, op, {\n        method: "POST",\n        url: `${BASE}/freeBusy`,')).toBe(true);
+    expect(INLINE_REQUEST.test('deps, op, {\n        service: "calendar",\n        method: "POST",\n        url: `${BASE}/freeBusy`,')).toBe(true);
+    expect(INLINE_REQUEST.test('deps, op, { service: "gmail", method: "GET", url }')).toBe(false);
     expect(INLINE_REQUEST.test('deps, op, { url, method: "GET" }')).toBe(false);
   });
 
