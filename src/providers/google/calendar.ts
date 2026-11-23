@@ -1,7 +1,7 @@
 import { SCOPE_CALENDAR_READ, SCOPE_CALENDAR_WRITE } from "../../config/scopes.js";
 import { EVENT_DELETED, ProviderError } from "../errors.js";
 import type { CalendarProvider, EventLookup, EventRef, NewCalendarEvent, TimeRange } from "../types.js";
-import { googleRequest, type GoogleHttpDeps, type GoogleResponse } from "./http.js";
+import { ENDPOINT_REFUSED, googleRequest, type GoogleHttpDeps, type GoogleResponse } from "./http.js";
 
 const PROVIDER = "google calendar";
 const BASE = "https://www.googleapis.com/calendar/v3";
@@ -88,14 +88,20 @@ const instant = (op: string, v: unknown): string => {
   return new Date(t).toISOString();
 };
 
+/** An id as one path segment. `.` and `..` survive encoding and a URL parser would resolve them to another path. */
+function segment(op: string, id: string): string {
+  if (id === "." || id === "..") throw new ProviderError(PROVIDER, op, { phrase: ENDPOINT_REFUSED });
+  return encodeURIComponent(id);
+}
+
 export function createGoogleCalendarProvider(deps: GoogleHttpDeps): CalendarProvider {
-  const cal = (id: string): string => `${BASE}/calendars/${encodeURIComponent(id)}`;
+  const cal = (op: string, id: string): string => `${BASE}/calendars/${segment(op, id)}`;
   /** A read: GET only, under the read scope. The two POSTs (freeBusy, insert) are spelled out where they are sent. */
   const get = (op: string, url: string) => googleRequest(deps, op, { service: "calendar", method: "GET", url, requiredScope: SCOPE_CALENDAR_READ });
 
   /** One event by id: 404 is absent, `status: cancelled` is cancelled (a deleted event), anything else is mapped. */
   const lookup = async (op: string, calendarId: string, id: string): Promise<EventLookup> => {
-    const res = await get(op, `${cal(calendarId)}/events/${encodeURIComponent(id)}`);
+    const res = await get(op, `${cal(op, calendarId)}/events/${segment(op, id)}`);
     if (res.status === 404) return { state: "absent" };
     const event = mapEvent(op, body(op, res));
     return event === null ? { state: "cancelled" } : { state: "present", event };
@@ -104,6 +110,7 @@ export function createGoogleCalendarProvider(deps: GoogleHttpDeps): CalendarProv
   return {
     async freeBusy(calendarId: string, range: TimeRange) {
       const op = "freebusy";
+      segment(op, calendarId);
       // A query, not a write: POST is how the API takes it, under the read scope.
       const res = await googleRequest(deps, op, {
         service: "calendar",
@@ -145,7 +152,7 @@ export function createGoogleCalendarProvider(deps: GoogleHttpDeps): CalendarProv
         maxResults: String(limit),
         fields: LIST_FIELDS,
       });
-      const res = await get(op, `${cal(calendarId)}/events?${params.toString()}`);
+      const res = await get(op, `${cal(op, calendarId)}/events?${params.toString()}`);
       const json = body(op, res);
       const items = Array.isArray(json.items) ? json.items : [];
       const events = items.flatMap((item: unknown) => {
@@ -159,7 +166,7 @@ export function createGoogleCalendarProvider(deps: GoogleHttpDeps): CalendarProv
     async createEvent(event: NewCalendarEvent, idempotencyKey: string) {
       const op = "events.insert";
       if (!EVENT_ID.test(idempotencyKey)) throw unreadable(op, "invalid event id");
-      const url = `${cal(event.calendarId)}/events?${new URLSearchParams({ sendUpdates: event.sendUpdates }).toString()}`;
+      const url = `${cal(op, event.calendarId)}/events?${new URLSearchParams({ sendUpdates: event.sendUpdates }).toString()}`;
       // No spread inside the request's arguments (a structural guard forbids it): build the times here.
       const at = (dateTime: string) => (event.timeZone === undefined ? { dateTime } : { dateTime, timeZone: event.timeZone });
       const res = await googleRequest(deps, op, {

@@ -273,3 +273,141 @@ describe("messageBody", () => {
     expect(() => messageBody(bad, 100)).not.toThrow();
   });
 });
+
+describe("htmlToText shows what a mail client shows (M4b fix wave B)", () => {
+  it.each([
+    ["<html><head><title>x</title>Please wire the money today", ["Please wire the money today"]],
+    ["<head>WIRE $9000</head>", ["WIRE $9000"]],
+    ["<p>Visible start</p><head>Middle sentence the reader sees<br>more text", ["Visible start", "Middle sentence the reader sees", "more text"]],
+    ["<p>a</p><head><meta x>Important paragraph</p>end", ["a", "Important paragraph", "end"]],
+    ["<!-- x --!>VISIBLE", ["VISIBLE"]],
+    ["<xmp><script></xmp>VISIBLE", ["VISIBLE"]],
+  ])("%s", (html, pieces) => {
+    const t = htmlToText(html);
+    for (const p of pieces) expect(t).toContain(p);
+  });
+
+  it("xmp content is literal text, with no tag or entity read inside it", () => {
+    expect(htmlToText("<xmp><b>bold</b> &amp;</xmp>after")).toBe("<b>bold</b> &amp;after");
+  });
+  it("textarea content is literal markup with entities decoded, as in the HTML parser", () => {
+    expect(htmlToText("<textarea><b>x</b> &amp;</textarea>after")).toBe("<b>x</b> &after");
+  });
+  it("an unclosed xmp or textarea still shows the rest of the mail", () => {
+    expect(htmlToText("<xmp><!-- rest")).toBe("<!-- rest");
+    expect(htmlToText("<textarea><script>rest")).toBe("<script>rest");
+  });
+  it.each(["iframe", "noembed", "noframes"])("%s content is not shown, and the text after its end tag is", (name) => {
+    expect(htmlToText(`<${name}><p>HIDDEN</p></${name}>VISIBLE`)).toBe("VISIBLE");
+    expect(htmlToText(`<${name.toUpperCase()}>HIDDEN</${name} x=">">VISIBLE`)).toBe("VISIBLE");
+  });
+  it("plaintext shows everything after it as literal text", () => {
+    expect(htmlToText("<plaintext><!-- VISIBLE <script>x")).toBe("<!-- VISIBLE <script>x");
+  });
+  it("script, style and title text never appears, in or out of head", () => {
+    const t = htmlToText("<head><title>TITLE</title><style>STYLE</style><script>SCRIPT</script>shown<title>T2</title><style>S2</style><script>S3</script></head>");
+    expect(t).toBe("shown");
+  });
+  it("whitespace in head adds nothing", () => {
+    expect(htmlToText("<html>\n<head>\n  <meta x>\n</head>\n<body>shown</body></html>")).toBe("shown");
+  });
+  it.each(["<!-- x", "<xmp", "<iframe>", "<head", '<a b="', "</", "<!", "<?", "<textarea>&#xD800;"])("never throws on %s", (html) => {
+    expect(() => htmlToText(html)).not.toThrow();
+  });
+});
+
+describe("htmlToText stays linear on hostile markup (M4b fix wave C)", () => {
+  const BOUND_MS = 4000;
+  it.each([
+    ["balanced quotes after =", '<a =">" '],
+    ["unterminated quote", '<a x="'],
+    ["single quotes", "<a ='>' "],
+    ["unterminated comment", "<!-- "],
+    ["almost a comment end", "<!-- --"],
+    ["unterminated script", "<script>"],
+    ["unterminated xmp", "<xmp>"],
+    ["unterminated iframe", "<iframe>"],
+    ["unterminated title", "<title>x"],
+    ["closed raw elements", "<xmp>x</xmp>"],
+  ])("%s at 400 KB", (_name, unit) => {
+    const html = unit.repeat(Math.ceil(400_000 / unit.length));
+    const started = Date.now();
+    htmlToText(html);
+    expect(Date.now() - started).toBeLessThan(BOUND_MS);
+  }, 120_000);
+});
+
+describe("htmlToText tag names and script data (M4b fix wave B, targeted round)", () => {
+  it.each(["constructor", "__proto__", "toString", "hasOwnProperty"])("<%s> is an unknown element: text shown, Object untouched", (name) => {
+    expect(htmlToText(`<${name}>Please wire the money`)).toContain("Please wire the money");
+    expect(Object.hasOwn(Object, "lastIndex")).toBe(false);
+    expect("lastIndex" in Object.prototype).toBe(false);
+  });
+
+  const RAW = ["script", "style", "iframe", "noembed", "noframes", "title"];
+  const SUFFIXES = ["_", ".", "-"];
+  it.each(RAW.flatMap((n) => SUFFIXES.map((s) => `${n}${s}x`)))("<%s> is another element, so its text is shown", (name) => {
+    expect(htmlToText(`<${name}>Please wire the money`)).toBe("Please wire the money");
+  });
+  it("the regression vector", () => {
+    expect(htmlToText("<iframe_x>Please wire the money")).toBe("Please wire the money");
+  });
+  it.each(["head_x", "head.x", "meta_x", "title.x", "plaintext.x", "xmp_x", "textarea.x"])("<%s> uses its full name", (name) => {
+    expect(htmlToText(`<${name}>shown<b>too</b>`)).toBe("showntoo");
+  });
+  it.each(["<br_x>", "<p.x>"])("%s is not a line break", (tag) => {
+    expect(htmlToText(`a${tag}b`)).toBe("ab");
+  });
+  it.each(["\t", "\n", "\f", "\r", " ", "/"])("a tag name ends at %j", (d) => {
+    expect(htmlToText(`<style${d}x>HIDDEN</style>after`)).toBe("after");
+    expect(htmlToText(`a<br${d}>b`)).toBe("a\nb");
+  });
+
+  it.each([" ", "\v", " ", "x", "_"])("%j after an end-tag name does not end script or style", (c) => {
+    expect(htmlToText(`<script>a</script${c}>LEAK</script>after`)).toBe("after");
+    expect(htmlToText(`<style>a</style${c}>LEAK</style>after`)).toBe("after");
+  });
+  it.each(["\t", "\n", "\f", "\r", " ", "/", ">"])("%j after an end-tag name ends the element", (c) => {
+    const close = c === ">" ? ">" : `${c}>`;
+    expect(htmlToText(`<script>a</SCRIPT${close}after`)).toBe("after");
+    expect(htmlToText(`<style>a</STYLE${close}after`)).toBe("after");
+  });
+
+  it.each([
+    ["the double-escaped example", "<script><!-- <script> </script> LEAK --></script>after"],
+    ["an escaped end tag still ends the script", "<script><!-- </script>after"],
+    ["<!--> leaves the escape at once", "<script><!--></script>after"],
+    ["<!---> leaves the escape at once", "<script><!---></script>after"],
+    ["--> returns from double-escaped", "<script><!-- <script> --></script>after"],
+    ["a longer name does not double-escape", "<script><!-- <scriptx> </script>after"],
+    ["a double-escape end returns to escaped", "<script><!-- <script> </script> </script>after"],
+    ["any case", "<SCRIPT><!-- <ScRiPt> </sCrIpT> LEAK --></SCRIPT>after"],
+    ["slash delimiters", "<script><!-- <script/> </script/> LEAK --></script>after"],
+    ["<script outside an escape does nothing", "<script><script></script>after"],
+  ])("%s", (_name, html) => {
+    expect(htmlToText(html)).toBe("after");
+  });
+  it.each([
+    "<script>a",
+    "<script>a</script",
+    "<script><!-- rest",
+    "<script><!-- <script> rest",
+    "<script><!-- <script> </script> rest",
+  ])("an unterminated script hides the rest: %s", (html) => {
+    expect(htmlToText(`before${html}`)).toBe("before");
+  });
+
+  it.each([
+    ["script open", "<script><!-- <script> ", "<script>"],
+    ["double-escape toggles", "<script> </script> ", "<script><!-- <script> "],
+    ["escape toggles", "<!-- --> ", "<script>"],
+    ["partial tokens", "</scrip <!- -- ", "<script>"],
+    ["closed scripts", "<script><!-- --></script>", ""],
+    ["long tag names", "<aaaaaaaa", ""],
+  ])("%s at 400 KB stays linear", (_name, unit, prefix) => {
+    const html = prefix + unit.repeat(Math.ceil(400_000 / unit.length));
+    const started = Date.now();
+    htmlToText(html);
+    expect(Date.now() - started).toBeLessThan(4000);
+  }, 120_000);
+});

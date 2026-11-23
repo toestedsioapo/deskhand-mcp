@@ -116,15 +116,18 @@ function closeComment(s: string, open: number): number {
 /**
  * An RFC 5322 address list: quoted strings, comments, `<...>` and groups. Names are decoded after the list is split,
  * so an encoded comma cannot add an address. An entry that does not parse is dropped; an unterminated quote, comment
- * or `<` drops everything after it, and a group with no closing `;` drops its members.
+ * or `<` drops everything after it, and a group with no closing `;` drops its members. `clean` is false when anything
+ * was dropped or the list used a group, which `buildDraftMime` never writes.
  */
-export function parseAddressList(list: string): MailAddress[] {
+function scanAddressList(list: string): { addresses: MailAddress[]; clean: boolean } {
   const out: MailAddress[] = [];
   let group: MailAddress[] | null = null;
+  let clean = true;
   let e = newEntry();
   const flush = (): void => {
     const a = finishEntry(e);
     if (a !== null) (group ?? out).push(a);
+    else if (e.bad || e.quoted || e.angle !== null || e.phrase.trim() !== "") clean = false;
     e = newEntry();
   };
   let i = 0;
@@ -167,6 +170,7 @@ export function parseAddressList(list: string): MailAddress[] {
       group = null;
       i++;
     } else if (c === ":") {
+      clean = false;
       if (group === null && e.angle === null && !e.bad && e.phrase.trim() !== "") {
         group = [];
         e = newEntry();
@@ -181,7 +185,28 @@ export function parseAddressList(list: string): MailAddress[] {
     }
   }
   flush();
-  return out;
+  return { addresses: out, clean };
+}
+
+/** The lenient reader for received mail: what parses, and nothing else. */
+export const parseAddressList = (list: string): MailAddress[] => scanAddressList(list).addresses;
+
+/**
+ * A stored draft's recipients under one header name, for comparing with an approved plan. Null when the header is
+ * repeated, is not text, or holds anything the lenient reader would drop: a recipient the approver never saw must not
+ * vanish from the comparison. A missing header is an empty list.
+ */
+export function strictRecipients(payload: unknown, name: string): string[] | null {
+  if (!isObj(payload) || !Array.isArray(payload.headers)) return [];
+  const wanted = name.toLowerCase();
+  const found = (payload.headers as unknown[]).filter(
+    (h): h is Obj => isObj(h) && typeof h.name === "string" && h.name.toLowerCase() === wanted,
+  );
+  if (found.length === 0) return [];
+  const value = found[0]!.value;
+  if (found.length > 1 || typeof value !== "string") return null;
+  const { addresses, clean } = scanAddressList(value);
+  return clean ? addresses.map((a) => a.address) : null;
 }
 
 const NAMED: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " " };
@@ -191,54 +216,113 @@ function codePoint(n: number): string {
 }
 
 /** One pass, so `&amp;lt;` is `&lt;` and never `<`. */
-const decodeEntities = (s: string): string =>
+export const decodeEntities = (s: string): string =>
   s.replace(/&(?:#(\d{1,8})|#[xX]([0-9a-fA-F]{1,8})|(amp|lt|gt|quot|apos|nbsp));/g, (_m, dec?: string, hex?: string, name?: string) => {
     if (name !== undefined) return NAMED[name]!;
     return codePoint(dec !== undefined ? Number.parseInt(dec, 10) : Number.parseInt(hex!, 16));
   });
 
+/** The tokenizer's position inside a tag: outside a value, just after `=`, or in a quoted value. */
+const OUTSIDE = 0;
+const AFTER_EQUALS = 1;
+const IN_DOUBLE = 2;
+const IN_SINGLE = 3;
+
 /**
  * The `>` ending a tag. A quote opens an attribute value only right after `=`, as in the HTML tokenizer. If a quote
  * never closes, the first `>` ends the tag, so a broken attribute cannot hide the rest of the mail. -1 when no `>`.
+ *
+ * `seen` holds, per position, the states an earlier scan of this text passed through. A scan that ended at a `>` moved
+ * the parser past everything it saw, so meeting a seen state means that earlier scan ran off the end, and this one
+ * would too. Each position is scanned at most once per state, which keeps a whole document linear.
  */
-function tagEnd(html: string, from: number): number {
-  let quote = "";
-  let afterEquals = false;
+function tagEnd(html: string, from: number, seen: Uint8Array): number {
+  let state = OUTSIDE;
   for (let i = from; i < html.length; i++) {
+    const bit = 1 << state;
+    if ((seen[i]! & bit) !== 0) break;
+    seen[i]! |= bit;
     const c = html[i]!;
-    if (quote !== "") {
-      if (c === quote) quote = "";
+    if (state === IN_DOUBLE || state === IN_SINGLE) {
+      if (c === (state === IN_DOUBLE ? '"' : "'")) state = OUTSIDE;
     } else if (c === ">") {
       return i;
-    } else if ((c === '"' || c === "'") && afterEquals) {
-      quote = c;
-      afterEquals = false;
+    } else if (state === AFTER_EQUALS && c === '"') {
+      state = IN_DOUBLE;
+    } else if (state === AFTER_EQUALS && c === "'") {
+      state = IN_SINGLE;
     } else if (c === "=") {
-      afterEquals = true;
+      state = AFTER_EQUALS;
     } else if (c !== " " && c !== "\t" && c !== "\n" && c !== "\r" && c !== "\f") {
-      afterEquals = false;
+      state = OUTSIDE;
     }
   }
   return html.indexOf(">", from);
 }
 
-const TAG_NAME = /<(\/?)([a-zA-Z][a-zA-Z0-9:-]*)/y;
+/** As in the HTML tokenizer: a tag name runs until HTML whitespace, `/` or `>`. */
+const TAG_NAME = /<(\/?)([a-zA-Z][^\t\n\f\r />]*)/y;
+const COMMENT_END = /--!?>/g;
 const BREAKS = new Set(["br", "p", "div", "li", "tr"]);
-const CLOSERS: Record<string, RegExp> = {
-  script: /<\/script(?=[\s/>]|$)/gi,
-  style: /<\/style(?=[\s/>]|$)/gi,
-  title: /<\/title(?=[\s/>]|$)/gi,
-};
-/** Start tags that may appear in head; any other start tag ends an unclosed head. */
-const HEAD_TAGS = new Set(["head", "title", "meta", "link", "base", "style", "script", "noscript", "template"]);
+const SCRIPT_TOKEN = /<!--|-->|<\/?script(?=[\t\n\f\r />])/gi;
 
-/** Mail HTML as readable text. Script, style, title and head content never comes through, however broken the markup. */
+/**
+ * Where a script's end tag starts, or -1, following the HTML script-data states. After `<!--` the script is escaped; a
+ * `<script` there makes it double-escaped, where `</script` only steps back to escaped; `-->` leaves both.
+ */
+function scriptEnd(html: string, from: number): number {
+  let state: "data" | "escaped" | "double" = "data";
+  SCRIPT_TOKEN.lastIndex = from;
+  for (let m = SCRIPT_TOKEN.exec(html); m !== null; m = SCRIPT_TOKEN.exec(html)) {
+    const token = m[0].toLowerCase();
+    if (token === "<!--") {
+      if (state === "data") state = "escaped";
+      // Its two dashes can also begin the `-->` that ends the escape: `<!-->`.
+      SCRIPT_TOKEN.lastIndex = m.index + 2;
+    } else if (token === "-->") {
+      state = "data";
+    } else if (token === "<script") {
+      if (state === "escaped") state = "double";
+    } else if (state === "double") {
+      state = "escaped";
+    } else {
+      return m.index;
+    }
+  }
+  return -1;
+}
+
+/** Finds the element's end tag: only HTML whitespace, `/` or `>` (or the end of the text) may follow its name. */
+function endTagFinder(name: string): (html: string, from: number) => number {
+  const closer = new RegExp(`</${name}(?=[\\t\\n\\f\\r />]|$)`, "gi");
+  return (html, from) => {
+    closer.lastIndex = from;
+    return closer.exec(html)?.index ?? -1;
+  };
+}
+
+/** Elements whose content the HTML parser does not read as markup, each with how to find its end tag. */
+const RAW_TEXT = new Map<string, (html: string, from: number) => number>([
+  ["script", scriptEnd],
+  ...["style", "title", "iframe", "noembed", "noframes", "xmp", "textarea"].map((n): [string, (html: string, from: number) => number] => [n, endTagFinder(n)]),
+]);
+/** Raw-text elements a mail client shows, as literal text. `textarea` still decodes entities; `xmp` does not. */
+const SHOWN_RAW = new Map<string, (s: string) => string>([
+  ["xmp", (s) => s],
+  ["textarea", decodeEntities],
+]);
+
+/**
+ * Mail HTML as readable text. Script, style and title text and the content of iframe, noembed and noframes never come
+ * through, however broken the markup. Head is not a hiding place: as in the HTML parser, text inside it ends it, so its
+ * tags are simply dropped. CSS and the `hidden` attribute are not evaluated (docs/SECURITY.md).
+ */
 export function htmlToText(html: string): string {
   const parts: string[] = [];
-  let inHead = false;
+  const seen = new Uint8Array(html.length);
   let titleCloses = true; // false once a search found no `</title`, so repeated unclosed titles stay linear
   const emit = (s: string): void => {
-    if (!inHead && s !== "") parts.push(decodeEntities(s));
+    if (s !== "") parts.push(decodeEntities(s));
   };
   let i = 0;
   while (i < html.length) {
@@ -258,9 +342,10 @@ export function htmlToText(html: string): string {
       continue;
     }
     if (html.startsWith("<!--", lt)) {
-      const end = html.indexOf("-->", lt + 4);
-      if (end < 0) break;
-      i = end + 3;
+      COMMENT_END.lastIndex = lt + 4;
+      const close = COMMENT_END.exec(html);
+      if (close === null) break;
+      i = close.index + close[0].length;
       continue;
     }
     if (html[lt + 1] === "!" || html[lt + 1] === "?") {
@@ -276,19 +361,25 @@ export function htmlToText(html: string): string {
       i = lt + 1;
       continue;
     }
-    const end = tagEnd(html, lt + m[0].length);
+    const end = tagEnd(html, lt + m[0].length, seen);
     if (end < 0) break;
     const closing = m[1] === "/";
     const name = m[2]!.toLowerCase();
     i = end + 1;
-    // Head content is dropped by state, not by a search for `</head`: a script inside it may hold that very text.
-    if (name === "head") inHead = !closing;
-    else if (!closing && !HEAD_TAGS.has(name)) inHead = false;
-    const closer = closing ? undefined : CLOSERS[name];
-    if (closer !== undefined) {
-      closer.lastIndex = i;
-      const close = name === "title" && !titleCloses ? null : closer.exec(html);
-      if (close === null && name === "title") {
+    if (!closing && name === "plaintext") {
+      // Nothing ends plaintext: the rest of the mail is literal text.
+      parts.push(html.slice(i));
+      break;
+    }
+    const findEnd = closing ? undefined : RAW_TEXT.get(name);
+    if (findEnd === undefined) {
+      if (BREAKS.has(name)) parts.push("\n");
+      continue;
+    }
+    const shown = SHOWN_RAW.get(name);
+    const close = name === "title" && !titleCloses ? -1 : findEnd(html, i);
+    if (close < 0) {
+      if (name === "title") {
         // An unclosed title loses only its own text, up to the next tag, and not the rest of the mail.
         titleCloses = false;
         const next = html.indexOf("<", i);
@@ -296,13 +387,13 @@ export function htmlToText(html: string): string {
         i = next;
         continue;
       }
-      if (close === null) break;
-      const closeEnd = html.indexOf(">", close.index);
-      if (closeEnd < 0) break;
-      i = closeEnd + 1;
-    } else if (BREAKS.has(name) && !inHead) {
-      parts.push("\n");
+      if (shown !== undefined) parts.push(shown(html.slice(i)));
+      break;
     }
+    if (shown !== undefined) parts.push(shown(html.slice(i, close)));
+    const closeEnd = tagEnd(html, close + 2 + name.length, seen);
+    if (closeEnd < 0) break;
+    i = closeEnd + 1;
   }
   return parts
     .join("")

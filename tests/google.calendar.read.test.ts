@@ -6,7 +6,7 @@ import type { AppContext } from "../src/app-context.js";
 import { SCOPE_CALENDAR_READ } from "../src/config/scopes.js";
 import { ProviderError } from "../src/providers/errors.js";
 import { createGoogleCalendarProvider } from "../src/providers/google/calendar.js";
-import type { GoogleHttpDeps } from "../src/providers/google/http.js";
+import { googleRequest, type GoogleHttpDeps } from "../src/providers/google/http.js";
 import { GOOGLE_ENDPOINTS } from "../src/providers/google/oauth.js";
 import { writeToken } from "../src/providers/google/token-store.js";
 import { calendarListEventsHandler } from "../src/tools/calendar-list-events.js";
@@ -260,5 +260,134 @@ describe("lookupEvent", () => {
   it("a live event is present and mapped as getEvent maps it", async () => {
     const r = await provider(["events-get"]).lookupEvent("primary", "evt-standup-1");
     expect(r).toMatchObject({ state: "present", event: { id: "evt-standup-1", start: "2026-11-12T08:00:00.000Z" } });
+  });
+});
+
+describe("calendar request targets (M4b fix wave E)", () => {
+  const REFUSED = "refused request to an endpoint outside the allowlist";
+  const recording = () => {
+    const urls: string[] = [];
+    const f = (async (input: string | URL | Request) => {
+      urls.push(String(input));
+      return new Response(JSON.stringify({ items: [] }), { status: 200 });
+    }) as typeof fetch;
+    return { urls, f, p: createGoogleCalendarProvider(deps(f)) };
+  };
+
+  it.each([".", "..", "../../gmail/v1/users/me/drafts/send", "a/../b", "..\\..\\gmail"])("calendar id %s is refused with no fetch", async (id) => {
+    const { urls, p } = recording();
+    const e = await reject(p.listEvents(id, RANGE, 10));
+    expect(e).toBeInstanceOf(ProviderError);
+    expect(e.message).toContain(REFUSED);
+    expect(urls).toHaveLength(0);
+  });
+
+  it.each([".", ".."])("calendar id %s is refused by every call that takes one", async (id) => {
+    const { urls, p } = recording();
+    const calls = [
+      () => p.getEvent(id, "evt-standup-1"),
+      () => p.lookupEvent(id, "evt-standup-1"),
+      () => p.freeBusy(id, RANGE),
+      () => p.createEvent({ calendarId: id, title: "t", start: RANGE.start, end: RANGE.end, attendees: [], sendUpdates: "none" }, "abcde12345"),
+    ];
+    for (const call of calls) expect((await reject(call())).message).toContain(REFUSED);
+    expect(urls).toHaveLength(0);
+  });
+
+  it.each([".", ".."])("event id %s is refused with no fetch", async (id) => {
+    const { urls, p } = recording();
+    expect((await reject(p.lookupEvent("primary", id))).message).toContain(REFUSED);
+    expect(urls).toHaveLength(0);
+  });
+
+  it.each([
+    "..",
+    ".",
+    "..%2F..%2Fgmail%2Fv1%2Fusers%2Fme%2Fdrafts%2Fsend",
+    "a%2F..%2Fb",
+    "..%5C..%5Cgmail",
+    "%2E%2E%2f",
+    "%2e",
+    "a%5c.%5cb",
+    "..\\x",
+    ".\t.",
+    "%ZZ",
+  ])("the calendar guard refuses the segment %j, before the token is read", async (seg) => {
+    rmSync(join(dir, "token.json"));
+    const { urls, f } = recording();
+    const e = await reject(
+      googleRequest(deps(f), "t", {
+        service: "calendar",
+        method: "GET",
+        url: `https://www.googleapis.com/calendar/v3/calendars/${seg}/events`,
+        requiredScope: SCOPE_CALENDAR_READ,
+      }),
+    );
+    expect(e).toBeInstanceOf(ProviderError);
+    expect(e.message).toContain(REFUSED);
+    expect(urls).toHaveLength(0);
+  });
+
+  it.each([" ", "\u0001", "\u001f ", "\u0000"])("a final .. followed by %j is refused, as URL parsing strips it", async (tail) => {
+    rmSync(join(dir, "token.json"));
+    const { urls, f } = recording();
+    const e = await reject(
+      googleRequest(deps(f), "t", {
+        service: "calendar",
+        method: "GET",
+        url: `https://www.googleapis.com/calendar/v3/calendars/..${tail}`,
+        requiredScope: SCOPE_CALENDAR_READ,
+      }),
+    );
+    expect(e.message).toContain(REFUSED);
+    expect(urls).toHaveLength(0);
+  });
+
+  it("leading controls and spaces do not hide a dot segment or refuse a good URL", async () => {
+    const { urls, f } = recording();
+    const request = (url: string) => googleRequest(deps(f), "t", { service: "calendar", method: "GET", url, requiredScope: SCOPE_CALENDAR_READ });
+    expect((await reject(request(" \u0001https://www.googleapis.com/calendar/v3/calendars/../x"))).message).toContain(REFUSED);
+    expect(urls).toHaveLength(0);
+    await request(" \u0001https://www.googleapis.com/calendar/v3/calendars/primary/events \u0001");
+    expect(urls).toHaveLength(1);
+  });
+
+  it.each(["team%2Froom%40x", "a%5Cb", "user%40example.com", "...%23...", "v1..2", "a.b", "...", "%252E%252E"])(
+    "the calendar guard allows the segment %s",
+    async (seg) => {
+      const { urls, f } = recording();
+      await googleRequest(deps(f), "t", {
+        service: "calendar",
+        method: "GET",
+        url: `https://www.googleapis.com/calendar/v3/calendars/${seg}/events`,
+        requiredScope: SCOPE_CALENDAR_READ,
+      });
+      expect(urls).toHaveLength(1);
+    },
+  );
+
+  it.each([
+    ["primary", "primary"],
+    ["en.usa#holiday@group.v.calendar.google.com", "en.usa%23holiday%40group.v.calendar.google.com"],
+    ["a.b@example.com", "a.b%40example.com"],
+    ["...", "..."],
+    ["team/room@x", "team%2Froom%40x"],
+    ["a\\b", "a%5Cb"],
+    ["v1..2", "v1..2"],
+  ])("real id %s keeps working", async (id, encoded) => {
+    const { urls, p } = recording();
+    await p.listEvents(id, RANGE, 10);
+    expect(new URL(urls[0]!).pathname).toBe(`/calendar/v3/calendars/${encoded}/events`);
+  });
+
+  it("a dot segment in a query value is not a path", async () => {
+    const { urls, f } = recording();
+    await googleRequest(deps(f), "t", {
+      service: "calendar",
+      method: "GET",
+      url: "https://www.googleapis.com/calendar/v3/calendars/primary/events?q=..%2F..%2Fb",
+      requiredScope: SCOPE_CALENDAR_READ,
+    });
+    expect(urls).toHaveLength(1);
   });
 });

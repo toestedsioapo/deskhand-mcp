@@ -225,3 +225,15 @@ describe("apply through Gmail", () => {
     expect(replay!.seen.filter((r) => r.method !== "GET")).toHaveLength(1);
   });
 });
+
+describe("recovery compares every recipient on the stored draft (M4b fix wave D)", () => {
+  it.each([
+    ["an entry that does not parse", "gmail-draft-get-unparsed-recipient"],
+    ["a second To header", "gmail-draft-get-second-to"],
+  ])("%s: STALE_PLAN with the differs phrase and no POST", async (_name, recording) => {
+    const { hh, id } = await setup(["gmail-drafts-search-hit", recording]);
+    expect(await applyAction(hh.ctx, id)).toEqual({ ok: false, errorCode: "STALE_PLAN", message: DIFFERS });
+    expect(status(hh, id)).toBe("failed");
+    expect(draftPosts()).toHaveLength(0);
+  });
+});

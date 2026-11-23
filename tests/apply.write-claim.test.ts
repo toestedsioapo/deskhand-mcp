@@ -3,6 +3,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { AppContext } from "../src/app-context.js";
 import { applyAction } from "../src/approval/apply.js";
 import { approveAction } from "../src/approval/approve.js";
+import { sweepDraftBodies } from "../src/approval/body-sweep.js";
+import { takeWriteClaim } from "../src/approval/write-claim.js";
 import type { CliIo } from "../src/cli/io.js";
 import { getAction } from "../src/ledger/actions.js";
 import { LedgerDb } from "../src/ledger/db.js";
@@ -628,5 +630,80 @@ describe("write-claim.ts", () => {
       [NOW, id, JSON.stringify({ v: 1, input: null, output: { releasedClaim: c.claimId }, note: "x" })],
     );
     expect(m.hasLiveClaim(hh.ctx, id)).toBe(false);
+  });
+});
+
+describe("the last check before the POST re-reads the stored plan (M4b fix wave A)", () => {
+  const SWEPT = "The plan's content was removed after the action ended; it can no longer be written.";
+  const UNDER_CLAIM = 2; // the recovery lookup is the first, the one under the claim the second
+  const expiryOf = (hh: H, id: string): number => Date.parse(getAction(hh.db, id)!.expires_at);
+
+  it.each([
+    ["past expiry", 5000],
+    ["exactly at expiry", 0],
+    ["past expiry and past the start limit", START_LIMIT + 1000],
+  ])("the clock reaches %s during the lookup: PLAN_EXPIRED, no POST, status unchanged, claim released", async (_n, after) => {
+    const { hh, id, state } = await setup();
+    const expires = expiryOf(hh, id);
+    now = expires - 5000;
+    state.onLookup = (n) => {
+      if (n === UNDER_CLAIM) now = expires + after;
+    };
+    expect(await applyAction(hh.ctx, id)).toMatchObject({ ok: false, errorCode: "PLAN_EXPIRED" });
+    expect(state.posts).toBe(0);
+    expect(status(hh, id)).toBe("approved");
+    expect(released(hh, id)).toEqual([claims(hh, id)[0]!.id]);
+    const row = rowsOf(hh, id, "apply_refused")[0]!;
+    expect([row.outcome, row.error_code]).toEqual(["rejected", "PLAN_EXPIRED"]);
+  });
+
+  it("an expires_at that no longer parses fails closed", async () => {
+    const { hh, id, state } = await setup();
+    state.onLookup = (n) => {
+      if (n === UNDER_CLAIM) hh.db.run("UPDATE actions SET expires_at = 'not-a-time' WHERE id = ?", [id]);
+    };
+    expect(await applyAction(hh.ctx, id)).toMatchObject({ ok: false, errorCode: "PLAN_EXPIRED" });
+    expect(state.posts).toBe(0);
+    expect(status(hh, id)).toBe("approved");
+  });
+
+  it("a sweep on another connection removes the body during the lookup: PLAN_MODIFIED, failed, no POST", async () => {
+    const { hh, id, state } = await setup();
+    const expires = expiryOf(hh, id);
+    const other = { ...otherProcess(hh), clock: () => new Date(expires) }; // that process's clock is ahead of ours
+    state.onLookup = (n) => {
+      if (n === UNDER_CLAIM) expect(sweepDraftBodies(other)).toBe(1);
+    };
+    expect(await applyAction(hh.ctx, id)).toEqual({ ok: false, errorCode: "PLAN_MODIFIED", message: SWEPT });
+    expect(state.posts).toBe(0);
+    expect(status(hh, id)).toBe("failed");
+    expect(rowsOf(hh, id, "apply_failed")).toHaveLength(1);
+  });
+
+  it("an apply just inside the expiry still writes", async () => {
+    const { hh, id, state } = await setup();
+    const expires = expiryOf(hh, id);
+    now = expires - 5000;
+    state.onLookup = (n) => {
+      if (n === UNDER_CLAIM) now = expires - 1;
+    };
+    expect(await applyAction(hh.ctx, id)).toMatchObject({ ok: true, replayed: false });
+    expect(state.posts).toBe(1);
+    expect(status(hh, id)).toBe("applied");
+  });
+
+  it("a claim another apply took over is still the held refusal, even past expiry", async () => {
+    const { hh, id, state } = await setup();
+    const expires = expiryOf(hh, id);
+    now = expires - HOLD - 1000;
+    state.onLookup = (n) => {
+      if (n !== UNDER_CLAIM) return;
+      now = expires - 1000;
+      expect(takeWriteClaim(hh.ctx, id).ok).toBe(true);
+      now = expires;
+    };
+    expect(await applyAction(hh.ctx, id)).toEqual(HELD_REFUSAL);
+    expect(state.posts).toBe(0);
+    expect(status(hh, id)).toBe("approved");
   });
 });

@@ -89,7 +89,7 @@ An optional top-level `mail` key holds the mailbox of the account owner. It is o
 | `messages[].reply_to`, `to`, `cc` | `{ address, name? }[]` | `to` yes; the others no (default `[]`) | |
 | `messages[].subject`, `body_text` | string | yes | text only; there is no HTML in the fixture |
 | `messages[].unread` | boolean | no, default `false` | |
-| `messages[].sent` | boolean | no, default `false` | the owner sent this message (`MailMessage.sentByOwner`). Only this makes a message "mine" for default recipients; a `From` equal to the owner does not. Additive: `fixture_version` is unchanged |
+| `messages[].sent` | boolean | no, default `false` | the owner sent this message (`MailMessage.sentByOwner`). Only this makes a message "mine" for default recipients; a `From` equal to the owner does not. Additive: `fixture_version` is unchanged, but an existing world with owner-authored messages and no `sent: true` now picks a different reply target or refuses with no recipient |
 | `messages[].draft` | boolean | no, default `false` | a draft message; kept out of `getThread` and of the "on the thread" set |
 
 Provider behaviour (the fixture `MailProvider`, `src/providers/fixture/mail.ts`):

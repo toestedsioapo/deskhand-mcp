@@ -79,11 +79,34 @@ export function takeWriteClaim(ctx: AppContext, actionId: string): WriteClaim {
  */
 export function claimStillValid(ctx: AppContext, actionId: string, claimId: number): boolean {
   return ctx.db.transaction(() => {
-    if (!isApproved(ctx, actionId)) return false;
-    const newest = newestClaim(ctx, actionId);
-    if (newest?.id !== claimId || isReleased(ctx, actionId, claimId)) return false;
-    const age = ageOf(ctx, newest);
+    if (!holdsClaim(ctx, actionId, claimId)) return false;
+    const age = ageOf(ctx, newestClaim(ctx, actionId)!);
     return age >= 0 && age < WRITE_CLAIM_START_LIMIT_MS;
+  }, "immediate");
+}
+
+/** The plan is still approved and this claim is its newest, unreleased one. */
+function holdsClaim(ctx: AppContext, actionId: string, claimId: number): boolean {
+  if (!isApproved(ctx, actionId)) return false;
+  return newestClaim(ctx, actionId)?.id === claimId && !isReleased(ctx, actionId, claimId);
+}
+
+export type WriteCheck = "ok" | "claim_lost" | "expired" | "not_writable";
+
+/**
+ * The last check before the POST, in one `BEGIN IMMEDIATE`: the stored row, not the copy read at the start of the
+ * apply. A claim held by someone else comes first, because their write may be in flight and this apply must not end
+ * the plan. Then expiry (fails closed, as at gate 7), then `writable` on the stored plan text (a sweep on another
+ * connection may have removed the body), then the claim's start limit.
+ */
+export function checkBeforeWrite(ctx: AppContext, actionId: string, claimId: number, writable: (planJson: string) => boolean): WriteCheck {
+  return ctx.db.transaction((): WriteCheck => {
+    if (!holdsClaim(ctx, actionId, claimId)) return "claim_lost";
+    const row = ctx.db.get<{ plan_json: string; expires_at: string }>("SELECT plan_json, expires_at FROM actions WHERE id = ?", [actionId]);
+    if (row === undefined) return "claim_lost";
+    if (!(ctx.clock().getTime() < Date.parse(row.expires_at))) return "expired";
+    if (!writable(row.plan_json)) return "not_writable";
+    return claimStillValid(ctx, actionId, claimId) ? "ok" : "claim_lost";
   }, "immediate");
 }
 

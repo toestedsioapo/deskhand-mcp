@@ -264,7 +264,7 @@ export const mailCreateDraftReply: PlanKind<MailDraftPlan, DraftRef> = {
     return l.state === "present" ? { state: "present", value: l.draft } : { state: "absent" };
   },
 
-  // Our Message-ID (and the plan's), the thread, the subject, the address sets and the body hash.
+  // Our Message-ID (and the plan's), the thread, the subject, exactly readable address sets and the body hash.
   matches(plan, key, r) {
     const d = plan.draft;
     const header = draftHeaderFor(key);
@@ -273,6 +273,7 @@ export const mailCreateDraftReply: PlanKind<MailDraftPlan, DraftRef> = {
       r.messageIdHeader === header &&
       r.threadId === d.threadId &&
       r.subject === d.subject &&
+      r.recipientsMalformed !== true &&
       sameSet(r.to, d.to) &&
       sameSet(r.cc, d.cc) &&
       sameSet(r.bcc, d.bcc) &&

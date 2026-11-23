@@ -179,4 +179,5 @@ Safety items now covered in SECURITY.md / TEST_PLAN: logging around SDK input va
 - **A literal `=?` in an ASCII subject is encoded** (RFC 2047), so what a mail client shows equals what was approved.
 - **The draft match does not cover** attachments or extra text parts added to a draft later (also in `docs/SECURITY.md`).
 - **A Gmail rate limit returned as `403` is treated as a definite failure**, so the plan must be re-planned. To decide after live check item 10.
+- **A custom subject or a missing `In-Reply-To` may make Gmail start a new thread (unverified).** The draft's thread id would then differ from the plan's, so the apply ends `STALE_PLAN` with a draft left in Gmail. To be decided from the live check's optional step 8b.
 - **M4a follow-ups 5, 6, 7, 8 and 12 stay open by owner decision.**

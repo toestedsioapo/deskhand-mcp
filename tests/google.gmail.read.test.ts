@@ -397,3 +397,33 @@ describe("through the inbox tools on the Google provider", () => {
     expect(e).toBeInstanceOf(AuthRequiredError);
   });
 });
+
+describe("snippets (M4b fix wave F)", () => {
+  const thread = (snippet: unknown) => ({
+    id: "t1",
+    messages: [{ id: "m1", threadId: "t1", internalDate: "1794308400000", labelIds: ["INBOX"], snippet, payload: { mimeType: "text/plain", headers: [] } }],
+  });
+  it.each([
+    ["it&#39;s A &amp; B", "it's A & B"],
+    ["&lt;b&gt; &quot;q&quot; &#x41;", '<b> "q" A'],
+    ["&amp;#39;", "&#39;"],
+    ["&amp;amp;", "&amp;"],
+    ["no entities", "no entities"],
+  ])("%s is decoded exactly once", async (raw, shown) => {
+    const t = await createGmailProvider(deps(stub(thread(raw)).f)).getThread("t1", 5);
+    expect(t!.messages[0]!.snippet).toBe(shown);
+  });
+  it("the search summary decodes it too", async () => {
+    const s = stub(thread("&amp;#39;"));
+    const f = (async (input: string | URL | Request, init?: RequestInit) =>
+      String(input).includes("/threads?")
+        ? new Response(JSON.stringify({ threads: [{ id: "t1" }] }), { status: 200 })
+        : s.f(input, init)) as typeof fetch;
+    const r = await createGmailProvider(deps(f)).searchThreads("x", 5);
+    expect(r.threads[0]!.snippet).toBe("&#39;");
+  });
+  it("a snippet that is not a string is empty", async () => {
+    const t = await createGmailProvider(deps(stub(thread(7)).f)).getThread("t1", 5);
+    expect(t!.messages[0]!.snippet).toBe("");
+  });
+});

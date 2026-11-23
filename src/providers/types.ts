@@ -142,6 +142,8 @@ export interface DraftRef {
   bcc: string[];
   subject: string;
   bodySha256: string;
+  /** The stored recipient headers could not be read exactly, so this draft can never count as the approved one. */
+  recipientsMalformed?: true;
 }
 
 /** What a provider holds under one Message-ID header. Drafts have no "deleted" state a provider can report. */

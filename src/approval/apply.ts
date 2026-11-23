@@ -7,7 +7,7 @@ import { redactInput, scrubSecrets } from "../ledger/redact.js";
 import { AuthRequiredError, ProviderError } from "../providers/errors.js";
 import type { Providers } from "../providers/types.js";
 import { getPlanKind, type AnyPlanKind, type ApplyOutputResult, type Lookup } from "./plan-kinds.js";
-import { claimStillValid, hasLiveClaim, takeWriteClaim } from "./write-claim.js";
+import { checkBeforeWrite, hasLiveClaim, takeWriteClaim } from "./write-claim.js";
 
 /**
  * The apply engine: the ONLY place a plan kind's write is executed (a
@@ -124,6 +124,8 @@ const WRITE_FAILED = "Provider write failed: ";
 const STILL_LANDING = "an earlier write attempt may still be landing; retry later";
 /** Fixed note: the write claim is held by another apply, or ours can no longer start a POST (ledger contract, gate 8b). */
 const CLAIM_HELD = "another apply of this action is in progress or may still be landing; retry in a minute";
+/** Fixed note: the plan's content was swept (gate 7a, and the last check at gate 8b). */
+const CONTENT_REMOVED = "The plan's content was removed after the action ended; it can no longer be written.";
 
 /**
  * True when this action's own ledger rows show an earlier write attempt whose outcome was unknown. Gate 9 writes
@@ -319,7 +321,7 @@ export async function applyAction(ctx: AppContext, actionId: string): Promise<Ap
   // 7a. A plan that can no longer be written (a draft whose body was swept) fails here, after recovery and expiry,
   // so the provider is never asked to write it.
   if (kind.writable && !kind.writable(validPlan)) {
-    return fail(ctx, actionId, "PLAN_MODIFIED", "The plan's content was removed after the action ended; it can no longer be written.");
+    return fail(ctx, actionId, "PLAN_MODIFIED", CONTENT_REMOVED);
   }
   // 8. Re-check against the real world. A read error is retryable (status unchanged).
   let check: Awaited<ReturnType<typeof kind.recheck>>;
@@ -358,7 +360,16 @@ export async function applyAction(ctx: AppContext, actionId: string): Promise<Ap
     }
     const settled = settle(underClaim.found);
     if (settled) return settled;
-    if (!claimStillValid(ctx, actionId, claimId)) return refuse(ctx, actionId, true, "PROVIDER_ERROR", CLAIM_HELD, claimId);
+    // The last check, on the stored row: the plan may have expired or been swept during the lookups. No POST was sent.
+    const last = checkBeforeWrite(ctx, actionId, claimId, (planJson) => {
+      const current = parseStored(planJson);
+      return current !== undefined && (current.kind.writable?.(current.plan) ?? true);
+    });
+    if (last === "expired") {
+      return refuse(ctx, actionId, true, "PLAN_EXPIRED", `Action ${actionId} expired at ${row.expires_at}.`, claimId);
+    }
+    if (last === "not_writable") return fail(ctx, actionId, "PLAN_MODIFIED", CONTENT_REMOVED);
+    if (last === "claim_lost") return refuse(ctx, actionId, true, "PROVIDER_ERROR", CLAIM_HELD, claimId);
   }
   // 9. Write with the idempotency key, then commit.
   let result: unknown;

@@ -63,11 +63,35 @@ export function assertAllowedGmailRequest(method: string, url: URL): void {
   if (!ok) throw new NotAllowed();
 }
 
+/** The refusal for a request outside the allowlist; it carries no request content. */
+export const ENDPOINT_REFUSED = "refused request to an endpoint outside the allowlist";
+
 class NotAllowed extends Error {
   constructor() {
-    super("refused request to an endpoint outside the allowlist");
+    super(ENDPOINT_REFUSED);
   }
 }
+
+/** True when a raw path segment, decoded once and split on both separators, has a `.` or `..` component. Bad encoding counts. */
+function hasDotComponent(path: string): boolean {
+  return path.split("/").some((segment) => {
+    try {
+      return decodeURIComponent(segment).split(/[/\\]/).some((c) => c === "." || c === "..");
+    } catch {
+      return true;
+    }
+  });
+}
+
+/**
+ * The path as written. WHATWG parsing strips leading and trailing C0 controls and spaces, drops tabs and line breaks,
+ * and would then normalise a literal `..` away, so the same is stripped here first.
+ */
+const rawPath = (rawUrl: string): string => /^[a-z][a-z0-9+.-]*:[/\\]+[^/\\?#]*([^?#]*)/i.exec(rawUrl.replace(/^[\x00-\x20]+|[\x00-\x20]+$/g, "").replace(/[\t\n\r]/g, ""))?.[1] ?? "/..";
+
+/** A calendar request stays under the prefix, and neither its written nor its parsed path holds a dot segment. */
+const isCalendarRequest = (rawUrl: string, url: URL): boolean =>
+  url.pathname.startsWith("/calendar/v3/") && !hasDotComponent(rawPath(rawUrl)) && !hasDotComponent(url.pathname);
 
 const nearExpiry = (t: StoredToken, now: Date): boolean => !(Date.parse(t.expires_at) - now.getTime() >= REFRESH_MARGIN_MS);
 
@@ -212,7 +236,7 @@ export async function googleRequest(
   // pass under the calendar label and skip the allowlist.
   try {
     if (req.service === "gmail") assertAllowedGmailRequest(req.method, url);
-    else if (!url.pathname.startsWith("/calendar/v3/")) throw new NotAllowed();
+    else if (!isCalendarRequest(req.url, url)) throw new NotAllowed();
   } catch (e) {
     if (e instanceof NotAllowed) throw new ProviderError(providerOf(req.service), op, { phrase: e.message });
     throw e;

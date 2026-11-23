@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { mailCreateDraftReply, type MailDraftPlan } from "../src/approval/mail-draft-kind.js";
 import { SCOPE_GMAIL_COMPOSE, SCOPE_GMAIL_READ } from "../src/config/scopes.js";
 import { AuthRequiredError, ProviderError } from "../src/providers/errors.js";
 import { createGmailProvider } from "../src/providers/google/gmail.js";
@@ -391,5 +392,106 @@ describe("lookupDraft", () => {
     const p = createGmailProvider({ fetch: f, configDir: home.home, now: () => NOW, oauth: { fetch: f, endpoints: GOOGLE_ENDPOINTS, now: () => NOW } });
     expectRetryable(await reject(p.lookupDraft(OURS, "t-reply")), UNMAPPED);
     expect(urls.filter((u) => u.includes("maxResults=100"))).toHaveLength(5);
+  });
+});
+
+describe("a stored draft's recipients are read strictly (M4b fix wave D)", () => {
+  type Hdr = { name: string; value: string };
+  const stored = (headers: Hdr[]) => {
+    const body = {
+      id: "dr-1",
+      message: {
+        id: "dm-1",
+        threadId: "t-reply",
+        labelIds: ["DRAFT"],
+        payload: {
+          mimeType: "text/plain",
+          headers: [{ name: "Message-ID", value: OURS }, { name: "Subject", value: "Re: Q4 budget" }, ...headers],
+          body: { data: Buffer.from(BODY, "utf8").toString("base64url") },
+        },
+      },
+    };
+    const f = (async (input: string | URL | Request) => {
+      const url = String(input);
+      return new Response(JSON.stringify(url.includes("/drafts/dr-1") ? body : { drafts: [{ id: "dr-1" }] }), { status: 200 });
+    }) as typeof fetch;
+    return createGmailProvider({ fetch: f, configDir: home.home, now: () => NOW, oauth: { fetch: f, endpoints: GOOGLE_ENDPOINTS, now: () => NOW } });
+  };
+  const planFor = (to: string[], cc: string[], bcc: string[]) =>
+    ({ draft: { ...DRAFT, to, cc, bcc, bodySha256: createHash("sha256").update(BODY, "utf8").digest("hex") } }) as unknown as MailDraftPlan;
+  const found = async (headers: Hdr[]) => {
+    const r = await stored(headers).lookupDraft(OURS, "t-reply");
+    if (r.state !== "present") throw new Error("not found");
+    return r.draft;
+  };
+  /** The header's value as buildDraftMime folds it: Gmail may return it with the line breaks in place. */
+  const folded = (name: string, list: string[]): string => {
+    const head = buildDraftMime({
+      ...DRAFT,
+      to: name === "To" ? list : ["x@example.com"],
+      cc: name === "Cc" ? list : [],
+      bcc: name === "Bcc" ? list : [],
+    }).split("\r\n\r\n")[0]!;
+    return new RegExp(`(?:^|\\r\\n)${name}: (.*(?:\\r\\n .*)*)`).exec(head)![1]!;
+  };
+  const APPROVED = () => planFor(["ana@example.com"], [], ["boss@example.com"]);
+
+  it("a folded 24-recipient draft matches", async () => {
+    const addr = (k: string) => Array.from({ length: 8 }, (_, i) => `someone.with.a.long.name+${k}${i}@example.com`);
+    const [to, cc, bcc] = [addr("to"), addr("cc"), addr("bcc")];
+    expect(folded("To", to)).toContain("\r\n ");
+    const d = await found([
+      { name: "To", value: folded("To", to) },
+      { name: "Cc", value: folded("Cc", cc) },
+      { name: "Bcc", value: folded("Bcc", bcc) },
+    ]);
+    expect(mailCreateDraftReply.matches(planFor(to, cc, bcc), KEY, d)).toBe(true);
+  });
+
+  it("a display name and a trailing comma still match", async () => {
+    const d = await found([
+      { name: "To", value: '"Ana A" <ana@example.com>,' },
+      { name: "Bcc", value: "boss@example.com" },
+    ]);
+    expect(mailCreateDraftReply.matches(APPROVED(), KEY, d)).toBe(true);
+  });
+
+  it.each([
+    ["To", 'ana@example.com, "evil"@evil.test'],
+    ["To", "ana@example.com, not an address"],
+    ["To", "ana@example.com, <unterminated@evil.test"],
+    ["To", 'ana@example.com, "unterminated'],
+    ["To", "ana@example.com, (unterminated"],
+    ["To", "ana@example.com, team: evil@evil.test"],
+    ["To", "ana@example.com, team: ana@example.com;"],
+    ["To", "ana@example.com <ana@example.com> extra@evil.test"],
+    ["Cc", '"evil"@evil.test'],
+    ["Bcc", 'boss@example.com, "evil"@evil.test'],
+  ])("%s: %s differs", async (name, value) => {
+    const others: Hdr[] = [
+      ...(name === "To" ? [] : [{ name: "To", value: "ana@example.com" }]),
+      ...(name === "Bcc" ? [] : [{ name: "Bcc", value: "boss@example.com" }]),
+    ];
+    const d = await found([{ name, value }, ...others]);
+    expect(mailCreateDraftReply.matches(APPROVED(), KEY, d)).toBe(false);
+  });
+
+  it.each([
+    ["To", "ana@example.com"],
+    ["to", "evil@evil.test"],
+    ["BCC", "boss@example.com"],
+  ])("a repeated header (%s: %s) differs", async (name, value) => {
+    const d = await found([{ name: "To", value: "ana@example.com" }, { name: "Bcc", value: "boss@example.com" }, { name, value }]);
+    expect(mailCreateDraftReply.matches(APPROVED(), KEY, d)).toBe(false);
+  });
+
+  it("a repeated Cc header differs", async () => {
+    const d = await found([
+      { name: "To", value: "ana@example.com" },
+      { name: "Bcc", value: "boss@example.com" },
+      { name: "Cc", value: "" },
+      { name: "cc", value: "" },
+    ]);
+    expect(mailCreateDraftReply.matches(APPROVED(), KEY, d)).toBe(false);
   });
 });

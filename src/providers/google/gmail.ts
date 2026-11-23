@@ -3,7 +3,7 @@ import { SCOPE_GMAIL_COMPOSE, SCOPE_GMAIL_READ } from "../../config/scopes.js";
 import { ProviderError } from "../errors.js";
 import type { DraftLookup, DraftRef, MailAddress, MailMessage, MailProvider, MailThread, NewDraft, ThreadSummary } from "../types.js";
 import { googleRequest, type GoogleHttpDeps, type GoogleResponse } from "./http.js";
-import { buildDraftMime, decodeEncodedWords, header, messageBody, parseAddressList } from "./mime.js";
+import { buildDraftMime, decodeEncodedWords, decodeEntities, header, messageBody, parseAddressList, strictRecipients } from "./mime.js";
 
 const PROVIDER = "google gmail";
 const BASE = "https://www.googleapis.com/gmail/v1/users/me";
@@ -65,7 +65,8 @@ function datedMessages(op: string, json: Obj) {
 
 const addresses = (payload: unknown, name: string): MailAddress[] => parseAddressList(header(payload, name) ?? "");
 const subjectOf = (payload: unknown): string => decodeEncodedWords(header(payload, "Subject") ?? "");
-const snippetOf = (m: Obj): string => (typeof m.snippet === "string" ? m.snippet : "");
+/** Gmail returns snippets HTML-escaped. Decoded once, so `&amp;#39;` stays the text `&#39;`. */
+const snippetOf = (m: Obj): string => (typeof m.snippet === "string" ? decodeEntities(m.snippet) : "");
 
 function messageIdOf(payload: unknown): string | null {
   const value = header(payload, "Message-ID")?.trim();
@@ -101,8 +102,9 @@ interface StoredDraft {
 }
 
 /**
- * A `drafts.get` response as a DraftRef. The Message-ID is kept as stored, even when it is not ours, so a draft Gmail
- * changed reaches the engine's comparison and ends the plan instead of looking absent and inviting a second POST.
+ * A `drafts.get` response as a DraftRef, with the Message-ID as stored. A draft whose Message-ID Gmail changed reaches
+ * the engine's comparison only through `createDraft`'s return value; `lookupDraft` requires our exact header and
+ * reports any other draft as absent. Recipients are read strictly: anything unreadable marks the draft as differing.
  */
 function storedDraft(op: string, json: Obj): StoredDraft {
   const m = json.message;
@@ -110,7 +112,7 @@ function storedDraft(op: string, json: Obj): StoredDraft {
   if (typeof m.id !== "string" || m.id === "" || typeof m.threadId !== "string" || m.threadId === "" || !isObj(m.payload)) {
     throw unreadable(op);
   }
-  const list = (name: string): string[] => addresses(m.payload, name).map((a) => a.address);
+  const [to, cc, bcc] = [strictRecipients(m.payload, "To"), strictRecipients(m.payload, "Cc"), strictRecipients(m.payload, "Bcc")];
   const body = messageBody(m.payload, Number.POSITIVE_INFINITY).text.replace(/\r\n/g, "\n");
   return {
     isDraft: labelsOf(op, m).includes("DRAFT"),
@@ -119,11 +121,12 @@ function storedDraft(op: string, json: Obj): StoredDraft {
       messageId: m.id,
       threadId: m.threadId,
       messageIdHeader: header(m.payload, "Message-ID") ?? "",
-      to: list("To"),
-      cc: list("Cc"),
-      bcc: list("Bcc"),
+      to: to ?? [],
+      cc: cc ?? [],
+      bcc: bcc ?? [],
       subject: subjectOf(m.payload),
       bodySha256: createHash("sha256").update(body, "utf8").digest("hex"),
+      ...(to === null || cc === null || bcc === null ? { recipientsMalformed: true as const } : {}),
     },
   };
 }
