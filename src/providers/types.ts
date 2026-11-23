@@ -159,7 +159,8 @@ export interface MailProvider {
    * the thread does not exist. Ids only: no bodies or headers (M4b decision 7).
    */
   threadMessageIds(threadId: string): Promise<string[] | null>;
-  lookupDraft(messageIdHeader: string): Promise<DraftLookup>;
+  /** The draft under this Message-ID. `threadId` is the plan's thread, so an adapter can also look there when search misses. */
+  lookupDraft(messageIdHeader: string, threadId: string): Promise<DraftLookup>;
   /** Existing messageIdHeader: returns the existing draft, never a second one. */
   createDraft(draft: NewDraft): Promise<DraftRef>;
 }

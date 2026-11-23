@@ -19,7 +19,7 @@ function valueSets(): Record<string, string[]> {
   return out;
 }
 
-function ddlBlock(version: 1 | 2 | 3 = 1): string {
+function ddlBlock(version: 1 | 2 | 3 | 4 = 1): string {
   const section = (doc.split(`## DDL v${version}`)[1] ?? "").split("\n## ")[0] ?? "";
   return /```sql\n([\s\S]*?)```/.exec(section)?.[1] ?? "";
 }
@@ -67,12 +67,13 @@ function topHeadings(text: string): string[] {
 describe("contract doc is whole", () => {
   it("docs/ledger-contract.md has each top-level heading exactly once, in order (no duplicated copy)", () => {
     expect(topHeadings(doc)).toEqual([
-      "# Ledger contract (v3)",
+      "# Ledger contract (v4)",
       "## Conventions",
       "## Value sets (machine-read by tests)",
       "## DDL v1",
       "## DDL v2",
       "## DDL v3",
+      "## DDL v4",
       "## Status transitions",
       "## Apply gate order",
       "## Approve and reject refusals (CLI)",
@@ -124,9 +125,15 @@ describe("contract doc and code agree", () => {
     expect(norm(sql.join("\n"))).toBe(norm(ddlBlock(3)));
   });
 
-  it("schema version is 3 and has one migration per version", () => {
-    expect(contract.LEDGER_SCHEMA_VERSION).toBe(3);
-    expect(MIGRATIONS.map((m) => m.version)).toEqual([1, 2, 3]);
+  it("migration 4 DDL is textually equivalent to the doc's DDL v4 block", () => {
+    const sql: string[] = [];
+    MIGRATIONS[3]!.up({ exec: (s: string) => void sql.push(s) } as unknown as LedgerDb);
+    expect(norm(sql.join("\n"))).toBe(norm(ddlBlock(4)));
+  });
+
+  it("schema version is 4 and has one migration per version", () => {
+    expect(contract.LEDGER_SCHEMA_VERSION).toBe(4);
+    expect(MIGRATIONS.map((m) => m.version)).toEqual([1, 2, 3, 4]);
   });
 
   it("UNTRUSTED_RUNTIME is the only error code added in v2; PROVIDER_NOT_CONFIGURED and NOT_FOUND in v3, in that order", () => {

@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { SCOPE_CALENDAR_READ, SCOPE_CALENDAR_WRITE } from "../src/config/scopes.js";
+import { scrubSecrets } from "../src/ledger/redact.js";
 import { AuthRequiredError, ProviderError } from "../src/providers/errors.js";
 import { googleRequest, type GoogleHttpDeps } from "../src/providers/google/http.js";
 import { GOOGLE_ENDPOINTS } from "../src/providers/google/oauth.js";
@@ -344,6 +345,62 @@ describe("googleRequest fixes", () => {
     const e = await reject(getList(use(["events-list-403-insufficient"]), SCOPE_CALENDAR_READ));
     expect(e).toBeInstanceOf(AuthRequiredError);
     expect(e.message).toBe(LOGIN);
+  });
+});
+
+describe("googleRequest singleSend (a write with no unique key, M4b decision 8)", () => {
+  const TOKEN_HOST = "https://oauth2.googleapis.com/";
+  const getOnce = (d: GoogleHttpDeps, singleSend?: boolean) =>
+    googleRequest(d, "drafts.create", {
+      method: "GET",
+      url: LIST_URL,
+      requiredScope: SCOPE_CALENDAR_READ,
+      ...(singleSend === undefined ? {} : { singleSend }),
+    });
+  const apiSends = () => replay!.seen.filter((s) => !s.url.startsWith(TOKEN_HOST));
+  const refreshes = () => replay!.seen.filter((s) => s.url.startsWith(TOKEN_HOST));
+
+  it("a 401 makes one API send and one refresh, saves the token and throws the retryable fixed error", async () => {
+    writeToken(dir, token());
+    const e = await reject(getOnce(use(["events-list-401", "oauth-refresh"]), true));
+    expect(apiSends()).toHaveLength(1);
+    expect(refreshes()).toHaveLength(1);
+    expect(e).toBeInstanceOf(ProviderError);
+    expect((e as ProviderError).retryable).toBe(true);
+    expect(e.message).toBe("google calendar drafts.create failed: access token refreshed; retry");
+    // apply stores this text through scrubSecrets, so the fixed phrase must survive it.
+    expect(scrubSecrets(e.message)).toBe(e.message);
+    for (const secret of ["ya29.", "1//", "Bearer", "CLIENT-SECRET"]) expect(e.message).not.toContain(secret);
+    expect(readToken(dir)!.access_token).toBe("ya29.NEW-ACCESS-TOKEN");
+  });
+
+  it("a refresh that needs a new sign-in propagates unchanged, after one API send", async () => {
+    writeToken(dir, token());
+    const e = await reject(getOnce(use(["events-list-401", "oauth-invalid-grant"]), true));
+    expect(e).toBeInstanceOf(AuthRequiredError);
+    expect(e.message).toBe(EXPIRED);
+    expect(apiSends()).toHaveLength(1);
+  });
+
+  it("a refresh that fails on the network propagates unchanged, after one API send", async () => {
+    writeToken(dir, token());
+    let sends = 0;
+    const f = ((input: string | URL | Request) => {
+      if (String(input).startsWith(TOKEN_HOST)) return Promise.reject(new Error("socket hang up"));
+      sends += 1;
+      return Promise.resolve(new Response("{}", { status: 401 }));
+    }) as typeof fetch;
+    const e = await reject(getOnce(deps(f), true));
+    expect(e).toBeInstanceOf(ProviderError);
+    expect(e.message).toBe("google calendar drafts.create failed: token refresh failed");
+    expect(sends).toBe(1);
+  });
+
+  it.each([[undefined], [false]])("with singleSend %s the 401 retry still sends twice", async (singleSend) => {
+    writeToken(dir, token());
+    const r = await getOnce(use(["events-list-401", "oauth-refresh", "events-list-page"]), singleSend);
+    expect(r.status).toBe(200);
+    expect(apiSends()).toHaveLength(2);
   });
 });
 

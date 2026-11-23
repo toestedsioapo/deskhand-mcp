@@ -69,6 +69,11 @@ export interface PlanKind<P, R> {
    * re-check, so the provider is never asked to write.
    */
   writable?(plan: P): boolean;
+  /**
+   * Optional: true when the provider has no unique key that refuses a second write, so apply must hold a ledger write
+   * claim around it (gate 8b, src/approval/write-claim.ts).
+   */
+  needsWriteClaim?: boolean;
   /** Optional lines `deskhand approve` prints between the diff and the prompt (approver only, display only). */
   approveSummary?(plan: P): string[];
 }

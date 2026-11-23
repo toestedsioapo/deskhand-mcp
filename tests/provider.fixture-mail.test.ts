@@ -173,14 +173,14 @@ describe("fixture mailbox createDraft", () => {
     const logPath = join(dir, "w1.log");
     let writes = 0;
     const mail = createFixtureMailProvider(world(one, logPath), { afterWrite: () => void (writes += 1) });
-    expect(await mail.lookupDraft("<deskhand.k1@deskhand.invalid>")).toEqual({ state: "absent" });
+    expect(await mail.lookupDraft("<deskhand.k1@deskhand.invalid>", "t1")).toEqual({ state: "absent" });
     const a = await mail.createDraft(draft());
     const b = await mail.createDraft(draft({ body: "different" }));
     expect(b).toEqual(a);
     expect(a).toMatchObject({ draftId: "dr_1", messageId: "msg_dr_1", bodySha256: sha("SECRET BODY TEXT") });
     expect(mail.drafts).toHaveLength(1);
     expect(writes).toBe(1);
-    expect(await mail.lookupDraft(a.messageIdHeader)).toEqual({ state: "present", draft: a });
+    expect(await mail.lookupDraft(a.messageIdHeader, a.threadId)).toEqual({ state: "present", draft: a });
     const c = await mail.createDraft(draft({ messageIdHeader: "<deskhand.k2@deskhand.invalid>" }));
     expect(c.draftId).toBe("dr_2");
     expect(readFileSync(logPath, "utf8").trim().split("\n")).toHaveLength(2);

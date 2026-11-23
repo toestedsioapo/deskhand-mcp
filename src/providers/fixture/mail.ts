@@ -161,7 +161,8 @@ export function createFixtureMailProvider(
       return messages ? messages.map((m) => m.id) : null;
     },
 
-    async lookupDraft(messageIdHeader): Promise<DraftLookup> {
+    // The fixture has one index, so the header alone finds a draft; `matches` then compares its thread with the plan.
+    async lookupDraft(messageIdHeader, _threadId): Promise<DraftLookup> {
       await delay();
       const found = drafts.find((d) => d.messageIdHeader === messageIdHeader);
       return found ? { state: "present", draft: copyDraft(found) } : { state: "absent" };

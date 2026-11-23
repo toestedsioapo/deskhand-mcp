@@ -148,11 +148,15 @@ async function send(
  * for a timeout, a network error, HTTP 429 and 5xx (outcome unknown or
  * transient), and definite for every other status. A redirect is never
  * followed (a network error to the caller).
+ *
+ * `singleSend` is for a write with no unique key (a Gmail draft): the request is sent at most once, so it ends inside
+ * the write claim's hold. A 401 still refreshes the token for the next apply, then throws a retryable ProviderError;
+ * an error from that refresh propagates unchanged.
  */
 export async function googleRequest(
   deps: GoogleHttpDeps,
   op: string,
-  req: { method: "GET" | "POST"; url: string; body?: unknown; requiredScope: string },
+  req: { method: "GET" | "POST"; url: string; body?: unknown; requiredScope: string; singleSend?: boolean },
 ): Promise<GoogleResponse> {
   let url: URL;
   try {
@@ -171,6 +175,7 @@ export async function googleRequest(
   let res = await send(deps, op, req, token.access_token);
   if (res.status === 401) {
     token = await refresh(deps, op, token.access_token);
+    if (req.singleSend === true) throw new ProviderError(PROVIDER, op, { phrase: "access token refreshed; retry", retryable: true });
     res = await send(deps, op, req, token.access_token);
     if (res.status === 401) throw new AuthRequiredError(EXPIRED);
   }

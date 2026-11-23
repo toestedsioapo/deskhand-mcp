@@ -178,6 +178,8 @@ export const mailCreateDraftReply: PlanKind<MailDraftPlan, DraftRef> = {
   kind: "mail.create_draft_reply",
   schema: mailDraftPlanSchema,
   phrases: { differs: DRAFT_DIFFERS, deleted: DRAFT_DELETED },
+  // Gmail has no unique key on a draft's Message-ID (M4b decision 8).
+  needsWriteClaim: true,
 
   // Decision 3. The approver sees every body row, each behind `  > `; the agent gets one omitted row instead.
   // Ruling R3: the agent audience also gets the subject and every address value as its omitted marker (mailbox
@@ -257,8 +259,8 @@ export const mailCreateDraftReply: PlanKind<MailDraftPlan, DraftRef> = {
     return { ok: true };
   },
 
-  async lookupExisting(_plan, key, { mail }) {
-    const l = await mail.lookupDraft(draftHeaderFor(key));
+  async lookupExisting(plan, key, { mail }) {
+    const l = await mail.lookupDraft(draftHeaderFor(key), plan.draft.threadId);
     return l.state === "present" ? { state: "present", value: l.draft } : { state: "absent" };
   },
 

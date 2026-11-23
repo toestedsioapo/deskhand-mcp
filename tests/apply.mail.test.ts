@@ -156,7 +156,7 @@ describe("propose -> approve -> apply a draft (end to end on the fixture)", () =
     }
     expect(rawResult(hh, id)).not.toContain(SECRET);
     for (const row of hh.rows()) expect(row.preview_json).not.toContain(SECRET);
-    expect(lifecycle(hh, id)).toEqual(["plan_created", "approved", "cli_command", "applied"]);
+    expect(lifecycle(hh, id)).toEqual(["plan_created", "approved", "cli_command", "write_claimed", "applied"]);
 
     // No-send: the provider object never grew a send member, and the write log holds only the one draft line,
     // with In-Reply-To and References from the thread and the body omitted.

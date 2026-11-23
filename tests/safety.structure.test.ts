@@ -411,7 +411,7 @@ describe("safety structure", () => {
           ["searchThreads", () => mail.searchThreads("x", 1)],
           ["getThread", () => mail.getThread("t", 1)],
           ["threadMessageIds", () => mail.threadMessageIds("t")],
-          ["lookupDraft", () => mail.lookupDraft("<a@b>")],
+          ["lookupDraft", () => mail.lookupDraft("<a@b>", "t")],
           [
             "createDraft",
             () =>

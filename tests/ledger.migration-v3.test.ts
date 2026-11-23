@@ -1,6 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { LEDGER_SCHEMA_VERSION } from "../src/ledger/contract.js";
 import { LedgerDb } from "../src/ledger/db.js";
 import { MIGRATIONS, runMigrations } from "../src/ledger/migrations/index.js";
 import { makeTempHome } from "./helpers/home.js";
@@ -43,7 +44,7 @@ describe("migration 3 (PROVIDER_NOT_CONFIGURED, NOT_FOUND)", () => {
     seedV2(path);
     const db = LedgerDb.open(path);
     try {
-      expect(db.userVersion()).toBe(3);
+      expect(db.userVersion()).toBe(LEDGER_SCHEMA_VERSION);
       const rows = db.all<{ id: number; ts: string; action_id: string | null; error_code: string | null; preview_json: string }>(
         "SELECT id, ts, action_id, error_code, preview_json FROM events ORDER BY id",
       );
@@ -101,7 +102,7 @@ describe("migration 3 (PROVIDER_NOT_CONFIGURED, NOT_FOUND)", () => {
     const db = LedgerDb.open(path);
     try {
       runMigrations(db);
-      expect(db.userVersion()).toBe(3);
+      expect(db.userVersion()).toBe(LEDGER_SCHEMA_VERSION);
       expect(db.get<{ n: number }>("SELECT count(*) AS n FROM events")?.n).toBe(2);
     } finally {
       db.close();

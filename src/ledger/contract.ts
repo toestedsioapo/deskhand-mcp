@@ -3,11 +3,12 @@
  * docs/ledger-contract.md ("Value sets"); a test parses the doc and compares,
  * so the two cannot drift. Changing any of them is a breaking change.
  */
-export const LEDGER_SCHEMA_VERSION = 3;
+export const LEDGER_SCHEMA_VERSION = 4;
 
 export const ACTION_STATUSES = ["planned", "approved", "applied", "rejected", "failed"] as const;
 
-export const EVENT_KINDS = [
+/** The event kinds of schema v1, frozen: migrations 0001 to 0003 build their CHECK from this. */
+export const EVENT_KINDS_V1 = [
   "tool_call",
   "cli_command",
   "plan_created",
@@ -18,6 +19,9 @@ export const EVENT_KINDS = [
   "apply_refused",
   "apply_failed",
 ] as const;
+
+/** Schema v4 adds write_claimed (the ledger serialises a draft write, M4b decision 8). */
+export const EVENT_KINDS = [...EVENT_KINDS_V1, "write_claimed"] as const;
 
 export const EVENT_OUTCOMES = ["ok", "error", "rejected"] as const;
 
