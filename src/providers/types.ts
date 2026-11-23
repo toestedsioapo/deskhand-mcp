@@ -163,7 +163,11 @@ export interface MailProvider {
   threadMessageIds(threadId: string): Promise<string[] | null>;
   /** The draft under this Message-ID. `threadId` is the plan's thread, so an adapter can also look there when search misses. */
   lookupDraft(messageIdHeader: string, threadId: string): Promise<DraftLookup>;
-  /** Existing messageIdHeader: returns the existing draft, never a second one. */
+  /**
+   * Writes the draft. On a provider with no unique key on the Message-ID (Gmail) this does not deduplicate: each call
+   * can create a new draft, so the apply engine must look up under its write claim first. Only a provider that enforces
+   * the key may return an existing draft instead.
+   */
   createDraft(draft: NewDraft): Promise<DraftRef>;
 }
 

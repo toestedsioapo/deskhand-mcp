@@ -1,0 +1,63 @@
+{
+  "request": {
+    "method": "GET",
+    "url": "https://www.googleapis.com/gmail/v1/users/me/drafts/dr-1?format=full"
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "id": "dr-1",
+      "message": {
+        "id": "dm-1",
+        "threadId": "t-reply",
+        "labelIds": [
+          "DRAFT"
+        ],
+        "snippet": "",
+        "internalDate": "1794308400000",
+        "payload": {
+          "mimeType": "text/plain",
+          "filename": "",
+          "headers": [
+            {
+              "name": "From",
+              "value": "me@example.com"
+            },
+            {
+              "name": "To",
+              "value": "ana@example.com"
+            },
+            {
+              "name": "Bcc",
+              "value": "boss@example.com"
+            },
+            {
+              "name": "Subject",
+              "value": "Re: Q4 budget"
+            },
+            {
+              "name": "Message-ID",
+              "value": "<someone-else@example.com>"
+            },
+            {
+              "name": "In-Reply-To",
+              "value": "<r2@example.com>"
+            },
+            {
+              "name": "References",
+              "value": "<r1@example.com> <r2@example.com>"
+            },
+            {
+              "name": "Content-Type",
+              "value": "text/plain; charset=UTF-8"
+            }
+          ],
+          "body": {
+            "size": 38,
+            "data": "VGhhbmtzIEFuYSwNCg0KVGhlIG51bWJlcnMgbG9vayByaWdodC4"
+          }
+        }
+      }
+    }
+  }
+}

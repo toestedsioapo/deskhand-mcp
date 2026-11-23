@@ -384,8 +384,9 @@ export async function applyAction(ctx: AppContext, actionId: string): Promise<Ap
     // Nothing there. An auth failure means the write was not attempted or not authorised: never terminal.
     if (e instanceof AuthRequiredError) return refuse(ctx, actionId, true, "AUTH_REQUIRED", errText(e), claimId);
     const msg = `${WRITE_FAILED}${errText(e)}`;
-    // Ambiguous (timeout, network, 429, 5xx): it may still land, and a retry with the same key cannot duplicate
-    // it (recovery or the provider's existing-id path finds it). Stay approved. Only a definite rejection fails.
+    // Ambiguous (timeout, network, 429, 5xx): it may still land. Stay approved; only a definite rejection fails. A
+    // retry finds it by recovery or the provider's fixed id. A kind with a write claim keeps it (not released here), so
+    // a retry may write again only after the hold and a lookup that finds nothing (residual risk in SECURITY.md).
     if (ambiguous) return refuse(ctx, actionId, true, "PROVIDER_ERROR", msg);
     return fail(ctx, actionId, "PROVIDER_ERROR", msg);
   }

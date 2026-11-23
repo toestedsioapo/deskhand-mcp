@@ -1,0 +1,69 @@
+{
+  "request": {
+    "method": "GET",
+    "url": "https://www.googleapis.com/gmail/v1/users/me/threads/t-reply?format=metadata&metadataHeaders=Message-ID"
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "id": "t-reply",
+      "historyId": "9001",
+      "messages": [
+        {
+          "id": "r1",
+          "threadId": "t-reply",
+          "labelIds": [
+            "INBOX"
+          ],
+          "snippet": "snippet of r1",
+          "internalDate": "1794301200000",
+          "payload": {
+            "mimeType": "text/plain",
+            "headers": [
+              {
+                "name": "Message-ID",
+                "value": "<r1@example.com>"
+              }
+            ]
+          }
+        },
+        {
+          "id": "r2",
+          "threadId": "t-reply",
+          "labelIds": [
+            "INBOX"
+          ],
+          "snippet": "snippet of r2",
+          "internalDate": "1794304800000",
+          "payload": {
+            "mimeType": "text/plain",
+            "headers": [
+              {
+                "name": "Message-ID",
+                "value": "<r2@example.com>"
+              }
+            ]
+          }
+        },
+        {
+          "id": "dm-1",
+          "threadId": "t-reply",
+          "labelIds": [
+            "DRAFT"
+          ],
+          "snippet": "",
+          "internalDate": "1794308400000",
+          "payload": {
+            "mimeType": "text/plain",
+            "headers": [
+              {
+                "name": "Message-ID",
+                "value": "<deskhand.088afa7571116bd6a8f7b781318e85bd9a37eed81b5140bfe630e9f752558fa8@deskhand.invalid>"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

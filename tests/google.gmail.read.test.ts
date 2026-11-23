@@ -14,7 +14,6 @@ import { replayFetch, type Replay } from "./helpers/replay-fetch.js";
 
 const NOW = new Date("2026-11-14T10:00:00.000Z");
 const LOGIN = "Not signed in to Google. Run: deskhand auth login";
-const NOT_YET = "mail is not available for this provider yet";
 
 let home: ReturnType<typeof makeTempHome>;
 let replay: Replay | undefined;
@@ -86,7 +85,8 @@ describe("recordings", () => {
     for (const n of names) {
       expect(n).not.toMatch(/^(token|client_secret|credentials)/);
       const addresses = readFileSync(`${dir}${n}`, "utf8").match(/[\w.+-]+@[\w.-]+\.[a-z]+/gi) ?? [];
-      expect(addresses.filter((a) => !a.endsWith("@example.com"))).toEqual([]);
+      // The one other form: a draft's own Message-ID, which is derived from the action id and is not an address.
+      expect(addresses.filter((a) => !a.endsWith("@example.com") && !/^deskhand\.[0-9a-f]{64}@deskhand\.invalid$/.test(a))).toEqual([]);
     }
   });
 });
@@ -309,23 +309,7 @@ describe("path ids", () => {
   });
 });
 
-describe("writes are not built yet", () => {
-  it("lookupDraft and createDraft refuse with the fixed phrase and make no call", async () => {
-    const { f, urls } = stub({});
-    const p = createGmailProvider(deps(f));
-    const draft = { threadId: "t", messageIdHeader: "<a@b>", inReplyTo: null, references: [], to: ["a@example.com"], cc: [], bcc: [], subject: "s", body: "b" };
-    const cases: [string, () => Promise<unknown>][] = [
-      ["lookupDraft", () => p.lookupDraft("<a@b>", "t")],
-      ["createDraft", () => p.createDraft(draft)],
-    ];
-    for (const [op, call] of cases) {
-      const e = await reject(call());
-      expect(e).toBeInstanceOf(ProviderError);
-      expect(e.message).toBe(`google gmail ${op} failed: ${NOT_YET}`);
-      expect((e as ProviderError).retryable).toBe(false);
-    }
-    expect(urls).toEqual([]);
-  });
+describe("the write surface", () => {
   it("the provider has no send method", () => {
     const p = createGmailProvider(deps(stub({}).f));
     expect(Object.keys(p).filter((k) => /send/i.test(k))).toEqual([]);

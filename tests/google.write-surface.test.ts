@@ -1,6 +1,7 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { SCOPE_CALENDAR_READ, SCOPE_CALENDAR_WRITE } from "../src/config/scopes.js";
 import { createGoogleCalendarProvider } from "../src/providers/google/calendar.js";
@@ -110,5 +111,28 @@ describe("Google write surface (behavioural)", () => {
       KEY,
     );
     expect(seen.map((r) => `${r.method} ${r.url.pathname}`)).toEqual(["POST /calendar/v3/calendars/primary/events"]);
+  });
+});
+
+describe("Gmail write surface", () => {
+  const source = (name: string) => readFileSync(fileURLToPath(new URL(`../src/providers/google/${name}`, import.meta.url)), "utf8");
+
+  for (const name of ["gmail.ts", "mime.ts"]) {
+    it(`${name} holds no send path string`, () => {
+      const text = source(name);
+      expect(text).not.toMatch(/\/send\b/i);
+      expect(text).not.toMatch(/["'`]send["'`]/i);
+    });
+  }
+
+  it("gmail.ts builds its one POST inside createDraft, with the compose scope and singleSend", () => {
+    const text = source("gmail.ts");
+    expect(text.match(/["'`]POST["'`]/g)).toHaveLength(1);
+    const start = text.indexOf("async createDraft(");
+    expect(start).toBeGreaterThan(0);
+    const body = text.slice(start, text.indexOf("\n    },\n", start));
+    expect(body).toMatch(/method: "POST",\s*url: `\$\{BASE\}\/drafts`/);
+    expect(body).toMatch(/requiredScope: SCOPE_GMAIL_COMPOSE/);
+    expect(body).toMatch(/singleSend: true/);
   });
 });

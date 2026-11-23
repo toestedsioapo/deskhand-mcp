@@ -1,8 +1,9 @@
-import type { MailAddress } from "../types.js";
+import { ProviderError } from "../errors.js";
+import type { MailAddress, NewDraft } from "../types.js";
 
 /**
  * Parsers for attacker-controlled mail (M4b decision 5). None of them throws on bad input, and each scans its input
- * once, so a hostile message costs linear time.
+ * once, so a hostile message costs linear time. `buildDraftMime`, at the end, is the one writer.
  */
 
 const MAX_DEPTH = 10;
@@ -372,4 +373,78 @@ export function messageBody(payload: unknown, maxChars: number): { text: string;
   const chosen = first.plain || first.alt === null ? first : (leaves.find((l) => l.plain && l.alt === first.alt) ?? first);
   const text = partText(chosen.part);
   return cut(chosen.plain ? text : htmlToText(text), maxChars);
+}
+
+const CRLF = "\r\n";
+const FOLD_AT = 76;
+/** Bytes of UTF-8 in one encoded word: `=?UTF-8?B?` + 60 base64 characters + `?=` is 72, within RFC 2047's 75. */
+const WORD_BYTES = 45;
+const PRINTABLE_ASCII = /^[\x20-\x7e]*$/;
+
+function checkedHeader(value: string): string {
+  if (/[\r\n\0]/.test(value)) throw new ProviderError("google gmail", "createDraft", { phrase: "invalid header value" });
+  return value;
+}
+
+/** RFC 2047 B words of whole characters, folded. */
+function encodedSubject(subject: string): string {
+  const words: string[] = [];
+  let chunk = "";
+  let bytes = 0;
+  const flush = (): void => {
+    words.push(`=?UTF-8?B?${Buffer.from(chunk, "utf8").toString("base64")}?=`);
+    chunk = "";
+    bytes = 0;
+  };
+  for (const ch of subject) {
+    const size = Buffer.byteLength(ch, "utf8");
+    if (bytes + size > WORD_BYTES) flush();
+    chunk += ch;
+    bytes += size;
+  }
+  flush();
+  return words.join(`${CRLF} `);
+}
+
+/**
+ * As written when printable ASCII. Text holding `=?` is encoded too: a mail client would otherwise decode it as an
+ * encoded word and show something other than what the owner approved.
+ */
+const subjectValue = (subject: string): string =>
+  PRINTABLE_ASCII.test(subject) && !subject.includes("=?") ? subject : encodedSubject(subject);
+
+/** `Name: a, b` (or space-separated), folded between values so a long list stays under the line limit. */
+function listHeader(name: string, values: readonly string[], separator: "," | ""): string {
+  let line = `${name}: ${checkedHeader(values[0]!)}`;
+  const lines: string[] = [];
+  for (const raw of values.slice(1)) {
+    const v = checkedHeader(raw);
+    if (line.length + separator.length + 1 + v.length > FOLD_AT) {
+      lines.push(`${line}${separator}`);
+      line = ` ${v}`;
+    } else {
+      line += `${separator} ${v}`;
+    }
+  }
+  lines.push(line);
+  return lines.join(CRLF);
+}
+
+/** The draft as RFC 5322 text (M4b decision 4). No From header: Gmail sets the account address. */
+export function buildDraftMime(d: NewDraft): string {
+  const headers = [
+    `Message-ID: ${checkedHeader(d.messageIdHeader)}`,
+    ...(d.inReplyTo === null ? [] : [`In-Reply-To: ${checkedHeader(d.inReplyTo)}`]),
+    ...(d.references.length > 0 ? [listHeader("References", d.references, "")] : []),
+    listHeader("To", d.to, ","),
+    ...(d.cc.length > 0 ? [listHeader("Cc", d.cc, ",")] : []),
+    ...(d.bcc.length > 0 ? [listHeader("Bcc", d.bcc, ",")] : []),
+    `Subject: ${subjectValue(checkedHeader(d.subject))}`,
+    "MIME-Version: 1.0",
+    "Content-Type: text/plain; charset=UTF-8",
+    "Content-Transfer-Encoding: base64",
+  ];
+  const encoded = Buffer.from(d.body.replace(/\n/g, CRLF), "utf8").toString("base64");
+  const body = (encoded.match(/.{1,76}/g) ?? []).join(CRLF);
+  return `${headers.join(CRLF)}${CRLF}${CRLF}${body}`;
 }

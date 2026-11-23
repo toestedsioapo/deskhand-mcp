@@ -1,0 +1,19 @@
+{
+  "request": {
+    "method": "POST",
+    "url": "https://www.googleapis.com/gmail/v1/users/me/drafts"
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "id": "dr-1",
+      "message": {
+        "id": "dm-1",
+        "threadId": "t-reply",
+        "labelIds": [
+          "DRAFT"
+        ]
+      }
+    }
+  }
+}

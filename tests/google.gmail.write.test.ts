@@ -1,0 +1,395 @@
+import { createHash } from "node:crypto";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { SCOPE_GMAIL_COMPOSE, SCOPE_GMAIL_READ } from "../src/config/scopes.js";
+import { AuthRequiredError, ProviderError } from "../src/providers/errors.js";
+import { createGmailProvider } from "../src/providers/google/gmail.js";
+import { GOOGLE_ENDPOINTS } from "../src/providers/google/oauth.js";
+import { buildDraftMime, decodeEncodedWords } from "../src/providers/google/mime.js";
+import { writeToken } from "../src/providers/google/token-store.js";
+import type { NewDraft } from "../src/providers/types.js";
+import { makeTempHome } from "./helpers/home.js";
+import { replayFetch, type Replay } from "./helpers/replay-fetch.js";
+
+const NOW = new Date("2026-11-14T10:00:00.000Z");
+const KEY = "088afa7571116bd6a8f7b781318e85bd9a37eed81b5140bfe630e9f752558fa8";
+const OURS = `<deskhand.${KEY}@deskhand.invalid>`;
+const UPGRADE = "Google write access is not granted. Run: deskhand auth upgrade";
+const READ_BACK = "google gmail createDraft failed: the draft was created but could not be read back";
+const NO_ID = "google gmail createDraft failed: the draft may have been created but the response had no draft id";
+const UNMAPPED = "google gmail lookupDraft failed: a draft message was found but could not be mapped to a draft";
+const BODY = "Thanks Ana,\n\nThe numbers look right.";
+
+const DRAFT: NewDraft = {
+  threadId: "t-reply",
+  messageIdHeader: OURS,
+  inReplyTo: "<r2@example.com>",
+  references: ["<r1@example.com>", "<r2@example.com>"],
+  to: ["ana@example.com"],
+  cc: [],
+  bcc: ["boss@example.com"],
+  subject: "Re: Q4 budget",
+  body: BODY,
+};
+
+let home: ReturnType<typeof makeTempHome>;
+let replay: Replay | undefined;
+
+function login(scopes: string[]): void {
+  writeToken(home.home, {
+    version: 1,
+    client_id: "cid.apps.googleusercontent.com",
+    scopes,
+    refresh_token: "1//REFRESH-SECRET",
+    access_token: "ya29.OLD-ACCESS-TOKEN",
+    expires_at: new Date(NOW.getTime() + 30 * 60_000).toISOString(),
+    obtained_at: "2026-11-10T10:00:00.000Z",
+  });
+}
+
+beforeEach(() => {
+  home = makeTempHome();
+  login([SCOPE_GMAIL_READ, SCOPE_GMAIL_COMPOSE]);
+});
+afterEach(() => {
+  try {
+    replay?.verify();
+  } finally {
+    replay = undefined;
+    home.cleanup();
+  }
+});
+
+const provider = (names: string[]) => {
+  replay = replayFetch(names);
+  const f = replay.fetch;
+  return createGmailProvider({ fetch: f, configDir: home.home, now: () => NOW, oauth: { fetch: f, endpoints: GOOGLE_ENDPOINTS, now: () => NOW } });
+};
+const reject = async (p: Promise<unknown>): Promise<Error> => {
+  try {
+    await p;
+  } catch (e) {
+    return e as Error;
+  }
+  throw new Error("expected a rejection");
+};
+const posts = () => replay!.seen.filter((r) => r.method === "POST" && r.url.includes("/gmail/"));
+const expectRetryable = (e: Error, message: string) => {
+  expect(e).toBeInstanceOf(ProviderError);
+  expect(e.message).toBe(message);
+  expect((e as ProviderError).retryable).toBe(true);
+};
+
+describe("buildDraftMime", () => {
+  it("exact output for an ASCII subject, headers in the fixed order and no From", () => {
+    const mime = buildDraftMime({ ...DRAFT, cc: ["cc@example.com"], body: "Hi\nthere" });
+    expect(mime).toBe(
+      [
+        `Message-ID: ${OURS}`,
+        "In-Reply-To: <r2@example.com>",
+        "References: <r1@example.com> <r2@example.com>",
+        "To: ana@example.com",
+        "Cc: cc@example.com",
+        "Bcc: boss@example.com",
+        "Subject: Re: Q4 budget",
+        "MIME-Version: 1.0",
+        "Content-Type: text/plain; charset=UTF-8",
+        "Content-Transfer-Encoding: base64",
+        "",
+        "SGkNCnRoZXJl",
+      ].join("\r\n"),
+    );
+  });
+
+  it("leaves out In-Reply-To, References, Cc and Bcc when they are empty", () => {
+    const mime = buildDraftMime({ ...DRAFT, inReplyTo: null, references: [], bcc: [] });
+    expect(mime.split("\r\n\r\n")[0]!.split("\r\n").map((l) => l.split(":")[0])).toEqual([
+      "Message-ID",
+      "To",
+      "Subject",
+      "MIME-Version",
+      "Content-Type",
+      "Content-Transfer-Encoding",
+    ]);
+  });
+
+  it("exact output for a non-ASCII subject", () => {
+    const mime = buildDraftMime({ ...DRAFT, subject: "Re: Presupuesto café" });
+    const word = Buffer.from("Re: Presupuesto café", "utf8").toString("base64");
+    expect(mime).toContain(`\r\nSubject: =?UTF-8?B?${word}?=\r\nMIME-Version: 1.0\r\n`);
+  });
+
+  it("a long non-ASCII subject: words of at most 75 characters, folded, whole characters, decoding to the subject", () => {
+    const subject = "Prévision é€😀 ".repeat(16).trim();
+    const mime = buildDraftMime({ ...DRAFT, subject });
+    const line = /\r\nSubject: ([\s\S]*?)\r\nMIME-Version/.exec(mime)![1]!;
+    const words = line.split("\r\n ");
+    expect(words.length).toBeGreaterThan(1);
+    for (const w of words) {
+      expect(w.length).toBeLessThanOrEqual(75);
+      const b64 = /^=\?UTF-8\?B\?([A-Za-z0-9+/=]+)\?=$/.exec(w)![1]!;
+      expect(Buffer.from(b64, "base64").toString("utf8")).not.toContain("�");
+    }
+    expect(decodeEncodedWords(line.replace(/\r\n /g, " "))).toBe(subject);
+  });
+
+  it("an ASCII subject that reads as an encoded word is encoded, so a mail client shows the approved text", () => {
+    const subject = "Re: =?UTF-8?B?V2lyZSB0aGUgbW9uZXk=?=";
+    const line = /\r\nSubject: (.*?)\r\nMIME-Version/.exec(buildDraftMime({ ...DRAFT, subject }))![1]!;
+    expect(line).not.toBe(subject);
+    expect(decodeEncodedWords(line)).toBe(subject);
+  });
+
+  it("the body is CRLF, base64, in lines of 76, and round-trips", () => {
+    const body = Array.from({ length: 40 }, (_, i) => `line ${i} of the reply, café`).join("\n");
+    const encoded = buildDraftMime({ ...DRAFT, body }).split("\r\n\r\n")[1]!;
+    const lines = encoded.split("\r\n");
+    expect(lines.length).toBeGreaterThan(1);
+    expect(lines.slice(0, -1).every((l) => l.length === 76)).toBe(true);
+    expect(lines.at(-1)!.length).toBeLessThanOrEqual(76);
+    expect(Buffer.from(lines.join(""), "base64").toString("utf8")).toBe(body.replace(/\n/g, "\r\n"));
+  });
+
+  it("a long recipient list is folded under the 998 line limit", () => {
+    const to = Array.from({ length: 50 }, (_, i) => `recipient-with-a-long-name-${i}@example.com`);
+    const head = buildDraftMime({ ...DRAFT, to }).split("\r\n\r\n")[0]!;
+    const value = /(?:^|\r\n)To: ([\s\S]*?)\r\nBcc:/.exec(head)![1]!;
+    expect(value.split("\r\n").length).toBeGreaterThan(1);
+    expect(`To: ${value}`.split("\r\n").every((l) => l.length <= 76)).toBe(true);
+    expect(value.replace(/\r\n /g, " ").split(", ")).toEqual(to);
+  });
+
+  for (const [name, over] of [
+    ["subject with CR", { subject: "a\rBcc: x@example.com" }],
+    ["subject with LF", { subject: "a\nBcc: x@example.com" }],
+    ["subject with NUL", { subject: "a\0b" }],
+    ["address with LF", { to: ["a@example.com\nBcc: x@example.com"] }],
+    ["bcc with CR", { bcc: ["a@example.com\r"] }],
+    ["In-Reply-To with LF", { inReplyTo: "<a@example.com>\nBcc: x@example.com" }],
+    ["References with CR", { references: ["<a@example.com>\r"] }],
+    ["Message-ID with LF", { messageIdHeader: "<a@example.com>\nX: y" }],
+  ] as [string, Partial<NewDraft>][]) {
+    it(`a header value with a line break or NUL throws: ${name}`, () => {
+      let e: unknown;
+      try {
+        buildDraftMime({ ...DRAFT, ...over });
+      } catch (err) {
+        e = err;
+      }
+      expect(e).toBeInstanceOf(ProviderError);
+      expect((e as Error).message).toBe("google gmail createDraft failed: invalid header value");
+    });
+  }
+});
+
+describe("createDraft", () => {
+  it("sends one POST whose raw decodes to the MIME, then returns what Gmail stored", async () => {
+    const p = provider(["gmail-drafts-create-200", "gmail-draft-get-ours"]);
+    const r = await p.createDraft(DRAFT);
+    expect(replay!.seen.map((q) => q.method)).toEqual(["POST", "GET"]);
+    const sent = JSON.parse(posts()[0]!.body!) as { message: { raw: string; threadId: string } };
+    expect(sent.message.threadId).toBe("t-reply");
+    expect(sent.message.raw).toMatch(/^[A-Za-z0-9_-]+$/);
+    expect(Buffer.from(sent.message.raw, "base64url").toString("utf8")).toBe(buildDraftMime(DRAFT));
+    expect(r).toEqual({
+      draftId: "dr-1",
+      messageId: "dm-1",
+      threadId: "t-reply",
+      messageIdHeader: OURS,
+      to: ["ana@example.com"],
+      cc: [],
+      bcc: ["boss@example.com"],
+      subject: "Re: Q4 budget",
+      bodySha256: createHash("sha256").update(BODY, "utf8").digest("hex"),
+    });
+  });
+
+  it("a read-only token makes no POST and throws the upgrade sentence", async () => {
+    login([SCOPE_GMAIL_READ]);
+    const p = provider([]);
+    const e = await reject(p.createDraft(DRAFT));
+    expect(e).toBeInstanceOf(AuthRequiredError);
+    expect(e.message).toBe(UPGRADE);
+    expect(replay!.seen).toEqual([]);
+  });
+
+  it("403 insufficientPermissions is the upgrade sentence", async () => {
+    const e = await reject(provider(["gmail-drafts-create-403"]).createDraft(DRAFT));
+    expect(e).toBeInstanceOf(AuthRequiredError);
+    expect(e.message).toBe(UPGRADE);
+    expect(e.message).not.toContain("FAKE-TOKEN");
+  });
+
+  it("a 401 refreshes the token and gives exactly one POST (singleSend), as a retryable error", async () => {
+    writeFileSync(
+      join(home.home, "client_secret.json"),
+      JSON.stringify({ installed: { client_id: "cid.apps.googleusercontent.com", client_secret: "CLIENT-SECRET-XYZ" } }),
+    );
+    const p = provider(["gmail-drafts-create-401", "oauth-refresh"]);
+    const e = await reject(p.createDraft(DRAFT));
+    expect(e).toBeInstanceOf(ProviderError);
+    expect((e as ProviderError).retryable).toBe(true);
+    expect(posts()).toHaveLength(1);
+  });
+
+  it("a 500 is retryable and its body never reaches the message", async () => {
+    const e = await reject(provider(["gmail-drafts-create-500"]).createDraft(DRAFT));
+    expect((e as ProviderError).retryable).toBe(true);
+    expect(e.message).not.toContain("FAKE-TOKEN");
+  });
+
+  it("a 2xx with no usable draft id is retryable: the draft probably landed", async () => {
+    expectRetryable(await reject(provider(["gmail-drafts-create-200-no-id"]).createDraft(DRAFT)), NO_ID);
+  });
+
+  for (const name of ["gmail-draft-get-404", "gmail-draft-get-unusable", "gmail-draft-get-not-draft"]) {
+    it(`a failed read-back after a 2xx is retryable: ${name}`, async () => {
+      expectRetryable(await reject(provider(["gmail-drafts-create-200", name]).createDraft(DRAFT)), READ_BACK);
+      expect(posts()).toHaveLength(1);
+    });
+  }
+
+  it("an auth error on the read-back is also the retryable error, so the claim is not released", async () => {
+    login([SCOPE_GMAIL_COMPOSE]); // the POST is allowed; the read-back's scope is missing
+    const e = await reject(provider(["gmail-drafts-create-200"]).createDraft(DRAFT));
+    expect(e).not.toBeInstanceOf(AuthRequiredError);
+    expectRetryable(e, READ_BACK);
+  });
+
+  it("a Message-ID Gmail rewrote is returned as stored, so the engine sees a difference and never posts again", async () => {
+    const r = await provider(["gmail-drafts-create-200", "gmail-draft-get-other-header"]).createDraft(DRAFT);
+    expect(r.messageIdHeader).toBe("<someone-else@example.com>");
+  });
+});
+
+describe("lookupDraft", () => {
+  it("finds a draft by search", async () => {
+    const r = await provider(["gmail-drafts-search-hit", "gmail-draft-get-ours"]).lookupDraft(OURS, "t-reply");
+    expect(r).toMatchObject({ state: "present", draft: { draftId: "dr-1", messageIdHeader: OURS, bcc: ["boss@example.com"] } });
+    const q = new URL(replay!.seen[0]!.url).searchParams;
+    expect(q.get("q")).toBe(`rfc822msgid:deskhand.${KEY}@deskhand.invalid`);
+    expect(q.get("maxResults")).toBe("10");
+  });
+
+  it("decodes the subject and hashes the body after CRLF becomes LF", async () => {
+    const r = await provider(["gmail-drafts-search-hit", "gmail-draft-get-encoded"]).lookupDraft(OURS, "t-reply");
+    expect(r).toMatchObject({
+      state: "present",
+      draft: { subject: "Re: Presupuesto café", bodySha256: createHash("sha256").update(BODY, "utf8").digest("hex") },
+    });
+  });
+
+  it("finds a draft by the thread route when search is empty, paging to map it", async () => {
+    const r = await provider([
+      "gmail-drafts-search-empty",
+      "gmail-reply-meta-draft",
+      "gmail-drafts-page-1",
+      "gmail-drafts-page-2",
+      "gmail-draft-get-ours",
+    ]).lookupDraft(OURS, "t-reply");
+    expect(r).toMatchObject({ state: "present", draft: { draftId: "dr-1", messageId: "dm-1" } });
+  });
+
+  it("absent when neither route finds it", async () => {
+    expect(await provider(["gmail-drafts-search-empty", "gmail-reply-meta-no-draft"]).lookupDraft(OURS, "t-reply")).toEqual({ state: "absent" });
+  });
+
+  it("a 404 on the thread route means that route found nothing", async () => {
+    expect(await provider(["gmail-drafts-search-empty", "gmail-reply-meta-404"]).lookupDraft(OURS, "t-reply")).toEqual({ state: "absent" });
+  });
+
+  it("a search hit whose Message-ID differs does not count", async () => {
+    const r = await provider(["gmail-drafts-search-hit", "gmail-draft-get-other-header", "gmail-reply-meta-no-draft"]).lookupDraft(OURS, "t-reply");
+    expect(r).toEqual({ state: "absent" });
+  });
+
+  it("our header on a non-DRAFT message never counts, on the search route", async () => {
+    const r = await provider(["gmail-drafts-search-hit", "gmail-draft-get-not-draft", "gmail-reply-meta-no-draft"]).lookupDraft(OURS, "t-reply");
+    expect(r).toEqual({ state: "absent" });
+  });
+
+  it("our header on a non-DRAFT message never counts, on the thread route", async () => {
+    const r = await provider(["gmail-drafts-search-empty", "gmail-reply-meta-foreign"]).lookupDraft(OURS, "t-reply");
+    expect(r).toEqual({ state: "absent" });
+  });
+
+  it("a draft message that cannot be mapped to a draft id is a retryable error", async () => {
+    const e = await reject(
+      provider(["gmail-drafts-search-empty", "gmail-reply-meta-draft", "gmail-drafts-page-unmapped"]).lookupDraft(OURS, "t-reply"),
+    );
+    expectRetryable(e, UNMAPPED);
+  });
+
+  it("a mapped draft that no longer reads as ours is a retryable error, so no POST follows", async () => {
+    const e = await reject(
+      provider([
+        "gmail-drafts-search-empty",
+        "gmail-reply-meta-draft",
+        "gmail-drafts-page-1",
+        "gmail-drafts-page-2",
+        "gmail-draft-get-404",
+      ]).lookupDraft(OURS, "t-reply"),
+    );
+    expectRetryable(e, UNMAPPED);
+  });
+
+  it("a mapped draft with an unusable read is a retryable error, so no POST follows", async () => {
+    const e = await reject(
+      provider([
+        "gmail-drafts-search-empty",
+        "gmail-reply-meta-draft",
+        "gmail-drafts-page-1",
+        "gmail-drafts-page-2",
+        "gmail-draft-get-unusable",
+      ]).lookupDraft(OURS, "t-reply"),
+    );
+    expectRetryable(e, UNMAPPED);
+  });
+
+  /** The thread route up to the mapped draft, whose read answers with `status` and `body`. */
+  const mappedReadAnswers = (status: number, body: unknown) => {
+    const f = (async (input: string | URL | Request) => {
+      const url = new URL(String(input));
+      let res: { status: number; body: unknown } = { status: 200, body: { drafts: [{ id: "dr-1", message: { id: "dm-1" } }] } };
+      if (url.searchParams.has("q")) res = { status: 200, body: { resultSizeEstimate: 0 } };
+      else if (url.pathname.includes("/threads/")) {
+        res = {
+          status: 200,
+          body: { messages: [{ id: "dm-1", labelIds: ["DRAFT"], payload: { headers: [{ name: "Message-ID", value: OURS }] } }] },
+        };
+      } else if (url.pathname.endsWith("/drafts/dr-1")) res = { status, body };
+      return new Response(JSON.stringify(res.body), { status: res.status });
+    }) as typeof fetch;
+    return createGmailProvider({ fetch: f, configDir: home.home, now: () => NOW, oauth: { fetch: f, endpoints: GOOGLE_ENDPOINTS, now: () => NOW } });
+  };
+
+  it("a mapped draft whose read gets a definite HTTP error is a retryable error", async () => {
+    const body = { error: { code: 400, errors: [{ reason: "badRequest" }] } };
+    expectRetryable(await reject(mappedReadAnswers(400, body).lookupDraft(OURS, "t-reply")), UNMAPPED);
+  });
+
+  it("an auth error on the mapped draft's read stays an auth error", async () => {
+    const body = { error: { code: 403, errors: [{ reason: "insufficientPermissions" }] } };
+    expect(await reject(mappedReadAnswers(403, body).lookupDraft(OURS, "t-reply"))).toBeInstanceOf(AuthRequiredError);
+  });
+
+  it("stops mapping after five pages", async () => {
+    const urls: string[] = [];
+    const f = (async (input: string | URL | Request) => {
+      const url = new URL(String(input));
+      urls.push(url.href);
+      let body: unknown = { drafts: [{ id: "x", message: { id: "y" } }], nextPageToken: "more" };
+      if (url.searchParams.has("q")) body = { resultSizeEstimate: 0 };
+      else if (url.pathname.includes("/threads/")) {
+        body = {
+          messages: [{ id: "dm-1", labelIds: ["DRAFT"], payload: { headers: [{ name: "Message-ID", value: OURS }] } }],
+        };
+      }
+      return new Response(JSON.stringify(body), { status: 200 });
+    }) as typeof fetch;
+    const p = createGmailProvider({ fetch: f, configDir: home.home, now: () => NOW, oauth: { fetch: f, endpoints: GOOGLE_ENDPOINTS, now: () => NOW } });
+    expectRetryable(await reject(p.lookupDraft(OURS, "t-reply")), UNMAPPED);
+    expect(urls.filter((u) => u.includes("maxResults=100"))).toHaveLength(5);
+  });
+});

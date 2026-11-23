@@ -1,0 +1,22 @@
+{
+  "request": {
+    "method": "POST",
+    "url": "https://www.googleapis.com/gmail/v1/users/me/drafts"
+  },
+  "response": {
+    "status": 500,
+    "body": {
+      "error": {
+        "code": 500,
+        "message": "Failure for token ya29.FAKE-TOKEN-IN-BODY",
+        "errors": [
+          {
+            "message": "ya29.FAKE-TOKEN-IN-BODY",
+            "domain": "global",
+            "reason": "backendError"
+          }
+        ]
+      }
+    }
+  }
+}
