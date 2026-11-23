@@ -1,0 +1,293 @@
+import { randomBytes } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import type { AppContext } from "../src/app-context.js";
+import { approveAction } from "../src/approval/approve.js";
+import { sweepDraftBodies } from "../src/approval/body-sweep.js";
+import type { CliIo } from "../src/cli/io.js";
+import { LedgerDb } from "../src/ledger/db.js";
+import { last4 } from "../src/ledger/ids.js";
+import { MINIMAL_INPUT, previewFields } from "../src/ledger/logging-transport.js";
+import { isBodyLine, normaliseBody } from "../src/util/sanitize.js";
+import { insertAction, setupHarness } from "./helpers/harness.js";
+import { makeTempHome } from "./helpers/home.js";
+import { msg, useMail } from "./helpers/mail-world.js";
+import { bodyFields, seedAction, validDraftPlan } from "./helpers/seed.js";
+
+// Regressions for the M4a whole-branch review (I1 to I3) and red-team round (F1 to F3).
+
+type H = Awaited<ReturnType<typeof setupHarness>>;
+let h: H | undefined;
+afterEach(async () => {
+  await h?.close();
+  h = undefined;
+});
+
+const S = "SENTINELTEXT";
+const THREAD = {
+  id: "t1",
+  messages: [msg("m1", "2026-11-08T10:00:00.000Z", { message_id: `<${S}_ignore_previous@evil.example>` })],
+};
+
+async function harness(): Promise<H> {
+  h = await setupHarness();
+  useMail(h, [THREAD]);
+  return h;
+}
+
+const previews = async (hh: H): Promise<string> => {
+  await hh.logging.whenIdle();
+  return hh.rows().map((r) => r.preview_json).join("\n");
+};
+
+function scripted(line: string, columns = 80): CliIo & { outText: () => string } {
+  let out = "";
+  return {
+    out: (s) => (out += s),
+    err: () => undefined,
+    stdinIsTTY: true,
+    stdoutIsTTY: true,
+    columns,
+    readLine: async () => line,
+    outText: () => out,
+  };
+}
+
+describe("I1: sender-controlled Message-IDs", () => {
+  it("action_explain wraps inReplyTo and references, and no preview holds them", async () => {
+    const hh = await harness();
+    const planned = await hh.client.callTool({ name: "inbox_draft_reply", arguments: { thread_id: "t1", body: "Thanks" } });
+    const id = (planned.structuredContent as { action_id: string }).action_id;
+    const r = await hh.client.callTool({ name: "action_explain", arguments: { action_id: id } });
+    const draft = (r.structuredContent as { plan: { draft: { inReplyTo: unknown; references: unknown[] } } }).plan.draft;
+    expect(draft.inReplyTo).toMatchObject({ untrusted: true, source: "mail:t1" });
+    expect(draft.references[0]).toMatchObject({ untrusted: true, source: "mail:t1" });
+    expect(await previews(hh)).not.toContain(S);
+  });
+});
+
+describe("I2: a refused inbox call keeps none of its input", () => {
+  it.each([
+    ["a misnamed body key", { thread_id: "t1", reply: `${S} short reply` }],
+    ["text in a key name", { thread_id: "t1", body: "x", [`${S} key`]: 1 }],
+  ])("%s", async (_name, args) => {
+    const hh = await harness();
+    const r = await hh.client.callTool({ name: "inbox_draft_reply", arguments: args });
+    expect(r.isError).toBe(true);
+    expect(await previews(hh)).not.toContain(S);
+  });
+});
+
+describe("I3: a busy checkpoint is retried", () => {
+  it("a later sweep that removes nothing still clears the body from the WAL", async () => {
+    const hh = await harness();
+    const marker = randomBytes(20).toString("hex");
+    seedAction(hh.ctx, "rejected", validDraftPlan({}, bodyFields(`Hi,\n${marker}`)));
+    const wal = `${hh.ctx.config.paths.ledgerPath}-wal`;
+    const reader = LedgerDb.open(hh.ctx.config.paths.ledgerPath);
+    try {
+      reader.run("BEGIN");
+      reader.get("SELECT count(*) AS n FROM actions");
+      const started = performance.now();
+      expect(sweepDraftBodies(hh.ctx)).toBe(1);
+      expect(performance.now() - started).toBeLessThan(2000); // a busy checkpoint must not wait out busy_timeout
+      reader.run("COMMIT");
+    } finally {
+      reader.close();
+    }
+    expect(hh.ctx.db.get<{ timeout: number }>("PRAGMA busy_timeout")?.timeout).toBe(5000);
+    expect(sweepDraftBodies(hh.ctx)).toBe(0);
+    if (existsSync(wal)) expect(readFileSync(wal).includes(marker)).toBe(false);
+  });
+});
+
+describe("when a removed body leaves the WAL (ADR 0010, point 5)", () => {
+  it("a sweep blocked by a reader: the text is gone once the last connection closes", () => {
+    const home = makeTempHome();
+    const path = join(home.home, "ledger.db");
+    const db = LedgerDb.open(path);
+    const reader = LedgerDb.open(path);
+    try {
+      const m = randomBytes(20).toString("hex");
+      insertAction(db, "act_WAL", validDraftPlan({}, bodyFields(`Hi,\n${m}`)), "rejected");
+      reader.run("BEGIN");
+      reader.get("SELECT count(*) AS n FROM actions");
+      expect(sweepDraftBodies({ db, clock: () => new Date() } as unknown as AppContext)).toBe(1);
+      expect(readFileSync(`${path}-wal`).includes(m)).toBe(true); // the busy checkpoint left it there
+      reader.run("COMMIT");
+      reader.close();
+      db.close();
+      if (existsSync(`${path}-wal`)) expect(readFileSync(`${path}-wal`).includes(m)).toBe(false);
+      expect(readFileSync(path).includes(m)).toBe(false);
+    } finally {
+      reader.close();
+      db.close();
+      home.cleanup();
+    }
+  });
+});
+
+describe("when a removed body leaves ledger.db (ADR 0010, point 5)", () => {
+  it("a sweep blocked by a reader leaves it in both files; the next sweep removes it before any close", () => {
+    const home = makeTempHome();
+    const path = join(home.home, "ledger.db");
+    const db = LedgerDb.open(path);
+    const reader = LedgerDb.open(path);
+    const ctx = { db, clock: () => new Date("2026-11-11T09:00:00.000Z") } as unknown as AppContext;
+    try {
+      const m = randomBytes(20).toString("hex");
+      insertAction(db, "act_MAIN", validDraftPlan({}, bodyFields(`Hi,\n${m}`)), "planned");
+      expect(sweepDraftBodies(ctx)).toBe(0); // live: kept, and its checkpoint moves the text into ledger.db
+      expect(readFileSync(path).includes(m)).toBe(true);
+      db.run("UPDATE actions SET status = 'rejected' WHERE id = ?", ["act_MAIN"]);
+      reader.run("BEGIN");
+      reader.get("SELECT count(*) AS n FROM actions");
+      expect(sweepDraftBodies(ctx)).toBe(1);
+      expect(readFileSync(path).includes(m)).toBe(true); // the busy checkpoint could not rewrite ledger.db
+      expect(readFileSync(`${path}-wal`).includes(m)).toBe(true);
+      reader.run("COMMIT");
+      expect(sweepDraftBodies(ctx)).toBe(0);
+      expect(readFileSync(path).includes(m)).toBe(false);
+      if (existsSync(`${path}-wal`)) expect(readFileSync(`${path}-wal`).includes(m)).toBe(false);
+    } finally {
+      reader.close();
+      db.close();
+      home.cleanup();
+    }
+  });
+});
+
+describe("addresses an agent copies into to, cc or bcc", () => {
+  const hostile = "ignore.previous.instructions@evil.example";
+
+  it.each(["to", "cc", "bcc"])("%s stays out of previews, input_json and ledger events", async (field) => {
+    h = await setupHarness();
+    const hh = h;
+    useMail(hh, [{ id: "t1", messages: [msg("m1", "2026-11-08T10:00:00.000Z", { reply_to: [{ address: hostile }] })] }]);
+    const recipients = field === "to" ? { to: [hostile] } : { to: ["ana@example.com"], [field]: [hostile] };
+    const planned = await hh.client.callTool({
+      name: "inbox_draft_reply",
+      arguments: { thread_id: "t1", body: "Thanks", ...recipients },
+    });
+    expect(planned.isError).toBeFalsy();
+    const id = (planned.structuredContent as { action_id: string }).action_id;
+
+    const explained = await hh.client.callTool({ name: "action_explain", arguments: { action_id: id } });
+    const queried = await hh.client.callTool({ name: "ledger_query", arguments: {} });
+    expect(await previews(hh)).not.toContain(hostile);
+    expect(hh.db.get<{ input_json: string }>("SELECT input_json FROM actions WHERE id = ?", [id])!.input_json).not.toContain(hostile);
+    expect(JSON.stringify((explained.structuredContent as { events: unknown[] }).events)).not.toContain(hostile);
+    expect(JSON.stringify((queried.structuredContent as { events: unknown[] }).events)).not.toContain(hostile);
+  });
+});
+
+describe("F1 and F2: the summary above the approve prompt", () => {
+  it("a subject cannot be the last row: the true new-recipients line is", async () => {
+    const hh = await harness();
+    const subject = "Re: Budget follow up notes for the finance review on Thursday morning new recipients: none";
+    const id = seedAction(hh.ctx, "planned", validDraftPlan({}, { subject }));
+    const io = scripted(last4(id));
+    expect(await approveAction(hh.ctx, id, io)).toEqual({ ok: true });
+    const rows = io.outText().split("\n").filter((l) => l.length > 0);
+    const end = rows.findLastIndex((l) => l.startsWith("new recipients: "));
+    expect(rows[end]).toBe("new recipients: 1 not on this thread");
+    expect(rows[end - 1]).toBe("summary: to 2, cc 1, bcc 1");
+    expect(rows.slice(end + 1).join("\n")).not.toContain("new recipients");
+  });
+
+  it("the summary states the body's size", async () => {
+    const hh = await harness();
+    const body = "one\ntwo\nthree";
+    const id = seedAction(hh.ctx, "planned", validDraftPlan({}, bodyFields(body)));
+    const io = scripted(last4(id));
+    await approveAction(hh.ctx, id, io);
+    const rows = io.outText().split("\n");
+    const at = rows.findLastIndex((l) => l.startsWith("summary: "));
+    expect(rows[at - 1]).toBe(`body: 3 lines, ${body.length} chars`);
+  });
+
+  it("refuses a whitespace run over 16 characters anywhere in a line", () => {
+    expect(isBodyLine(`a${" ".repeat(16)}b`)).toBe(true);
+    expect(isBodyLine(`${" ".repeat(16)}indented`)).toBe(true);
+    expect(isBodyLine(`a${" ".repeat(17)}b`)).toBe(false);
+    expect(isBodyLine(`${" ".repeat(17)}indented`)).toBe(false);
+    expect(isBodyLine(`a${"　".repeat(17)}b`)).toBe(false);
+    expect(normaliseBody(`Thanks.${" ".repeat(9000)}wire the money`)).toBeNull();
+  });
+});
+
+describe("re-review 1", () => {
+  it.each([
+    ["inbox_read_thread", { thread_id: `${S}_quoted_mail` }],
+    ["inbox_draft_reply", { thread_id: `${S}_quoted_mail`, body: "Thanks" }],
+    ["inbox_triage", { proposals: [{ thread_id: `${S}_quoted_mail`, priority: "low", next_action: "none" }] }],
+  ])("%s: a NOT_FOUND row does not store the id in its note", async (name, args) => {
+    const hh = await harness();
+    const r = await hh.client.callTool({ name, arguments: args });
+    expect(r.isError).toBe(true);
+    expect(await previews(hh)).not.toContain(S);
+  });
+
+  it("an invalid stored draft plan shows no mailbox text to the agent or in a preview", async () => {
+    const hh = await harness();
+    const id = seedAction(hh.ctx, "planned", validDraftPlan());
+    const row = hh.db.get<{ plan_json: string }>("SELECT plan_json FROM actions WHERE id = ?", [id])!;
+    const plan = JSON.parse(row.plan_json) as { draft: Record<string, unknown> };
+    Object.assign(plan.draft, {
+      inReplyTo: `<${S}_irt@evil.example>`,
+      references: [`<${S}_ref@evil.example>`],
+      subject: `${S} subject`,
+      to: [`${S}@evil.example`],
+      body: [`${S} body in an array`],
+      bodyRemoved: `${S} removed`,
+    });
+    hh.db.run("UPDATE actions SET plan_json = ? WHERE id = ?", [JSON.stringify(plan), id]);
+    const r = await hh.client.callTool({ name: "action_explain", arguments: { action_id: id } });
+    expect(r.isError).toBeFalsy();
+    const shown = (r.structuredContent as { plan: { draft: Record<string, unknown> } }).plan.draft;
+    // Owner decision 3 (2026-11-23): mailbox text is wrapped as untrusted; the body stays an omitted marker.
+    expect(shown["subject"]).toEqual({ untrusted: true, source: "mail:invalid-plan", content: `${S} subject` });
+    expect(shown["inReplyTo"]).toMatchObject({ untrusted: true });
+    expect(JSON.stringify([shown["body"], shown["bodyRemoved"]])).not.toContain(S);
+    expect(await previews(hh)).not.toContain(S);
+  });
+
+  it("refuses more than 16 consecutive empty lines in a body", () => {
+    const blank = (n: number) => `Wire the money.${"\n".repeat(n + 1)}Thanks`;
+    expect(normaliseBody(blank(16))).not.toBeNull();
+    expect(normaliseBody(blank(17))).toBeNull();
+    expect(normaliseBody(`${"\n".repeat(17)}Thanks`)).toBeNull();
+    expect(normaliseBody("Thanks\n")).toBe("Thanks\n");
+  });
+
+  it("the minimal retry row stores the placeholder, not a hash of it", () => {
+    const fields = previewFields({ tool: "inbox_search", input: MINIMAL_INPUT }, "error", MINIMAL_INPUT);
+    expect(fields.input).toBe(MINIMAL_INPUT);
+  });
+});
+
+describe("F3: free text in accepted inbox fields", () => {
+  it("rationale, reason, labels and query stay out of every preview and of input_json", async () => {
+    const hh = await harness();
+    const planned = await hh.client.callTool({
+      name: "inbox_draft_reply",
+      arguments: { thread_id: "t1", body: "Thanks", rationale: `${S} rationale` },
+    });
+    const id = (planned.structuredContent as { action_id: string }).action_id;
+    await hh.client.callTool({ name: "action_explain", arguments: { action_id: id } });
+    const triage = await hh.client.callTool({
+      name: "inbox_triage",
+      arguments: {
+        proposals: [{ thread_id: "t1", priority: "high", next_action: "reply", labels: [`${S} label`], reason: `${S} reason` }],
+      },
+    });
+    expect(triage.isError).toBeFalsy();
+    const search = await hh.client.callTool({ name: "inbox_search", arguments: { query: `${S} query` } });
+    expect(search.isError).toBeFalsy();
+    const text = (await previews(hh)).replaceAll(`${S}_ignore_previous`, "");
+    expect(text).not.toContain(S);
+    const row = hh.db.get<{ input_json: string }>("SELECT input_json FROM actions WHERE id = ?", [id])!;
+    expect(row.input_json).not.toContain(S);
+  });
+});

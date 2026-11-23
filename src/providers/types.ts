@@ -74,3 +74,93 @@ export interface CalendarProvider {
    */
   createEvent(event: NewCalendarEvent, idempotencyKey: string): Promise<EventRef>;
 }
+
+/** A mailbox address; `name` is "" when the header has no display name. */
+export interface MailAddress {
+  address: string;
+  name: string;
+}
+
+export interface MailMessage {
+  id: string;
+  threadId: string;
+  /** The RFC 5322 Message-ID header value (`<…>`), or null when the message has none. */
+  messageIdHeader: string | null;
+  /** ISO UTC instant. */
+  date: string;
+  from: MailAddress | null;
+  replyTo: MailAddress[];
+  to: MailAddress[];
+  cc: MailAddress[];
+  subject: string;
+  snippet: string;
+  bodyText: string;
+  bodyTruncated: boolean;
+  unread: boolean;
+}
+
+/** Messages oldest first; drafts, trash and spam excluded. `truncated`: older messages were left out. */
+export interface MailThread {
+  id: string;
+  messages: MailMessage[];
+  truncated: boolean;
+}
+
+export interface ThreadSummary {
+  id: string;
+  subject: string;
+  from: MailAddress | null;
+  lastDate: string;
+  snippet: string;
+  messageCount: number;
+  unread: boolean;
+}
+
+/** A draft reply as the apply engine asks for it. `messageIdHeader` is derived from the idempotency key. */
+export interface NewDraft {
+  threadId: string;
+  messageIdHeader: string;
+  inReplyTo: string | null;
+  references: string[];
+  to: string[];
+  cc: string[];
+  bcc: string[];
+  subject: string;
+  body: string;
+}
+
+/** A draft as the provider holds it; the body is represented only by its SHA-256 (hex). */
+export interface DraftRef {
+  draftId: string;
+  messageId: string;
+  threadId: string;
+  messageIdHeader: string;
+  to: string[];
+  cc: string[];
+  bcc: string[];
+  subject: string;
+  bodySha256: string;
+}
+
+/** What a provider holds under one Message-ID header. Drafts have no "deleted" state a provider can report. */
+export type DraftLookup = { state: "absent" } | { state: "present"; draft: DraftRef };
+
+/**
+ * The only door to a mailbox. No send method, by design (ADR 0001, ADR 0007): Deskhand writes drafts only. The only
+ * write is createDraft, and it is called only from the apply engine.
+ */
+export interface MailProvider {
+  profile(): Promise<{ email: string }>;
+  searchThreads(query: string, limit: number): Promise<{ threads: ThreadSummary[]; truncated: boolean }>;
+  /** null when the thread does not exist. At most the newest `maxMessages` messages. */
+  getThread(threadId: string, maxMessages: number): Promise<MailThread | null>;
+  lookupDraft(messageIdHeader: string): Promise<DraftLookup>;
+  /** Existing messageIdHeader: returns the existing draft, never a second one. */
+  createDraft(draft: NewDraft): Promise<DraftRef>;
+}
+
+/** Every provider a plan kind may use, handed over by the apply engine. */
+export interface Providers {
+  calendar: CalendarProvider;
+  mail: MailProvider;
+}

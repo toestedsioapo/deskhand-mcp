@@ -1,5 +1,6 @@
 import type { AppContext } from "../app-context.js";
 import { rejectAction } from "../approval/approve.js";
+import { sweepDraftBodiesQuietly } from "../approval/body-sweep.js";
 import { oneLine, stripControl, type CliIo } from "./io.js";
 
 /**
@@ -15,6 +16,8 @@ export function rejectCommand(ctx: AppContext, io: CliIo, args: readonly string[
   const reason = stripControl(rest.join(" ")).trim();
   const method = io.stdinIsTTY && io.stdoutIsTTY ? "cli_tty" : "cli_no_tty";
   const r = rejectAction(ctx, rawId, reason === "" ? undefined : reason, method);
+  // Body retention (ADR 0010): a rejected draft can no longer be written. Best effort; the reject is already committed.
+  sweepDraftBodiesQuietly(ctx);
   if (r.ok) {
     io.out(`Rejected ${oneLine(rawId, 64)}.\n`);
     return 0;

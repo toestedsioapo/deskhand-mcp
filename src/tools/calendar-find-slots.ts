@@ -55,8 +55,9 @@ export async function calendarFindSlotsHandler(
   ctx: AppContext,
   input: z.infer<typeof calendarFindSlotsInputSchema>,
 ): Promise<ToolOkResult<Output> | ToolErrorResult> {
-  const provider = requireProvider(ctx);
-  if ("isError" in provider) return provider;
+  const providers = requireProvider(ctx);
+  if ("isError" in providers) return providers;
+  const provider = providers.calendar;
 
   const timeZone = input.time_zone === undefined ? ctx.config.timeZone : canonicalTimeZone(input.time_zone);
   if (timeZone === null) {

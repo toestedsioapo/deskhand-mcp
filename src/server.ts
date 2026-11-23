@@ -12,6 +12,7 @@ import { PACKAGE_VERSION } from "./config/version.js";
 import { LedgerDb } from "./ledger/db.js";
 import { selectProvider } from "./composition.js";
 import { createIdGenerator } from "./ledger/ids.js";
+import { sweepDraftBodiesQuietly } from "./approval/body-sweep.js";
 import { LoggingTransport } from "./ledger/logging-transport.js";
 import {
   ACTION_APPLY_DESCRIPTION,
@@ -37,6 +38,30 @@ import {
   calendarListEventsInputSchema,
   calendarListEventsOutputSchema,
 } from "./tools/calendar-list-events.js";
+import {
+  INBOX_TRIAGE_DESCRIPTION,
+  inboxTriageHandler,
+  inboxTriageInputSchema,
+  inboxTriageOutputSchema,
+} from "./tools/inbox-triage.js";
+import {
+  INBOX_READ_THREAD_DESCRIPTION,
+  inboxReadThreadHandler,
+  inboxReadThreadInputSchema,
+  inboxReadThreadOutputSchema,
+} from "./tools/inbox-read-thread.js";
+import {
+  INBOX_DRAFT_REPLY_DESCRIPTION,
+  inboxDraftReplyHandler,
+  inboxDraftReplyInputSchema,
+  inboxDraftReplyOutputSchema,
+} from "./tools/inbox-draft-reply.js";
+import {
+  INBOX_SEARCH_DESCRIPTION,
+  inboxSearchHandler,
+  inboxSearchInputSchema,
+  inboxSearchOutputSchema,
+} from "./tools/inbox-search.js";
 import {
   CALENDAR_PROPOSE_EVENT_DESCRIPTION,
   calendarProposeEventHandler,
@@ -151,6 +176,52 @@ export function createServer(deps: ServerDeps, opts: CreateServerOptions = {}): 
     (input) => track(() => calendarProposeEventHandler(deps, input)),
   );
 
+  server.registerTool(
+    "inbox_search",
+    {
+      description: INBOX_SEARCH_DESCRIPTION,
+      inputSchema: inboxSearchInputSchema,
+      outputSchema: inboxSearchOutputSchema,
+      annotations: { readOnlyHint: true },
+    },
+    (input) => track(() => inboxSearchHandler(deps, input)),
+  );
+
+  server.registerTool(
+    "inbox_read_thread",
+    {
+      description: INBOX_READ_THREAD_DESCRIPTION,
+      inputSchema: inboxReadThreadInputSchema,
+      outputSchema: inboxReadThreadOutputSchema,
+      annotations: { readOnlyHint: true },
+    },
+    (input) => track(() => inboxReadThreadHandler(deps, input)),
+  );
+
+  // A plan tool: writes a ledger plan row, nothing in the mailbox. Deskhand cannot send mail.
+  server.registerTool(
+    "inbox_draft_reply",
+    {
+      description: INBOX_DRAFT_REPLY_DESCRIPTION,
+      inputSchema: inboxDraftReplyInputSchema,
+      outputSchema: inboxDraftReplyOutputSchema,
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+    },
+    (input) => track(() => inboxDraftReplyHandler(deps, input)),
+  );
+
+  // Proposals only: a tool_call row and nothing else. Deskhand never applies a triage.
+  server.registerTool(
+    "inbox_triage",
+    {
+      description: INBOX_TRIAGE_DESCRIPTION,
+      inputSchema: inboxTriageInputSchema,
+      outputSchema: inboxTriageOutputSchema,
+      annotations: { readOnlyHint: true },
+    },
+    (input) => track(() => inboxTriageHandler(deps, input)),
+  );
+
   // The only MCP tool that can cause a provider write (through the apply engine).
   server.registerTool(
     "action_apply",
@@ -174,17 +245,18 @@ export async function main(): Promise<void> {
   ensureDirs(config.paths);
   // A bad fixture file is a startup config error too (selectProvider throws ConfigError).
   // With no DESKHAND_PROVIDER there is no provider (ADR 0008): the server still starts.
-  const { provider, clock } = selectProvider(config);
+  const { provider, mail, clock } = selectProvider(config);
   const db = LedgerDb.open(config.paths.ledgerPath, { busyTimeoutMs: config.busyTimeoutMs });
   const ids = createIdGenerator();
   // The client usually closes both pipes when it exits, so a response can hit a
   // dead stdout (EPIPE): the guard drops it silently instead of crashing.
   const stdout = createClientStdout(process.stdout);
   const transport = new LoggingTransport(new StdioServerTransport(process.stdin, stdout.stream), { db, clock });
-  const server = createServer(
-    { config, db, clock, ids, provider, actor: resolveActor() },
-    { track: transport.track },
-  );
+  const ctx: AppContext = { config, db, clock, ids, provider, mail, actor: resolveActor() };
+  // Body retention (ADR 0010): drafted bodies of plans that ended while Deskhand was not running. Best effort, so a
+  // busy ledger never stops the server; the next trigger retries.
+  sweepDraftBodiesQuietly(ctx);
+  const server = createServer(ctx, { track: transport.track });
   // stdin closing means the client went away: finish in-flight tool calls
   // (handlers and response flushes), close the ledger, then exit.
   // SIGINT/SIGTERM keep Node's default (immediate termination), as in M1.

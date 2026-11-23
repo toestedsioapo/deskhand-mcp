@@ -38,6 +38,15 @@ describe("LedgerDb.open", () => {
     db.close();
   });
 
+  it("sets secure_delete on, so overwritten content is zeroed (ADR 0010)", () => {
+    const db = LedgerDb.open(path);
+    try {
+      expect(db.get<{ secure_delete: number }>("PRAGMA secure_delete")?.secure_delete).toBe(1);
+    } finally {
+      db.close();
+    }
+  });
+
   it("defaults busy_timeout to 5000", () => {
     const db = LedgerDb.open(path);
     expect(db.get<{ timeout: number }>("PRAGMA busy_timeout")?.timeout).toBe(5000);

@@ -1,0 +1,338 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`inbox_read_thread schemas > input schema is stable 1`] = `
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "thread_id": {
+      "pattern": "^[A-Za-z0-9_-]{1,64}$",
+      "type": "string",
+    },
+  },
+  "required": [
+    "thread_id",
+  ],
+  "type": "object",
+}
+`;
+
+exports[`inbox_read_thread schemas > output schema is stable 1`] = `
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "messages": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "body_text": {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "type": "string",
+              },
+              "source": {
+                "type": "string",
+              },
+              "untrusted": {
+                "const": true,
+                "type": "boolean",
+              },
+            },
+            "required": [
+              "untrusted",
+              "source",
+              "content",
+            ],
+            "type": "object",
+          },
+          "body_truncated": {
+            "type": "boolean",
+          },
+          "cc": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "address": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "content": {
+                      "type": "string",
+                    },
+                    "source": {
+                      "type": "string",
+                    },
+                    "untrusted": {
+                      "const": true,
+                      "type": "boolean",
+                    },
+                  },
+                  "required": [
+                    "untrusted",
+                    "source",
+                    "content",
+                  ],
+                  "type": "object",
+                },
+                "name": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "content": {
+                      "type": "string",
+                    },
+                    "source": {
+                      "type": "string",
+                    },
+                    "untrusted": {
+                      "const": true,
+                      "type": "boolean",
+                    },
+                  },
+                  "required": [
+                    "untrusted",
+                    "source",
+                    "content",
+                  ],
+                  "type": "object",
+                },
+              },
+              "required": [
+                "address",
+                "name",
+              ],
+              "type": "object",
+            },
+            "type": "array",
+          },
+          "date": {
+            "type": "string",
+          },
+          "from": {
+            "anyOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "address": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "content": {
+                        "type": "string",
+                      },
+                      "source": {
+                        "type": "string",
+                      },
+                      "untrusted": {
+                        "const": true,
+                        "type": "boolean",
+                      },
+                    },
+                    "required": [
+                      "untrusted",
+                      "source",
+                      "content",
+                    ],
+                    "type": "object",
+                  },
+                  "name": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "content": {
+                        "type": "string",
+                      },
+                      "source": {
+                        "type": "string",
+                      },
+                      "untrusted": {
+                        "const": true,
+                        "type": "boolean",
+                      },
+                    },
+                    "required": [
+                      "untrusted",
+                      "source",
+                      "content",
+                    ],
+                    "type": "object",
+                  },
+                },
+                "required": [
+                  "address",
+                  "name",
+                ],
+                "type": "object",
+              },
+              {
+                "type": "null",
+              },
+            ],
+          },
+          "id": {
+            "type": "string",
+          },
+          "reply_to": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "address": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "content": {
+                      "type": "string",
+                    },
+                    "source": {
+                      "type": "string",
+                    },
+                    "untrusted": {
+                      "const": true,
+                      "type": "boolean",
+                    },
+                  },
+                  "required": [
+                    "untrusted",
+                    "source",
+                    "content",
+                  ],
+                  "type": "object",
+                },
+                "name": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "content": {
+                      "type": "string",
+                    },
+                    "source": {
+                      "type": "string",
+                    },
+                    "untrusted": {
+                      "const": true,
+                      "type": "boolean",
+                    },
+                  },
+                  "required": [
+                    "untrusted",
+                    "source",
+                    "content",
+                  ],
+                  "type": "object",
+                },
+              },
+              "required": [
+                "address",
+                "name",
+              ],
+              "type": "object",
+            },
+            "type": "array",
+          },
+          "subject": {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "type": "string",
+              },
+              "source": {
+                "type": "string",
+              },
+              "untrusted": {
+                "const": true,
+                "type": "boolean",
+              },
+            },
+            "required": [
+              "untrusted",
+              "source",
+              "content",
+            ],
+            "type": "object",
+          },
+          "to": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "address": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "content": {
+                      "type": "string",
+                    },
+                    "source": {
+                      "type": "string",
+                    },
+                    "untrusted": {
+                      "const": true,
+                      "type": "boolean",
+                    },
+                  },
+                  "required": [
+                    "untrusted",
+                    "source",
+                    "content",
+                  ],
+                  "type": "object",
+                },
+                "name": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "content": {
+                      "type": "string",
+                    },
+                    "source": {
+                      "type": "string",
+                    },
+                    "untrusted": {
+                      "const": true,
+                      "type": "boolean",
+                    },
+                  },
+                  "required": [
+                    "untrusted",
+                    "source",
+                    "content",
+                  ],
+                  "type": "object",
+                },
+              },
+              "required": [
+                "address",
+                "name",
+              ],
+              "type": "object",
+            },
+            "type": "array",
+          },
+          "unread": {
+            "type": "boolean",
+          },
+        },
+        "required": [
+          "id",
+          "date",
+          "from",
+          "reply_to",
+          "to",
+          "cc",
+          "subject",
+          "body_text",
+          "body_truncated",
+          "unread",
+        ],
+        "type": "object",
+      },
+      "type": "array",
+    },
+    "thread_id": {
+      "type": "string",
+    },
+    "truncated": {
+      "type": "boolean",
+    },
+  },
+  "required": [
+    "thread_id",
+    "truncated",
+    "messages",
+  ],
+  "type": "object",
+}
+`;

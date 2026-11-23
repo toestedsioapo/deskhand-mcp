@@ -54,6 +54,7 @@ function ctx(env: NodeJS.ProcessEnv = {}): AppContext {
     clock: () => now,
     ids: createIdGenerator(),
     provider: null,
+    mail: null,
     actor: "tester",
   };
 }

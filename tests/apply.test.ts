@@ -11,6 +11,7 @@ import { queryEvents, type EventRow } from "../src/ledger/events.js";
 import { AuthRequiredError, ProviderError } from "../src/providers/errors.js";
 import type { FixtureProvider } from "../src/providers/fixture/provider.js";
 import { createFixtureProvider } from "../src/providers/fixture/provider.js";
+import { createFixtureMailProvider } from "../src/providers/fixture/index.js";
 import type { CalendarProvider, EventRef, NewCalendarEvent } from "../src/providers/types.js";
 import { makeTempHome } from "./helpers/home.js";
 import { makeWorld, seedAction, validPlan } from "./helpers/seed.js";
@@ -32,6 +33,7 @@ function makeCtx(over: Partial<AppContext> = {}, env: NodeJS.ProcessEnv = { DESK
     clock: () => new Date(now),
     ids: createIdGenerator(),
     provider,
+    mail: createFixtureMailProvider(),
     actor: "tester",
     ...over,
   };
@@ -40,6 +42,18 @@ function makeCtx(over: Partial<AppContext> = {}, env: NodeJS.ProcessEnv = { DESK
 const events = (id: string): EventRow[] => queryEvents(db, { limit: 100, actionId: id }).reverse();
 const kinds = (id: string) => events(id).map((e) => e.kind);
 const status = (id: string) => getAction(db, id)!.status;
+/** The `action_apply` result for an event on the plan's calendar `primary`: its text wrapped as untrusted. */
+const wrapped = (content: string) => ({ untrusted: true, source: "calendar:primary", content });
+const outputFor = (e: EventRef) => ({
+  id: e.id,
+  etag: e.etag,
+  all_day: e.allDay,
+  start: e.start,
+  end: e.end,
+  title: wrapped(e.title),
+  attendees: e.attendees.map(wrapped),
+});
+
 const eventCount = () => db.get<{ n: number }>("SELECT count(*) AS n FROM events")!.n;
 
 beforeEach(() => {
@@ -130,6 +144,18 @@ describe("no provider configured", () => {
     expect(refused).toEqual([
       expect.objectContaining({ outcome: "rejected", error_code: "PROVIDER_NOT_CONFIGURED", tool: "action_apply" }),
     ]);
+    expect(provider.writes).toHaveLength(0);
+  });
+
+  it("mail provider null (calendar set) -> PROVIDER_NOT_CONFIGURED, status approved, no write", async () => {
+    const id = seedAction(ctx, "approved");
+    const r = await applyAction(makeCtx({ mail: null }), id);
+    expect(r).toEqual({
+      ok: false,
+      errorCode: "PROVIDER_NOT_CONFIGURED",
+      message: "No provider is configured (set DESKHAND_PROVIDER=fixture).",
+    });
+    expect(status(id)).toBe("approved");
     expect(provider.writes).toHaveLength(0);
   });
 
@@ -233,11 +259,12 @@ describe("happy path", () => {
     const a = getAction(db, id)!;
     expect(a.status).toBe("applied");
     expect(a.applied_at).toBe(NOW);
-    expect(a.result_json).toEqual(r.result);
+    expect(r.output).toEqual(outputFor(a.result_json as EventRef));
     expect(a.error).toBeNull();
     expect(provider.writes).toHaveLength(1);
     expect(provider.writes[0]!.id).toBe(createHash("sha256").update(id, "utf8").digest("hex"));
-    expect(r.result).toMatchObject({ id: idempotencyKey(id), title: "Sync", start: "2026-11-12T10:00:00.000Z" });
+    expect(a.result_json).toMatchObject({ id: idempotencyKey(id), title: "Sync", start: "2026-11-12T10:00:00.000Z" });
+    expect(r.output).toMatchObject({ id: idempotencyKey(id), title: wrapped("Sync"), start: "2026-11-12T10:00:00.000Z" });
     const applied = events(id).filter((e) => e.kind === "applied");
     expect(applied).toHaveLength(1);
     expect(applied[0]).toMatchObject({ outcome: "ok", error_code: null, tool: "action_apply" });
@@ -246,13 +273,53 @@ describe("happy path", () => {
   });
 });
 
+describe("replay of an applied row whose stored plan no longer parses", () => {
+  const corruptions: [string, string][] = [
+    ["not JSON", "{"],
+    ["an unknown kind", JSON.stringify({ kind: "nope" })],
+    ["a schema failure", JSON.stringify({ ...validPlan(), event: { ...validPlan().event, title: "a\nb" } })],
+  ];
+  for (const [what, planJson] of corruptions) {
+    it(`${what} -> INTERNAL, one apply_refused (error) row, status still applied, no provider call`, async () => {
+      const id = seedAction(ctx, "approved");
+      expect(await applyAction(ctx, id)).toMatchObject({ ok: true, replayed: false });
+      db.run("UPDATE actions SET plan_json = ? WHERE id = ?", [planJson, id]);
+      const calls: string[] = [];
+      const watched = new Proxy(provider, {
+        get(target, prop, recv) {
+          const v = Reflect.get(target, prop, recv) as unknown;
+          if (typeof v !== "function") return v;
+          return (...args: unknown[]) => {
+            calls.push(String(prop));
+            return (v as (...a: unknown[]) => unknown).apply(target, args);
+          };
+        },
+      });
+      const before = eventCount();
+      const r = await applyAction(makeCtx({ provider: watched }), id);
+      expect(r).toEqual({ ok: false, errorCode: "INTERNAL", message: "The stored plan has an unknown kind or is invalid." });
+      // Read the column directly: getAction parses plan_json, which this row breaks on purpose.
+      expect(db.get<{ status: string }>("SELECT status FROM actions WHERE id = ?", [id])!.status).toBe("applied");
+      expect(eventCount()).toBe(before + 1);
+      expect(events(id).at(-1)).toMatchObject({
+        kind: "apply_refused",
+        outcome: "error",
+        error_code: "INTERNAL",
+        tool: "action_apply",
+      });
+      expect(calls).toEqual([]);
+      expect(provider.writes).toHaveLength(1);
+    });
+  }
+});
+
 describe("double apply", () => {
   it("second call replays: same result, one write, one applied event, no new rows", async () => {
     const id = seedAction(ctx, "approved");
     const first = await applyAction(ctx, id);
     const rowsAfterFirst = eventCount();
     const second = await applyAction(ctx, id);
-    expect(second).toEqual({ ok: true, replayed: true, result: (first as { result: EventRef }).result, calendarId: "primary" });
+    expect(second).toEqual({ ok: true, replayed: true, output: (first as { output: unknown }).output });
     expect(provider.writes).toHaveLength(1);
     expect(events(id).filter((e) => e.kind === "applied")).toHaveLength(1);
     expect(eventCount()).toBe(rowsAfterFirst); // replay writes no lifecycle row
@@ -263,7 +330,7 @@ describe("double apply", () => {
     const first = await applyAction(ctx, id);
     now = AFTER_EXPIRY;
     const again = await applyAction(ctx, id);
-    expect(again).toEqual({ ok: true, replayed: true, result: (first as { result: EventRef }).result, calendarId: "primary" });
+    expect(again).toEqual({ ok: true, replayed: true, output: (first as { output: unknown }).output });
     expect(provider.writes).toHaveLength(1);
   });
 });
@@ -281,7 +348,7 @@ describe("concurrent apply", () => {
       const [a, b] = await Promise.all([applyAction(ctxA, id), applyAction(ctxB, id)]);
       expect(a.ok && b.ok).toBe(true);
       if (!a.ok || !b.ok) return;
-      expect(a.result).toEqual(b.result);
+      expect(a.output).toEqual(b.output);
       expect([a.replayed, b.replayed].sort()).toEqual([false, true]);
       expect(provider.writes).toHaveLength(1);
       expect(events(id).filter((e) => e.kind === "applied")).toHaveLength(1);
@@ -317,7 +384,7 @@ describe("crash between provider write and ledger update", () => {
 
   async function expectRecovered() {
     const r = await applyAction(ctx, id);
-    expect(r).toEqual({ ok: true, replayed: true, result: original, calendarId: "primary" });
+    expect(r).toEqual({ ok: true, replayed: true, output: outputFor(original) });
     expect(provider.writes).toHaveLength(1);
     const a = getAction(db, id)!;
     expect(a.status).toBe("applied");
@@ -435,8 +502,7 @@ describe("provider failure", () => {
     expect(r).toEqual({
       ok: true,
       replayed: true,
-      result: expect.objectContaining({ id: idempotencyKey(id) }),
-      calendarId: "primary",
+      output: expect.objectContaining({ id: idempotencyKey(id) }),
     });
     expect(status(id)).toBe("applied");
     expect(provider.writes).toHaveLength(1);
@@ -527,7 +593,7 @@ describe("concurrent apply where our event lands between the other caller's look
       const [a, b] = await Promise.all([applyAction(ctxA, id), applyAction(ctxB, id)]);
       expect(a.ok && b.ok).toBe(true);
       if (!a.ok || !b.ok) return;
-      expect(a.result).toEqual(b.result);
+      expect(a.output).toEqual(b.output);
       expect(status(id)).toBe("applied");
       expect(provider.writes).toHaveLength(1);
       expect(events(id).filter((e) => e.kind === "applied")).toHaveLength(1);
@@ -817,7 +883,7 @@ describe("fixture world: crash recovery seeded in the world file", () => {
     const id = seedAction(ctx, "approved");
     provider = createFixtureProvider(seededWorld(id));
     const r = await applyAction(makeCtx(), id);
-    expect(r).toMatchObject({ ok: true, replayed: true, result: { id: idempotencyKey(id) } });
+    expect(r).toMatchObject({ ok: true, replayed: true, output: { id: idempotencyKey(id) } });
     expect(status(id)).toBe("applied");
     expect((events(id).at(-1)!.preview as { note: unknown }).note).toBe("recovered");
     expect(provider.writes).toHaveLength(0);

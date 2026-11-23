@@ -13,6 +13,7 @@ import { LedgerDb } from "../src/ledger/db.js";
 import { queryEvents } from "../src/ledger/events.js";
 import { createIdGenerator } from "../src/ledger/ids.js";
 import { createFixtureProvider } from "../src/providers/fixture/provider.js";
+import { createFixtureMailProvider } from "../src/providers/fixture/mail.js";
 import { CLI_PATH, runCliBin } from "./helpers/spawn.js";
 import { makeTempHome } from "./helpers/home.js";
 import { makeWorld, seedAction, validPlan } from "./helpers/seed.js";
@@ -31,6 +32,7 @@ function makeCtx(opener: () => LedgerDb = () => db, env: NodeJS.ProcessEnv = {})
     clock: () => new Date(now),
     ids: createIdGenerator(),
     provider: createFixtureProvider(makeWorld()),
+    mail: createFixtureMailProvider(),
     actor: "tester",
   };
 }

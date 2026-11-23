@@ -36,6 +36,8 @@ agent --action_apply(id)--> apply engine
    -> provider write (idempotency key from id) -> status=applied, result_json
 ```
 
+`inbox_draft_reply` takes the same path with a second plan kind (`mail.create_draft_reply`): the plan-kind interface is generic over the provider result, so the gates, recovery, expiry, re-check and idempotent write are shared with calendar plans, and the write is `MailProvider.createDraft` (there is no send method). The drafted body is kept in `plan_json` only until the action ends (ADR 0010).
+
 The server and CLI are separate processes sharing the ledger file. The CLI never runs provider writes; only the server's `action_apply` does.
 
 ## Ledger (contract, versioned via `PRAGMA user_version`)
@@ -67,9 +69,9 @@ The third table, `expenses(id, action_id, date, amount_minor, currency, category
 
 `deskhand auth login | status | upgrade` runs a loopback OAuth flow with the user's own client file (`client_secret.json` in the config dir) and stores `token.json` (ADR 0007). Enabling `DESKHAND_ALLOW_WRITES=1` after login needs `deskhand auth upgrade` to add write scopes. The server starts without a token; Google-backed tools return `AUTH_REQUIRED` (logged). The fixture provider needs no auth.
 
-## Gmail draft idempotency (to verify against the API in M4)
+## Gmail draft idempotency (decided in M4a, to verify against the API in M4b)
 
-`drafts.create` has no client-supplied id. The draft gets a deterministic `Message-ID` derived from `action_id`; before creating, apply searches drafts for that Message-ID, so a retry after a crash finds the existing draft instead of making a second. Draft id is stored in `result_json`.
+`drafts.create` has no client-supplied id. The draft gets a deterministic `Message-ID`, `<deskhand.<idempotency key>@deskhand.invalid>`, where the key is the one derived from `action_id`. `MailProvider.lookupDraft(messageIdHeader)` finds a draft by that header, and apply (gate 6, recovery) calls it before writing, so a retry after a crash finds the existing draft instead of making a second one. `createDraft` with a header that already exists returns the existing draft. Gmail cannot report a deleted draft, so a draft has no `cancelled` state (unlike a calendar event): if the user deletes a draft that a crashed apply left behind, the retry creates it again, which is safe because it is a draft and is never sent. A found draft counts as ours only when its Message-ID, thread id, subject, to/cc/bcc sets and body SHA-256 all equal the plan. The draft ids go to `result_json` with `bodySha256`, never the body. M4b's live check confirms that Gmail keeps the header; the fallback, if it does not, is to match the thread's `DRAFT`-labelled messages on recipients, subject and body hash.
 
 ## `calendar_find_slots` rules
 
@@ -79,13 +81,15 @@ The caller's own rules come from config; the counterparty's rules are caller-sup
 
 UTF-8, object keys sorted recursively, no insignificant whitespace, no `undefined`, numbers via `JSON.stringify`, dates as ISO-8601 strings in UTC. Same function used at plan, approve and apply. Unit-tested with fixed vectors.
 
+From M4a the hash input is `hashablePlan(plan)`, not the plan itself: a no-op for every kind except `mail.create_draft_reply`, where `draft.body` and `draft.bodyRemoved` are deleted first. The draft body is covered through `draft.bodySha256`, and the plan schema requires a present body to match it, so the body can be removed from `plan_json` later without changing the hash (ADR 0010). The stored `plan_json` is still the canonical JSON of the whole plan.
+
 ## Calendar notifications
 
 `calendar_propose_event` defaults `sendUpdates` to `none`. If a plan would notify attendees, the rendered diff says so in plain words ("will email 3 attendees") and the setting is part of `plan_json`, so it is covered by `plan_hash`. The diff is rendered from `plan_json` by one deterministic function, never from agent-supplied text.
 
 ## Apply-time re-check (D5)
 
-Provider interface exposes `freeBusy(range)` and `getEvent(id)` returning an `etag`/`updated`. A calendar plan records the observed `etag`s and the slot it assumed free. At apply: slot still free **and** referenced events unchanged, else `STALE_PLAN` (no write, status `failed`, event logged, error tells the agent to re-plan). Mail drafts: re-check the thread's latest message id.
+Provider interface exposes `freeBusy(range)` and `getEvent(id)` returning an `etag`/`updated`. A calendar plan records the observed `etag`s and the slot it assumed free. At apply: slot still free **and** referenced events unchanged, else `STALE_PLAN` (no write, status `failed`, event logged, error tells the agent to re-plan). Mail drafts (M4a): the plan records `observed.latestMessageId`, the thread's latest non-draft message id. At apply the thread must still exist and that id must be unchanged, else `STALE_PLAN` (`the thread no longer exists` or `the thread has a new message since planning`), no write, status `failed`. The plan also records `observed.onThread`, the addresses already on the thread, so the diff can flag new recipients; it is covered by the plan hash.
 
 ## Fixture world
 

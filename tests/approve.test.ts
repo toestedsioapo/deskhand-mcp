@@ -12,6 +12,7 @@ import { LedgerDb } from "../src/ledger/db.js";
 import { queryEvents, type EventRow } from "../src/ledger/events.js";
 import { createIdGenerator, last4 } from "../src/ledger/ids.js";
 import { createFixtureProvider, type FixtureProvider } from "../src/providers/fixture/provider.js";
+import { createFixtureMailProvider } from "../src/providers/fixture/mail.js";
 import { makeTempHome } from "./helpers/home.js";
 import { makeWorld, seedAction, validPlan } from "./helpers/seed.js";
 
@@ -31,6 +32,7 @@ function makeCtx(over: Partial<AppContext> = {}, env: NodeJS.ProcessEnv = {}): A
     clock: () => new Date(now),
     ids: createIdGenerator(),
     provider,
+    mail: createFixtureMailProvider(),
     actor: "approver-os-user",
     ...over,
   };

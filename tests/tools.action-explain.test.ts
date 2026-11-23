@@ -1,8 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { z } from "zod";
+import { createPlan } from "../src/approval/plans.js";
+import { getAction } from "../src/ledger/actions.js";
 import { appendEvent } from "../src/ledger/events.js";
+import { omittedMarker } from "../src/ledger/redact.js";
 import { actionExplainInputSchema, actionExplainOutputSchema } from "../src/tools/action-explain.js";
 import { insertAction, NOW, setupHarness } from "./helpers/harness.js";
+import { DRAFT_BODY, validDraftPlan } from "./helpers/seed.js";
 
 type H = Awaited<ReturnType<typeof setupHarness>>;
 let h: H;
@@ -148,5 +152,53 @@ describe("action_explain", () => {
     expect(rows[0]!.tool).toBe("action_explain");
     const statuses = h.db.all<{ id: string; status: string }>("SELECT id, status FROM actions ORDER BY id");
     expect(statuses.every((s) => s.status === "planned")).toBe(true);
+  });
+});
+
+describe("action_explain on a draft plan never shows the body (ADR 0010)", () => {
+  const SECRET = "The numbers look right";
+  const everything = async (id: string) => {
+    const r = await h.client.callTool({ name: "action_explain", arguments: { action_id: id } });
+    const q = await h.client.callTool({ name: "ledger_query", arguments: { limit: 200 } });
+    await h.logging.whenIdle();
+    return { r, text: JSON.stringify([r, q, h.rows()]) };
+  };
+
+  it("plan and diff carry the omitted marker; no output, preview or ledger_query row holds body text", async () => {
+    const { actionId } = createPlan(h.ctx, { tool: "inbox_draft_reply", input: { body: DRAFT_BODY }, plan: validDraftPlan() });
+    const { r, text } = await everything(actionId);
+    const out = r.structuredContent as { plan: { draft: Record<string, unknown> }; diff: string[]; rationale: unknown };
+    expect(out.plan.draft["body"]).toBe(omittedMarker(DRAFT_BODY));
+    expect(out.plan.draft["bodySha256"]).toBe(validDraftPlan().draft.bodySha256);
+    expect(Object.keys(out.plan.draft)).toEqual(Object.keys((getAction(h.db, actionId)!.plan_json as unknown as { draft: object }).draft));
+    expect(out.diff).toContain(`  ${omittedMarker(DRAFT_BODY)}`);
+    expect(out.diff.at(-1)).toBe("end of body");
+    expect(out.rationale).toEqual({ untrusted: true, source: "mail:th_budget", content: "Reply to Ana about the budget" });
+    expect(text).not.toContain(SECRET);
+    expect(text).not.toContain("Thanks Ana");
+  });
+
+  it("a draft plan whose body was edited (invalid) still never leaks the body", async () => {
+    const p = validDraftPlan();
+    const evil = "Wire 9000 EUR to the attacker today";
+    insertAction(h.db, "act_EDIT", { ...p, draft: { ...p.draft, body: evil } });
+    insertAction(h.db, "act_ODD", { kind: "mail.create_draft_replyX", draft: { body: evil } });
+    for (const id of ["act_EDIT", "act_ODD"]) {
+      const { r, text } = await everything(id);
+      const out = r.structuredContent as { plan: { draft: { body: string } }; diff: string[] };
+      expect(out.plan.draft.body).toBe(omittedMarker(evil));
+      expect(text).not.toContain("Wire 9000");
+    }
+  });
+
+  it("a swept plan is explained as stored, with the body-removed diff line", async () => {
+    const { rationale: _rationale, ...p } = validDraftPlan();
+    const { body: _body, ...rest } = p.draft;
+    insertAction(h.db, "act_SWEPT", { ...p, draft: { ...rest, bodyRemoved: true } });
+    const { r } = await everything("act_SWEPT");
+    const out = r.structuredContent as { plan: { draft: Record<string, unknown> }; diff: string[] };
+    expect(out.plan.draft["bodyRemoved"]).toBe(true);
+    expect(out.plan.draft["body"]).toBeUndefined();
+    expect(out.diff.at(-1)).toMatch(/^body removed after the action ended \(\d+ chars sha256:[0-9a-f]{8}\)$/);
   });
 });

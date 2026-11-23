@@ -1,7 +1,13 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
+import { loadConfig } from "../src/config/env.js";
+import { selectProvider } from "../src/composition.js";
+import { ProviderError } from "../src/providers/errors.js";
+import { createFixtureMailProvider } from "../src/providers/fixture/index.js";
+import type { MailProvider } from "../src/providers/types.js";
+import { makeTempHome } from "./helpers/home.js";
 
 /**
  * Structural guard for the "no side effects outside action_apply" rule.
@@ -30,7 +36,7 @@ const importSpecifiers = (text: string): string[] =>
   );
 
 /** The tools that create plans (call createPlan). Explicit list; extend only with review. */
-const PLAN_TOOLS = ["src/tools/calendar-propose-event.ts"];
+const PLAN_TOOLS = ["src/tools/calendar-propose-event.ts", "src/tools/inbox-draft-reply.ts"];
 
 /** Files allowed to SET actions.status to 'approved' or write the approval columns. Explicit list; extend only with review. */
 const APPROVE_ALLOWED = ["src/approval/approve.ts"];
@@ -276,7 +282,7 @@ describe("safety structure", () => {
       const bad = importSpecifiers(f.text).filter(
         (s) => /providers\//.test(s) && !/providers\/(types|errors)(\.js)?$/.test(s) && !google.test(s),
       );
-      if (/\bcreateEvent\b|\.\s*execute\s*\(/.test(f.text)) bad.push("<provider write call>");
+      if (/\bcreateEvent\b|\bcreateDraft\b|\.\s*execute\s*\(/.test(f.text)) bad.push("<provider write call>");
       return bad.map((b) => `${f.path}: ${b}`);
     });
     expect(offenders).toEqual([]);
@@ -353,6 +359,88 @@ describe("safety structure", () => {
     expect(CLI_IMPORT.test("./cli/index.js")).toBe(true);
     expect(CLI_IMPORT.test("../util/sanitize.js")).toBe(false);
     expect(CLI_IMPORT.test("./client.js")).toBe(false);
+  });
+
+  it("MailProvider has no member whose name contains `send` (any case): on the type and on every provider object", async () => {
+    // Type level (checked by `pnpm typecheck`): no key of MailProvider, lower-cased, contains "send".
+    expectTypeOf<Extract<Lowercase<keyof MailProvider & string>, `${string}send${string}`>>().toEqualTypeOf<never>();
+    // Negative control: the same check on an interface with a send member is not never, so the check above can fail.
+    type WithSend = MailProvider & { sendMail(): void };
+    expectTypeOf<Extract<Lowercase<keyof WithSend & string>, `${string}send${string}`>>().toEqualTypeOf<"sendmail">();
+    expectTypeOf<Extract<Lowercase<keyof WithSend & string>, `${string}send${string}`>>().not.toBeNever();
+    // Source level: the interface is declared, and no line inside it names a send member.
+    const types = FILES.find((f) => f.path === "src/providers/types.ts")!.text;
+    const start = types.indexOf("export interface MailProvider {");
+    expect(start).toBeGreaterThan(-1);
+    const body = types.slice(start, types.indexOf("\n}\n", start));
+    expect(body).toMatch(/createDraft\(/);
+    expect(body.split("\n").filter((l) => /^\s+\w*send\w*\s*[(:?]/i.test(l))).toEqual([]);
+    // Object level: the fixture stub and both mail providers selectProvider wires.
+    const home = makeTempHome();
+    try {
+      const objects: object[] = [createFixtureMailProvider()];
+      for (const name of ["fixture", "google"]) {
+        const { mail, provider } = selectProvider(loadConfig({ ...home.env, DESKHAND_PROVIDER: name }));
+        expect(mail, name).not.toBeNull();
+        expect(provider, name).not.toBeNull();
+        objects.push(mail!);
+      }
+      for (const o of objects) {
+        const keys = [...Object.keys(o), ...Object.getOwnPropertyNames(Object.getPrototypeOf(o))];
+        expect(keys.filter((k) => /send/i.test(k))).toEqual([]);
+        expect(keys).toContain("createDraft");
+      }
+      const none = selectProvider(loadConfig(home.env));
+      expect([none.provider, none.mail]).toEqual([null, null]);
+    } finally {
+      home.cleanup();
+    }
+  });
+
+  it("until a mailbox exists, the fixture and google mail providers refuse every call with a fixed ProviderError", async () => {
+    const home = makeTempHome();
+    try {
+      const cases = [
+        ["fixture", "fixture mail", "no mailbox in this world"],
+        ["google", "google mail", "mail is not available for this provider yet"],
+      ] as const;
+      for (const [name, label, phrase] of cases) {
+        const mail = selectProvider(loadConfig({ ...home.env, DESKHAND_PROVIDER: name })).mail!;
+        const calls: [string, () => Promise<unknown>][] = [
+          ["profile", () => mail.profile()],
+          ["searchThreads", () => mail.searchThreads("x", 1)],
+          ["getThread", () => mail.getThread("t", 1)],
+          ["lookupDraft", () => mail.lookupDraft("<a@b>")],
+          [
+            "createDraft",
+            () =>
+              mail.createDraft({
+                threadId: "t", messageIdHeader: "<a@b>", inReplyTo: null, references: [],
+                to: ["a@example.com"], cc: [], bcc: [], subject: "s", body: "b",
+              }),
+          ],
+        ];
+        for (const [op, call] of calls) {
+          const err = await call().then(() => undefined, (e: unknown) => e);
+          expect(err, `${name} ${op}`).toBeInstanceOf(ProviderError);
+          expect((err as ProviderError).message).toBe(`${label} ${op} failed: ${phrase}`);
+          expect((err as ProviderError).retryable).toBe(false);
+        }
+      }
+    } finally {
+      home.cleanup();
+    }
+  });
+
+  it("the mail write `createDraft(` appears only in src/approval/, the fixture and google providers and the interface", () => {
+    const allowed = (p: string) =>
+      p.startsWith("src/approval/") ||
+      p.startsWith("src/providers/fixture/") ||
+      p.startsWith("src/providers/google/") ||
+      p === "src/providers/types.ts";
+    expect(matching(/\bcreateDraft\s*\(/, (p) => !allowed(p))).toEqual([]);
+    // Nothing in src/tools or src/cli even names it.
+    expect(matching(/\bcreateDraft\b/, (p) => /^src\/(tools|cli)\//.test(p))).toEqual([]);
   });
 
   it("no bypass flag or env var exists for approve", () => {

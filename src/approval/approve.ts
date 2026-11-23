@@ -5,7 +5,7 @@ import { canonicalJson, hashPrefix, planHash } from "../ledger/canonical.js";
 import type { ActionStatus, ErrorCode, RejectionMethod } from "../ledger/contract.js";
 import { appendEvent } from "../ledger/events.js";
 import { isoNow, last4 } from "../ledger/ids.js";
-import { getPlanKind, renderDiff } from "./plan-kinds.js";
+import { getPlanKind, renderDiff, type AnyPlanKind } from "./plan-kinds.js";
 import { untrustedRuntimeFlag } from "./runtime-guard.js";
 
 /**
@@ -49,24 +49,31 @@ function recomputeHash(planJson: string): string | undefined {
 
 type Refusal = { code: ErrorCode; message: string };
 
+/** The stored plan as parsed JSON and the registered kind it names (either may be missing). */
+function readStored(planJson: string): { raw: unknown; kind: AnyPlanKind | undefined } | undefined {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(planJson) as unknown;
+  } catch {
+    return undefined;
+  }
+  const k = typeof raw === "object" && raw !== null ? (raw as { kind?: unknown }).kind : undefined;
+  return { raw, kind: typeof k === "string" ? getPlanKind(k) : undefined };
+}
+
 /**
  * Check 5b: the stored plan (hash already verified) has a known kind and
  * passes that kind's schema. Unreachable through the plan tools, which
  * validate; refusing here (INTERNAL, as apply does) means a human is never
- * asked to approve something the diff cannot render faithfully.
+ * asked to approve something the diff cannot render faithfully. Returns the kind and the validated plan.
  */
-function storedPlanValid(planJson: string): boolean {
-  let plan: unknown;
-  try {
-    plan = JSON.parse(planJson) as unknown;
-  } catch {
-    return false;
-  }
-  const k = typeof plan === "object" && plan !== null ? (plan as { kind?: unknown }).kind : undefined;
-  const pk = typeof k === "string" ? getPlanKind(k) : undefined;
+function validStoredPlan(planJson: string): { kind: AnyPlanKind; plan: unknown } | undefined {
+  const s = readStored(planJson);
+  if (!s?.kind) return undefined;
+  const parsed = s.kind.schema.safeParse(s.raw);
   // plan_json must be exactly the canonical form that was hashed: duplicate keys or other spellings would let the
   // ledger's readers (SQLite json_extract) see a different plan from the one shown and applied.
-  return pk !== undefined && pk.schema.safeParse(plan).success && canonicalJson(plan) === planJson;
+  return parsed.success && canonicalJson(s.raw) === planJson ? { kind: s.kind, plan: parsed.data } : undefined;
 }
 
 /** INTERNAL is outcome `error`; every approve-specific refusal code is `rejected` (ledger-contract.md). */
@@ -166,11 +173,28 @@ export async function approveAction(ctx: AppContext, actionId: string, io: CliIo
   // 3-5. Status, expiry, hash.
   const state = stateRefusal(initial, ctx.clock().getTime(), shown);
   if (state) return refuseApprove(ctx, shown, initial.id, state);
+  // 5a. The kind's integrity hook (ruling R1): an edit the hash does not cover (a drafted body that no longer
+  // matches its stored length and hash) is PLAN_MODIFIED, checked before the schema so it is never INTERNAL.
+  const raw = readStored(initial.plan_json);
+  if (raw?.kind?.tampered?.(raw.raw)) {
+    return refuseApprove(ctx, shown, initial.id, {
+      code: "PLAN_MODIFIED",
+      message: `The stored plan for ${shown} was changed after it was planned; it was not approved.`,
+    });
+  }
   // 5b. Fail closed on a stored plan we cannot render faithfully (unknown kind or invalid shape).
-  if (!storedPlanValid(initial.plan_json)) {
+  const valid = validStoredPlan(initial.plan_json);
+  if (!valid) {
     return refuseApprove(ctx, shown, initial.id, {
       code: "INTERNAL",
       message: `The stored plan for ${shown} has an unknown kind or is invalid; it was not approved.`,
+    });
+  }
+  // 5c. A plan that can no longer be written (a draft whose body was swept; unexpired, so only from tampering).
+  if (valid.kind.writable && !valid.kind.writable(valid.plan)) {
+    return refuseApprove(ctx, shown, initial.id, {
+      code: "PLAN_MODIFIED",
+      message: `The stored plan for ${shown} has lost its content and can no longer be written; it was not approved.`,
     });
   }
   // 6. Defensive: another pending (planned or approved) id with the same last 4.
@@ -193,9 +217,11 @@ export async function approveAction(ctx: AppContext, actionId: string, io: CliIo
   const watch = io.watchWidth?.();
   writeRows(io, "", `Approve ${oneLine(initial.id, 64)} (${oneLine(initial.tool, 80)})`);
   // The CLI wraps long values itself (continuation marker), so terminal wrapping cannot forge a line.
-  for (const line of renderDiff(JSON.parse(initial.plan_json) as unknown, ctx.config.timeZone)) writeRows(io, "    ", line);
+  for (const line of renderDiff(JSON.parse(initial.plan_json) as unknown, ctx.config.timeZone, "approver")) writeRows(io, "    ", line);
   writeRows(io, "", `plan hash ${hashPrefix(hash)}`);
   writeRows(io, "", `expires   ${oneLine(initial.expires_at, 40)}`);
+  // The kind's summary (a draft's recipients and subject) sits next to the prompt even when the diff is long.
+  for (const line of valid.kind.approveSummary?.(valid.plan) ?? []) writeRows(io, "", line);
   let typed: string;
   let narrowest: number | undefined;
   try {

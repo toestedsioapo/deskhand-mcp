@@ -3,7 +3,7 @@ import { canonicalJson } from "./canonical.js";
 
 const SECRET_KEY =
   /token|secret|password|authorization|credential|api[_-]?key|private[_-]?key|cookie|passphrase/i;
-const BODY_KEY = /^(body|html|content)$/i;
+const BODY_KEY = /^(body|html|content|text|snippet|body_text|html_body|raw|subject)$/i;
 const MAX_STRING = 200;
 const MAX_PREVIEW_BYTES = 4096;
 const MAX_NOTE = 200;
@@ -11,6 +11,11 @@ const MAX_DEPTH = 32;
 const TOO_DEEP = "[omitted: too deep]";
 
 const sha8 = (s: string): string => createHash("sha256").update(s, "utf8").digest("hex").slice(0, 8);
+
+/** `[omitted <UTF-16 length> chars sha256:<8 hex>]`: what a body-key value is stored as (also used for draft bodies). */
+export function omittedMarker(text: string): string {
+  return `[omitted ${text.length} chars sha256:${sha8(text)}]`;
+}
 
 function omitted(value: unknown): string {
   let text: string;
@@ -23,7 +28,7 @@ function omitted(value: unknown): string {
       text = "[unserialisable]";
     }
   }
-  return `[omitted ${text.length} chars sha256:${sha8(text)}]`;
+  return omittedMarker(text);
 }
 
 function redact(value: unknown, depth: number): unknown {
@@ -78,6 +83,30 @@ export function redactPreview(value: unknown): unknown {
 /** Plain recursive redaction (secret keys, body keys, long strings) with no size cascade. For `actions.input_json`. */
 export function redactInput(value: unknown): unknown {
   return redact(value, 0);
+}
+
+const INBOX_FREE_TEXT = /^(rationale|reason|labels|query|to|cc|bcc)$/;
+const RATIONALE = /^rationale$/;
+
+function omitKeys(value: unknown, keys: RegExp, depth: number): unknown {
+  if (depth > MAX_DEPTH) return TOO_DEEP;
+  if (Array.isArray(value)) return value.map((v) => omitKeys(v, keys, depth + 1));
+  if (value === null || typeof value !== "object") return value;
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    out[k] = keys.test(k) && v !== null && v !== undefined ? omitted(v) : omitKeys(v, keys, depth + 1);
+  }
+  return out;
+}
+
+/** An inbox tool's arguments or result with its free-text fields, which may quote mail, as omitted markers. */
+export function omitInboxFreeText(value: unknown): unknown {
+  return omitKeys(value, INBOX_FREE_TEXT, 0);
+}
+
+/** A value with every `rationale` as its omitted marker (the action_explain preview). */
+export function omitRationale(value: unknown): unknown {
+  return omitKeys(value, RATIONALE, 0);
 }
 
 /** What scrubSecrets returns for any text that holds, or may hide, a secret (Ruling 18). */

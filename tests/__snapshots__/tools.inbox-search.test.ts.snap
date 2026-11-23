@@ -1,0 +1,176 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`inbox_search schemas > input schema is stable 1`] = `
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "limit": {
+      "default": 10,
+      "maximum": 25,
+      "minimum": 1,
+      "type": "integer",
+    },
+    "query": {
+      "maxLength": 500,
+      "minLength": 1,
+      "type": "string",
+    },
+  },
+  "required": [
+    "query",
+    "limit",
+  ],
+  "type": "object",
+}
+`;
+
+exports[`inbox_search schemas > output schema is stable 1`] = `
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "threads": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "from": {
+            "anyOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "address": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "content": {
+                        "type": "string",
+                      },
+                      "source": {
+                        "type": "string",
+                      },
+                      "untrusted": {
+                        "const": true,
+                        "type": "boolean",
+                      },
+                    },
+                    "required": [
+                      "untrusted",
+                      "source",
+                      "content",
+                    ],
+                    "type": "object",
+                  },
+                  "name": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "content": {
+                        "type": "string",
+                      },
+                      "source": {
+                        "type": "string",
+                      },
+                      "untrusted": {
+                        "const": true,
+                        "type": "boolean",
+                      },
+                    },
+                    "required": [
+                      "untrusted",
+                      "source",
+                      "content",
+                    ],
+                    "type": "object",
+                  },
+                },
+                "required": [
+                  "address",
+                  "name",
+                ],
+                "type": "object",
+              },
+              {
+                "type": "null",
+              },
+            ],
+          },
+          "id": {
+            "type": "string",
+          },
+          "last_date": {
+            "type": "string",
+          },
+          "message_count": {
+            "maximum": 9007199254740991,
+            "minimum": -9007199254740991,
+            "type": "integer",
+          },
+          "snippet": {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "type": "string",
+              },
+              "source": {
+                "type": "string",
+              },
+              "untrusted": {
+                "const": true,
+                "type": "boolean",
+              },
+            },
+            "required": [
+              "untrusted",
+              "source",
+              "content",
+            ],
+            "type": "object",
+          },
+          "subject": {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "type": "string",
+              },
+              "source": {
+                "type": "string",
+              },
+              "untrusted": {
+                "const": true,
+                "type": "boolean",
+              },
+            },
+            "required": [
+              "untrusted",
+              "source",
+              "content",
+            ],
+            "type": "object",
+          },
+          "unread": {
+            "type": "boolean",
+          },
+        },
+        "required": [
+          "id",
+          "subject",
+          "from",
+          "last_date",
+          "snippet",
+          "message_count",
+          "unread",
+        ],
+        "type": "object",
+      },
+      "type": "array",
+    },
+    "truncated": {
+      "type": "boolean",
+    },
+  },
+  "required": [
+    "threads",
+    "truncated",
+  ],
+  "type": "object",
+}
+`;

@@ -11,6 +11,7 @@ import { LedgerDb } from "../src/ledger/db.js";
 import { queryEvents } from "../src/ledger/events.js";
 import { createIdGenerator } from "../src/ledger/ids.js";
 import { createFixtureProvider } from "../src/providers/fixture/provider.js";
+import { createFixtureMailProvider } from "../src/providers/fixture/mail.js";
 import { makeTempHome } from "./helpers/home.js";
 import { makeWorld, SEED_NOW, seedAction } from "./helpers/seed.js";
 import { runServerBin, spawnBin, spawnRaw } from "./helpers/spawn.js";
@@ -28,7 +29,7 @@ describe("stdio server (built bin)", () => {
     const { client, stderr, close } = await spawnBin();
     try {
       const { tools } = await client.listTools();
-      expect(tools.map((t) => t.name)).toEqual(["ping", "ledger_query", "action_explain", "calendar_list_events", "calendar_find_slots", "calendar_propose_event", "action_apply"]);
+      expect(tools.map((t) => t.name)).toEqual(["ping", "ledger_query", "action_explain", "calendar_list_events", "calendar_find_slots", "calendar_propose_event", "inbox_search", "inbox_read_thread", "inbox_draft_reply", "inbox_triage", "action_apply"]);
 
       const ok = await client.callTool({ name: "ping" });
       expect(ok.isError).toBeFalsy();
@@ -164,6 +165,7 @@ describe("stdio server with DESKHAND_PROVIDER=google and no token", () => {
             clock: () => new Date(),
             ids: createIdGenerator(),
             provider: createFixtureProvider(makeWorld()),
+            mail: createFixtureMailProvider(),
             actor: "seeder",
           },
           "approved",
@@ -348,6 +350,7 @@ function seedSlowApproved(home: ReturnType<typeof makeTempHome>, latencyMs = 300
       clock: () => new Date(SEED_NOW), // the bin's clock is the fixture's `now`
       ids: createIdGenerator(),
       provider: createFixtureProvider(makeWorld()),
+      mail: createFixtureMailProvider(),
       actor: "seeder",
     };
     id = seedAction(ctx, "approved");

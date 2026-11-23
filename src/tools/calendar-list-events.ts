@@ -44,8 +44,9 @@ export async function calendarListEventsHandler(
   ctx: AppContext,
   input: z.infer<typeof calendarListEventsInputSchema>,
 ): Promise<ToolOkResult<Output> | ToolErrorResult> {
-  const provider = requireProvider(ctx);
-  if ("isError" in provider) return provider;
+  const providers = requireProvider(ctx);
+  if ("isError" in providers) return providers;
+  const provider = providers.calendar;
 
   const min = new Date(input.time_min);
   const max = new Date(input.time_max);

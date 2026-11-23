@@ -1,6 +1,6 @@
 # Tools contract (v1, M2)
 
-Status: written in M2a. Zod input and output schemas for every tool are snapshot-tested; a change here is a breaking change. `docs/tools.md` stays generated from the schemas (M5) and is never hand-edited. Tools added after M2 (`calendar_*`, `inbox_*`, `itinerary_build`, `expense_log`) extend this file when they are planned.
+Status: written in M2a. Zod input and output schemas for every tool are snapshot-tested; a change here is a breaking change. `docs/tools.md` stays generated from the schemas (M5) and is never hand-edited. Tools added after M2 (`calendar_*` in M3a, `inbox_*` in M4a, `itinerary_build`, `expense_log`) extend this file when they are planned.
 
 ## Result convention
 
@@ -66,8 +66,8 @@ Output:
     approved_by, approved_at, approval_method,
     rejected_at, rejected_reason, applied_at, error
   },
-  plan: unknown,               // actions.plan_json parsed
-  rationale: string | null,    // plan.rationale when it is a string, else null
+  plan: unknown,               // actions.plan_json parsed (M4a: through the plan kind's explainPlan; a draft plan's body is replaced by the omitted marker)
+  rationale: string | UntrustedText | null, // plan.rationale when it is a string, else null; wrapped as untrusted for a draft-shaped plan
   diff: string[] | null,       // lines from the deterministic plan renderer (never agent text); an unrenderable stored plan yields `(unknown plan kind)` or `(invalid plan)`. Times in the diff are rendered in the server's `Config.timeZone` (the viewer's zone, never one the plan names); see the ledger contract, "Plan shape: `calendar.create_event`", for the line order. The schema stays nullable (a contract from M2a) but the handler always returns an array
   events: EventRow[]           // this action's events, oldest first; at most the newest 1000
 }
@@ -88,7 +88,7 @@ Output (success only):
   action_id: string,
   status: "applied",
   replayed: boolean,   // true when the stored result was returned (repeat call) or the write was recovered
-  result: {            // the event as stored in result_json, shaped like a calendar_list_events item
+  result: {            // calendar plan (M4a: a union, the draft shape is under "`action_apply` result for a draft"); the event as stored in result_json, shaped like a calendar_list_events item
     id: string,
     etag: string,
     all_day: boolean,
@@ -106,7 +106,7 @@ Failures are `isError` results with `_meta.deskhand.error_code` and `action_id` 
 
 ## Untrusted text
 
-Calendar text (titles, attendee addresses) in tool output is wrapped `{ "untrusted": true, "source": string, "content": string }` (strict). `source` names where it came from, for calendar data `calendar:<calendar_id>`. `content` is the provider's text verbatim, control characters included; it is data and is never acted on.
+Calendar text (titles, attendee addresses) and, from M4a, mailbox text (see "Mail tools") in tool output is wrapped `{ "untrusted": true, "source": string, "content": string }` (strict). `source` names where it came from, for calendar data `calendar:<calendar_id>`. `content` is the provider's text verbatim, control characters included; it is data and is never acted on.
 
 ## `calendar_list_events`
 
@@ -255,3 +255,144 @@ The plan it stores (`plan_json`, hashed with the canonical JSON):
 Diff lines, in order: `create event: <title>`, `when: <range in Config.timeZone>`, `event zone: <range in the event zone>` (only when it differs), `utc: <start> to <end>`, `calendar: <id>`, `<N> attendees`, one `  <address>` line per attendee, then the notification line: `no attendee notifications (sendUpdates=none)`; `will email <n> attendees` (`all`); `will email the attendees outside your organisation, up to <n> (sendUpdates=externalOnly)`; or, for `all` / `externalOnly` with no attendees, `no attendee notifications (sendUpdates=<value>, no attendees)`. Title, calendar id and addresses are printed verbatim (the input rules above are what make that safe).
 
 The output schemas are snapshot-tested in `tests/tools.calendar-propose-event.test.ts`.
+
+## Mail tools (M4a)
+
+All four need a configured provider, else `PROVIDER_NOT_CONFIGURED` (tool_call outcome `rejected`). M4a runs them on the fixture mailbox (`fixture_version: 2`); the Gmail adapter comes in M4b. An unknown `thread_id` is `NOT_FOUND` with the message `No thread with id <id>.` (tool_call outcome `error`). A provider failure is `PROVIDER_ERROR` (`AUTH_REQUIRED` when sign-in is needed). Every call, including a `NOT_FOUND` and a validation failure, writes its `tool_call` row.
+
+**Untrusted mail text.** All mailbox text in a result is wrapped `{ "untrusted": true, "source": string, "content": string }`: subjects, snippets, bodies, and sender and recipient addresses and display names. The `source` is `mail:<thread_id>`, or `mail:search` for search results. Thread ids, message ids, dates, counts and booleans are not wrapped. Ledger previews of these results contain no subject, snippet or body in clear: the wrapper's `content` and the keys `snippet` and `body_text` are omitted by the redactor (`BODY_KEY`, see the ledger contract).
+
+`threadIdSchema` is `^[A-Za-z0-9_-]{1,64}$`. In the output shapes below, `Addr` is `{ address: Untrusted, name: Untrusted }`.
+
+### `inbox_search`
+
+Read-only search of the mailbox. Registered with `readOnlyHint: true`.
+
+Input (strict): `{ query: string 1..500 characters with no control or hidden characters, limit: integer 1..25 = 10 }`. The fixture provider splits the query on whitespace and every term must match: `from:<x>` (a substring of the From address or name), `is:unread`, or any other term as a case-insensitive substring of subject, body or addresses. Any other `<operator>:<value>` term is `PROVIDER_ERROR` with the phrase `query operator not supported by the fixture provider`.
+
+Output:
+
+```
+{
+  threads: {
+    id: string,
+    subject: Untrusted,
+    from: Addr | null,
+    last_date: string,         // ISO-8601 UTC instant of the newest message
+    snippet: Untrusted,        // first 100 characters of the latest body
+    message_count: integer,
+    unread: boolean
+  }[],                         // newest last_date first, at most `limit`; source "mail:search"
+  truncated: boolean           // true when more threads matched than `limit`
+}
+```
+
+### `inbox_read_thread`
+
+Read-only. Registered with `readOnlyHint: true`.
+
+Input (strict): `{ thread_id: string }`.
+
+Output:
+
+```
+{
+  thread_id: string,
+  truncated: boolean,          // true when the thread has more than the newest 100 messages
+  messages: {                  // oldest first, drafts excluded
+    id: string, date: string,
+    from: Addr | null, reply_to: Addr[], to: Addr[], cc: Addr[],
+    subject: Untrusted,
+    body_text: Untrusted,      // cut at 20 000 characters
+    body_truncated: boolean,
+    unread: boolean
+  }[]                          // source "mail:<thread_id>"
+}
+```
+
+At most the newest 100 messages are returned. The ledger preview of a long thread stays under the 4 KB cap and holds no body text.
+
+### `inbox_triage`
+
+Proposes only (SPEC D12). It validates and records the agent's proposals; Deskhand never applies a label, a priority or a move. It writes one `tool_call` row and no `actions` row, so nothing can approve or apply it, and `action_apply` on its id is `UNKNOWN_ACTION`. Registered with `readOnlyHint: true`.
+
+Input (strict):
+
+```
+{ proposals: {                  // 1 to 25, thread ids unique (a repeat is INVALID_INPUT)
+    thread_id: string,
+    priority: "high" | "normal" | "low",
+    next_action: "reply" | "schedule" | "delegate" | "read_later" | "archive" | "none",
+    labels: string[],           // at most 5, each a plain line (isPlainLine) of at most 40 characters; default []
+    reason?: string             // at most 300 characters
+  }[] }
+```
+
+Output:
+
+```
+{
+  proposals: { thread_id, subject: Untrusted, priority, next_action, labels, reason: string | null }[],
+  applied: false,
+  note: "Proposals only. Deskhand never applies labels or moves mail."
+}
+```
+
+The first unknown thread gives `NOT_FOUND` and nothing is returned for the other proposals. The subject is the thread's (source `mail:<thread_id>`).
+
+### `inbox_draft_reply`
+
+Plans a draft reply. It writes a plan row (`actions` status `planned`) and nothing in the mailbox: it never calls `createDraft`. A human must read the diff and approve with `deskhand approve <action_id>`; only then can `action_apply` create the draft. There is no way to send mail: the provider interface has no send method (ADR 0001, ADR 0007). Registered with `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: false`.
+
+Input (strict):
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `thread_id` | string | required | unknown is `NOT_FOUND` |
+| `body` | string, 1 to 20 000 characters | required | `\r\n` becomes `\n`; a lone `\r`, a tab, a trailing space (except the exact line `-- `), a hidden character, a run of more than 16 whitespace characters, more than 16 consecutive empty lines, more than 500 lines or more than 20 000 characters is `INVALID_INPUT`; see the ledger contract, "Plan shape: `mail.create_draft_reply`" |
+| `subject` | string, 1 to 250 characters | `Re: <latest subject>` (not doubled if it already starts with `Re:`, any case) | one plain line (`isPlainLine`). If the thread's subject is not a plain line and no `subject` is given, `INVALID_INPUT` tells the agent to pass `subject` explicitly. A given subject is checked on its own |
+| `to` | email[] | see below | |
+| `cc` | email[] | `[]` | |
+| `bcc` | email[] | `[]` | |
+| `reply_all` | boolean | `false` | only used when `to` is omitted |
+| `rationale` | one plain line, 1 to 500 characters (the subject's rule) | none | shown to the approver as `agent's reason: <text>`; removed from the plan by the body sweep |
+
+Default recipients (only when `to` is omitted): the reply goes to the latest non-draft message that was not sent by the owner, to that message's Reply-To, else its From; `reply_all: true` adds that message's To (to `to`) and Cc (to `cc`), minus the owner and minus duplicates. If every message is from the owner, the default is the latest message's To (nothing is addressed to the owner), and `reply_all: true` adds that message's Cc to `cc`. A `cc` or `bcc` given without `to` is kept alongside the defaults. A default recipient that breaks the address rule, or no default recipient at all, is `INVALID_INPUT` asking for `to` explicitly. In-Reply-To is the latest message's Message-ID and References the thread's last 10 Message-IDs (of the newest 100 messages), keeping only `<...>` shaped printable-ASCII values. If `to` is given, `cc` and `bcc` default to `[]` and nothing is added. Every address must be `z.email()`, at most 254 characters, printable ASCII (an address such as `josé@example.com` is refused, naming the rule); at least one `to`, at most 50 recipients in total, none repeated across to, cc and bcc. "On the thread" means a From, To or Cc of a non-draft message, or the owner. An address seen only in a Reply-To is not on the thread, so a default reply to it is flagged as new (owner decision, 2026-11-23).
+
+Output:
+
+```
+{
+  action_id: string,
+  plan_hash: string,           // 64 hex characters
+  expires_at: string,
+  diff: string[],              // the agent audience: body rows replaced by "  [omitted <c> chars sha256:<8 hex>]",
+                               // the thread id, message id, subject, agent's reason and every address value
+                               // replaced by its omitted marker
+  new_recipients: UntrustedText[], // recipients not on the thread, lowercased, each wrapped with source
+                               // "mail:<thread_id>" (one can come from a Reply-To header); [] when none
+  body: string                 // the omitted marker, never the text
+}
+```
+
+The result sets `_meta.deskhand.action_id`. Ledger rows on success: `plan_created`, then `tool_call`, both with the action id. `actions.input_json` holds omitted markers for `body`, `rationale`, `to`, `cc` and `bcc`. No plan row is written for a refusal. Which recipients count as "on the thread": every address in the From, To and Cc of each non-draft message, plus the owner (Reply-To does not count), compared case-insensitively; only addresses that pass the address rule count. This set is computed from the provider (the newest 100 messages); the recipients in it are stored, lowercased and sorted, as `observed.onThread` (decision 5: only the recipients, so the plan holds no other thread address), covered by the plan hash. Any other recipient is flagged `(new: not on this thread)` in the diff and listed in `new_recipients`. New recipients are flagged, not refused.
+
+The plan it stores is `mail.create_draft_reply` (ledger contract). The diff lines are in the ledger contract, "Plan shape: `mail.create_draft_reply`". The output schemas are snapshot-tested in `tests/tools.inbox-draft-reply.test.ts`.
+
+## `action_apply` result for a draft (M4a)
+
+The `result` of a successful `action_apply` is now a union: the calendar shape above, or, for a `mail.create_draft_reply` plan, the draft shape. `status`, `replayed` and `action_id` are unchanged. The calendar branch is unchanged, so this is additive for calendar callers.
+
+```
+result (draft) = {
+  draft_id: string, message_id: string, thread_id: string,
+  subject: Untrusted, to: Untrusted[], cc: Untrusted[], bcc: Untrusted[],   // source "mail:<thread_id>"
+  body: string                  // the omitted marker, never the text
+}
+```
+
+The shape is built from `result_json` (the `DraftRef` and `bodySha256`) on the first apply, on a recovery and on every replay, so it never contains the body. Gate order and failures are in the ledger contract ("Gates 6 to 9 for a `mail.create_draft_reply` plan"). The `STALE_PLAN` messages are exactly `The world changed since planning: the mailbox account changed since planning.`, `The world changed since planning: the thread no longer exists.`, `The world changed since planning: the thread has a new message since planning.` (gate 8, the prefix every kind's re-check failure carries) and `a draft with this action's id exists but differs from the approved plan` (gates 6 and 9, no prefix).
+
+## `action_explain` for a draft (M4a)
+
+`plan` is `kind.explainPlan(plan)`: for a draft plan it is the stored plan with `draft.body` replaced by the omitted marker `[omitted <c> chars sha256:<8 hex>]` (a swept plan has `bodyRemoved: true` and no `body`), and `rationale`, `draft.threadId`, `draft.inReplyTo`, every `draft.references` entry, `draft.subject`, `draft.from`, every `draft.to` / `draft.cc` / `draft.bcc` entry, `observed.latestMessageId` and every `observed.onThread` entry wrapped as untrusted mail text, `{ untrusted: true, source: "mail:<threadId>", content }`, key order kept. A draft-shaped plan that is invalid is wrapped too, with the fixed source `mail:invalid-plan`: every stored string, unknown keys collected in one wrapped `unrecognised` text, and any `body` only ever an omitted marker. `diff` is rendered for the agent audience (body rows replaced by one omitted row; thread id, message id, subject, agent's reason and addresses by their omitted markers). The thread subject appears in clear nowhere in the output outside an untrusted wrapper's `content`. The body text appears nowhere in the output, in its `tool_call` preview or in `ledger_query` output. For a calendar plan `plan` is the stored plan, as before.

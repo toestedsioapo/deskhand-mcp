@@ -24,6 +24,8 @@ export class LedgerDb {
       raw.exec(`PRAGMA busy_timeout = ${timeout}`);
       enableWal(raw, timeout);
       raw.exec("PRAGMA foreign_keys = ON");
+      // Zero the content SQLite overwrites or frees, so a swept draft body does not linger in free space (ADR 0010).
+      raw.exec("PRAGMA secure_delete = ON");
       runMigrations(ledger, opts.migrations);
       ledger.restrictPermissions(path);
     } catch (err) {

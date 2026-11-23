@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { canonicalJson } from "../src/ledger/canonical.js";
-import { redactPreview, searchForms, SECRET_LIKE, scrubSecrets } from "../src/ledger/redact.js";
+import { omittedMarker, redactPreview, searchForms, SECRET_LIKE, scrubSecrets } from "../src/ledger/redact.js";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -1083,5 +1083,22 @@ describe("scrubSecrets, incomplete search fails closed (Ruling 20)", () => {
     expect(texts.length).toBeGreaterThan(500);
     expect(bad).toEqual([]);
     expect(worst).toBeLessThan(32);
+  });
+});
+
+describe("BODY_KEY coverage (M4a)", () => {
+  it("omits text, snippet, body_text, html_body, raw and subject with the marker (ruling R3)", () => {
+    const v = "some mailbox text";
+    const out = redactPreview({ text: v, snippet: v, body_text: v, html_body: v, raw: v, subject: v, Subject: v, from: "kept" }) as Loose;
+    for (const k of ["text", "snippet", "body_text", "html_body", "raw", "subject", "Subject"]) {
+      expect(out[k]).toBe(`[omitted ${v.length} chars sha256:${sha8(v)}]`);
+    }
+    expect(out["from"]).toBe("kept");
+  });
+
+  it("omittedMarker matches the redactor and counts UTF-16 units", () => {
+    const t = "a\u{1F600}b";
+    expect(omittedMarker(t)).toBe(`[omitted 4 chars sha256:${sha8(t)}]`);
+    expect((redactPreview({ body: t }) as Loose)["body"]).toBe(omittedMarker(t));
   });
 });

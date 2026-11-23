@@ -10,6 +10,7 @@ import { LedgerDb } from "../src/ledger/db.js";
 import { queryEvents } from "../src/ledger/events.js";
 import { createIdGenerator, last4 } from "../src/ledger/ids.js";
 import { createFixtureProvider } from "../src/providers/fixture/provider.js";
+import { createFixtureMailProvider } from "../src/providers/fixture/mail.js";
 import { makeTempHome } from "./helpers/home.js";
 import { makeWorld, seedAction } from "./helpers/seed.js";
 import { CLI_PATH } from "./helpers/spawn.js";
@@ -41,6 +42,7 @@ beforeEach(() => {
       clock: () => new Date(),
       ids: createIdGenerator(),
       provider: createFixtureProvider(makeWorld()),
+      mail: createFixtureMailProvider(),
       actor: "seeder",
     };
     return seedAction(ctx, "planned");

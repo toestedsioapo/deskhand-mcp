@@ -1,11 +1,12 @@
 import { z } from "zod";
 import { ACTION_STATUSES, APPROVAL_METHODS } from "../ledger/contract.js";
-import { renderDiff } from "../approval/plan-kinds.js";
+import { explainStoredPlan, renderDiff } from "../approval/plan-kinds.js";
 import { getAction } from "../ledger/actions.js";
 import type { LedgerDb } from "../ledger/db.js";
 import { queryEvents } from "../ledger/events.js";
 import { eventRowSchema } from "./event-row.js";
 import { toolError, toolOk, type ToolErrorResult, type ToolOkResult } from "./result.js";
+import { untrustedTextSchema, type UntrustedText } from "./untrusted.js";
 
 export const actionExplainInputSchema = z.object({ action_id: z.string() }).strict();
 
@@ -26,7 +27,7 @@ export const actionExplainOutputSchema = z.object({
     error: z.string().nullable(),
   }),
   plan: z.unknown(),
-  rationale: z.string().nullable(),
+  rationale: z.union([z.string(), untrustedTextSchema]).nullable(),
   diff: z.array(z.string()).nullable(),
   events: z.array(eventRowSchema),
 });
@@ -44,9 +45,11 @@ export function actionExplainHandler(
   const a = getAction(db, input.action_id);
   if (!a) return toolError("UNKNOWN_ACTION", `No action with id ${input.action_id}.`);
   const plan = a.plan_json;
+  const explained = explainStoredPlan(plan);
+  // A stored string reason, as the explained plan shows it: plain for calendar, an untrusted wrapper for a mail draft.
   const rationale =
     typeof plan === "object" && plan !== null && typeof (plan as { rationale?: unknown }).rationale === "string"
-      ? (plan as { rationale: string }).rationale
+      ? (explained as { rationale: string | UntrustedText }).rationale
       : null;
   // Oldest first: a plan has few events, so the 1000 cap is never reached in practice.
   const events = queryEvents(db, { limit: 1000, actionId: a.id }).reverse();
@@ -66,9 +69,9 @@ export function actionExplainHandler(
       applied_at: a.applied_at,
       error: a.error,
     },
-    plan,
+    plan: explained,
     rationale,
-    diff: renderDiff(plan, viewerTimeZone),
+    diff: renderDiff(plan, viewerTimeZone, "agent"),
     events,
   };
   return toolOk(output, { action_id: a.id });

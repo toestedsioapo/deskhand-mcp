@@ -43,6 +43,9 @@ const LEADING_EXTENDER = /^[\p{M}\p{Grapheme_Extend}]/u;
 /** Code points in one user-perceived character: more than this is a run built to be one unbreakable character. */
 const MAX_GRAPHEME_CODE_POINTS = 8;
 
+/** More whitespace in a row than indentation needs: filler that moves body text out of the approver's view. */
+const WHITESPACE_RUN = /\s{17,}/u;
+
 const graphemes = new Intl.Segmenter("en", { granularity: "grapheme" });
 
 /**
@@ -76,6 +79,50 @@ export function isPlainLine(s: string): boolean {
     if ([...segment].length > MAX_GRAPHEME_CODE_POINTS) return false;
   }
   return oneLine(s, Number.POSITIVE_INFINITY) === s;
+}
+
+/**
+ * True when `s` is one line of a draft body that the approve diff prints exactly as it is written (decision 4): empty,
+ * or no hidden character (the stripControl set, line breaks included), no tab, no more than four stacked combining
+ * marks, no character of more than 8 code points and no leading extender. Leading and repeated spaces are allowed
+ * (quoting, indentation) up to 16 in a run, so blank filler cannot push text out of view; trailing whitespace is not,
+ * except on the exact signature separator line `-- `.
+ */
+export function isBodyLine(s: string): boolean {
+  if (s === "" || s === "-- ") return true;
+  if (/\s$/u.test(s) || s.includes("\t") || s.includes("\n")) return false;
+  if (WHITESPACE_RUN.test(s)) return false;
+  if (MARK_STACK.test(s) || LEADING_EXTENDER.test(s)) return false;
+  for (const { segment } of graphemes.segment(s)) {
+    if ([...segment].length > MAX_GRAPHEME_CODE_POINTS) return false;
+  }
+  return stripControl(s) === s;
+}
+
+/** Longest draft body, in UTF-16 code units. */
+export const MAX_BODY_CHARS = 20_000;
+/** Most lines in a draft body. */
+export const MAX_BODY_LINES = 500;
+/** Most consecutive empty lines in a draft body: more is filler that moves text out of the approver's view. */
+const MAX_BLANK_LINES = 16;
+
+/**
+ * A draft body as it is stored, hashed and shown: CR LF becomes LF. null when the result is empty, still holds a CR,
+ * is over MAX_BODY_CHARS characters or MAX_BODY_LINES lines, has more than MAX_BLANK_LINES consecutive empty lines, or
+ * has a line that fails isBodyLine. A trailing newline
+ * is one empty last line.
+ */
+export function normaliseBody(s: string): string | null {
+  const body = s.replace(/\r\n/g, "\n");
+  if (body.length === 0 || body.length > MAX_BODY_CHARS || body.includes("\r")) return null;
+  const lines = body.split("\n");
+  if (lines.length > MAX_BODY_LINES) return null;
+  let blank = 0;
+  for (const line of lines) {
+    blank = line === "" ? blank + 1 : 0;
+    if (blank > MAX_BLANK_LINES) return null;
+  }
+  return lines.every(isBodyLine) ? body : null;
 }
 
 // ---------------------------------------------------------------- terminal rows

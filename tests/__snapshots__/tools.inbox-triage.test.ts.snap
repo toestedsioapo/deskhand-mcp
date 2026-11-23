@@ -1,0 +1,161 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`inbox_triage schemas > input schema is stable 1`] = `
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "proposals": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "labels": {
+            "default": [],
+            "items": {
+              "maxLength": 40,
+              "type": "string",
+            },
+            "maxItems": 5,
+            "type": "array",
+          },
+          "next_action": {
+            "enum": [
+              "reply",
+              "schedule",
+              "delegate",
+              "read_later",
+              "archive",
+              "none",
+            ],
+            "type": "string",
+          },
+          "priority": {
+            "enum": [
+              "high",
+              "normal",
+              "low",
+            ],
+            "type": "string",
+          },
+          "reason": {
+            "maxLength": 300,
+            "type": "string",
+          },
+          "thread_id": {
+            "pattern": "^[A-Za-z0-9_-]{1,64}$",
+            "type": "string",
+          },
+        },
+        "required": [
+          "thread_id",
+          "priority",
+          "next_action",
+          "labels",
+        ],
+        "type": "object",
+      },
+      "maxItems": 25,
+      "minItems": 1,
+      "type": "array",
+    },
+  },
+  "required": [
+    "proposals",
+  ],
+  "type": "object",
+}
+`;
+
+exports[`inbox_triage schemas > output schema is stable 1`] = `
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "applied": {
+      "const": false,
+      "type": "boolean",
+    },
+    "note": {
+      "type": "string",
+    },
+    "proposals": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "labels": {
+            "items": {
+              "type": "string",
+            },
+            "type": "array",
+          },
+          "next_action": {
+            "enum": [
+              "reply",
+              "schedule",
+              "delegate",
+              "read_later",
+              "archive",
+              "none",
+            ],
+            "type": "string",
+          },
+          "priority": {
+            "enum": [
+              "high",
+              "normal",
+              "low",
+            ],
+            "type": "string",
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null",
+            ],
+          },
+          "subject": {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "type": "string",
+              },
+              "source": {
+                "type": "string",
+              },
+              "untrusted": {
+                "const": true,
+                "type": "boolean",
+              },
+            },
+            "required": [
+              "untrusted",
+              "source",
+              "content",
+            ],
+            "type": "object",
+          },
+          "thread_id": {
+            "type": "string",
+          },
+        },
+        "required": [
+          "thread_id",
+          "subject",
+          "priority",
+          "next_action",
+          "labels",
+          "reason",
+        ],
+        "type": "object",
+      },
+      "type": "array",
+    },
+  },
+  "required": [
+    "proposals",
+    "applied",
+    "note",
+  ],
+  "type": "object",
+}
+`;
