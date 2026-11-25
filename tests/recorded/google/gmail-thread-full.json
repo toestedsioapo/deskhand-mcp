@@ -1,0 +1,503 @@
+{
+  "request": {
+    "method": "GET",
+    "url": "https://www.googleapis.com/gmail/v1/users/me/threads/t-full?format=full"
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "id": "t-full",
+      "historyId": "9001",
+      "messages": [
+        {
+          "id": "m-owner-from",
+          "threadId": "t-full",
+          "labelIds": [
+            "INBOX",
+            "UNREAD"
+          ],
+          "snippet": "snippet of m-owner-from",
+          "historyId": "9001",
+          "internalDate": "1794330000000",
+          "sizeEstimate": 1024,
+          "payload": {
+            "partId": "0",
+            "mimeType": "text/plain",
+            "filename": "",
+            "headers": [
+              {
+                "name": "From",
+                "value": "me@example.com"
+              },
+              {
+                "name": "To",
+                "value": "me@example.com"
+              },
+              {
+                "name": "Subject",
+                "value": "Q4 budget"
+              },
+              {
+                "name": "Message-ID",
+                "value": "<m-owner-from@example.com>"
+              },
+              {
+                "name": "Content-Type",
+                "value": "text/plain; charset=UTF-8"
+              }
+            ],
+            "body": {
+              "size": 42,
+              "data": "Qk9EWS1TRU5USU5FTC1zcG9vZiBjbGFpbXMgdG8gYmUgdGhlIG93bmVy"
+            }
+          }
+        },
+        {
+          "id": "m-trash",
+          "threadId": "t-full",
+          "labelIds": [
+            "TRASH"
+          ],
+          "snippet": "snippet of m-trash",
+          "historyId": "9001",
+          "internalDate": "1794326400000",
+          "sizeEstimate": 1024,
+          "payload": {
+            "partId": "0",
+            "mimeType": "text/plain",
+            "filename": "",
+            "headers": [
+              {
+                "name": "From",
+                "value": "Ana Lopez <ana@example.com>"
+              },
+              {
+                "name": "To",
+                "value": "me@example.com"
+              },
+              {
+                "name": "Subject",
+                "value": "Q4 budget"
+              },
+              {
+                "name": "Message-ID",
+                "value": "<m-trash@example.com>"
+              },
+              {
+                "name": "Content-Type",
+                "value": "text/plain; charset=UTF-8"
+              }
+            ],
+            "body": {
+              "size": 19,
+              "data": "Qk9EWS1TRU5USU5FTC10cmFzaA"
+            }
+          }
+        },
+        {
+          "id": "m-draft",
+          "threadId": "t-full",
+          "labelIds": [
+            "DRAFT"
+          ],
+          "snippet": "snippet of m-draft",
+          "historyId": "9001",
+          "internalDate": "1794322800000",
+          "sizeEstimate": 1024,
+          "payload": {
+            "partId": "0",
+            "mimeType": "text/plain",
+            "filename": "",
+            "headers": [
+              {
+                "name": "From",
+                "value": "Ana Lopez <ana@example.com>"
+              },
+              {
+                "name": "To",
+                "value": "me@example.com"
+              },
+              {
+                "name": "Subject",
+                "value": "Q4 budget"
+              },
+              {
+                "name": "Message-ID",
+                "value": "<m-draft@example.com>"
+              },
+              {
+                "name": "Content-Type",
+                "value": "text/plain; charset=UTF-8"
+              }
+            ],
+            "body": {
+              "size": 19,
+              "data": "Qk9EWS1TRU5USU5FTC1kcmFmdA"
+            }
+          }
+        },
+        {
+          "id": "m-nested",
+          "threadId": "t-full",
+          "labelIds": [
+            "INBOX"
+          ],
+          "snippet": "snippet of m-nested",
+          "historyId": "9001",
+          "internalDate": "1794319200000",
+          "sizeEstimate": 1024,
+          "payload": {
+            "partId": "",
+            "mimeType": "multipart/mixed",
+            "filename": "",
+            "headers": [
+              {
+                "name": "From",
+                "value": "Ana Lopez <ana@example.com>"
+              },
+              {
+                "name": "To",
+                "value": "me@example.com"
+              },
+              {
+                "name": "Subject",
+                "value": "Q4 budget"
+              },
+              {
+                "name": "Message-ID",
+                "value": "<m-nested@example.com>"
+              },
+              {
+                "name": "Content-Type",
+                "value": "multipart/mixed; boundary=\"b0\""
+              }
+            ],
+            "body": {
+              "size": 0
+            },
+            "parts": [
+              {
+                "partId": "",
+                "mimeType": "multipart/alternative",
+                "filename": "",
+                "headers": [
+                  {
+                    "name": "Content-Type",
+                    "value": "multipart/alternative; boundary=\"b0\""
+                  }
+                ],
+                "body": {
+                  "size": 0
+                },
+                "parts": [
+                  {
+                    "partId": "0",
+                    "mimeType": "text/plain",
+                    "filename": "",
+                    "headers": [
+                      {
+                        "name": "Content-Type",
+                        "value": "text/plain; charset=UTF-8"
+                      }
+                    ],
+                    "body": {
+                      "size": 26,
+                      "data": "Qk9EWS1TRU5USU5FTC1uZXN0ZWQgcGxhaW4"
+                    }
+                  },
+                  {
+                    "partId": "0",
+                    "mimeType": "text/html",
+                    "filename": "",
+                    "headers": [
+                      {
+                        "name": "Content-Type",
+                        "value": "text/html; charset=UTF-8"
+                      }
+                    ],
+                    "body": {
+                      "size": 18,
+                      "data": "PHA-bmVzdGVkIGh0bWw8L3A-"
+                    }
+                  }
+                ]
+              },
+              {
+                "partId": "1",
+                "mimeType": "application/pdf",
+                "filename": "invoice.pdf",
+                "headers": [
+                  {
+                    "name": "Content-Type",
+                    "value": "application/pdf; name=\"invoice.pdf\""
+                  },
+                  {
+                    "name": "Content-Disposition",
+                    "value": "attachment; filename=\"invoice.pdf\""
+                  }
+                ],
+                "body": {
+                  "size": 4096,
+                  "attachmentId": "att-1"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "m-latin",
+          "threadId": "t-full",
+          "labelIds": [
+            "INBOX"
+          ],
+          "snippet": "snippet of m-latin",
+          "historyId": "9001",
+          "internalDate": "1794315600000",
+          "sizeEstimate": 1024,
+          "payload": {
+            "partId": "0",
+            "mimeType": "text/plain",
+            "filename": "",
+            "headers": [
+              {
+                "name": "From",
+                "value": "Ana Lopez <ana@example.com>"
+              },
+              {
+                "name": "To",
+                "value": "me@example.com"
+              },
+              {
+                "name": "Subject",
+                "value": "Q4 budget"
+              },
+              {
+                "name": "Message-ID",
+                "value": "<m-latin@example.com>"
+              },
+              {
+                "name": "Content-Type",
+                "value": "text/plain; charset=ISO-8859-1"
+              },
+              {
+                "name": "Content-Transfer-Encoding",
+                "value": "quoted-printable"
+              }
+            ],
+            "body": {
+              "size": 11,
+              "data": "Q2Fm6SBjcuhtZQ"
+            }
+          }
+        },
+        {
+          "id": "m-html",
+          "threadId": "t-full",
+          "labelIds": [
+            "INBOX"
+          ],
+          "snippet": "snippet of m-html",
+          "historyId": "9001",
+          "internalDate": "1794312000000",
+          "sizeEstimate": 1024,
+          "payload": {
+            "partId": "0",
+            "mimeType": "text/html",
+            "filename": "",
+            "headers": [
+              {
+                "name": "From",
+                "value": "Ana Lopez <ana@example.com>"
+              },
+              {
+                "name": "To",
+                "value": "me@example.com"
+              },
+              {
+                "name": "Subject",
+                "value": "Q4 budget"
+              },
+              {
+                "name": "Message-ID",
+                "value": "<m-html@example.com>"
+              },
+              {
+                "name": "Content-Type",
+                "value": "text/html; charset=UTF-8"
+              }
+            ],
+            "body": {
+              "size": 191,
+              "data": "PGh0bWw-PGhlYWQ-PHRpdGxlPmhpZGRlbiB0aXRsZTwvdGl0bGU-PHN0eWxlPnB7Y29sb3I6cmVkfTwvc3R5bGU-PC9oZWFkPjxib2R5PjxwPkJPRFktU0VOVElORUwtaHRtbCAmYW1wOyBtb3JlPC9wPjxzY3JpcHQ-dmFyIHMgPSAiYT5iIjsgc3RlYWwoKTs8L3NjcmlwdD48ZGl2PnNlY29uZCBsaW5lPC9kaXY-PC9ib2R5PjwvaHRtbD4"
+            }
+          }
+        },
+        {
+          "id": "m-alt",
+          "threadId": "t-full",
+          "labelIds": [
+            "SENT"
+          ],
+          "snippet": "snippet of m-alt",
+          "historyId": "9001",
+          "internalDate": "1794308400000",
+          "sizeEstimate": 1024,
+          "payload": {
+            "partId": "",
+            "mimeType": "multipart/alternative",
+            "filename": "",
+            "headers": [
+              {
+                "name": "From",
+                "value": "me@example.com"
+              },
+              {
+                "name": "To",
+                "value": "Ana Lopez <ana@example.com>"
+              },
+              {
+                "name": "Subject",
+                "value": "Q4 budget"
+              },
+              {
+                "name": "Message-ID",
+                "value": "<m-alt@example.com>"
+              },
+              {
+                "name": "Content-Type",
+                "value": "multipart/alternative; boundary=\"b0\""
+              }
+            ],
+            "body": {
+              "size": 0
+            },
+            "parts": [
+              {
+                "partId": "0",
+                "mimeType": "text/plain",
+                "filename": "",
+                "headers": [
+                  {
+                    "name": "Content-Type",
+                    "value": "text/plain; charset=UTF-8"
+                  }
+                ],
+                "body": {
+                  "size": 23,
+                  "data": "Qk9EWS1TRU5USU5FTC1hbHQgcGxhaW4"
+                }
+              },
+              {
+                "partId": "0",
+                "mimeType": "text/html",
+                "filename": "",
+                "headers": [
+                  {
+                    "name": "Content-Type",
+                    "value": "text/html; charset=UTF-8"
+                  }
+                ],
+                "body": {
+                  "size": 15,
+                  "data": "PHA-YWx0IGh0bWw8L3A-"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "m-plain",
+          "threadId": "t-full",
+          "labelIds": [
+            "INBOX"
+          ],
+          "snippet": "snippet of m-plain",
+          "historyId": "9001",
+          "internalDate": "1794304800000",
+          "sizeEstimate": 1024,
+          "payload": {
+            "partId": "0",
+            "mimeType": "text/plain",
+            "filename": "",
+            "headers": [
+              {
+                "name": "From",
+                "value": "Ana Lopez <ana@example.com>"
+              },
+              {
+                "name": "To",
+                "value": "me@example.com"
+              },
+              {
+                "name": "Subject",
+                "value": "Q4 budget"
+              },
+              {
+                "name": "Reply-To",
+                "value": "ana.reply@example.com"
+              },
+              {
+                "name": "Message-ID",
+                "value": "<m-plain@example.com>"
+              },
+              {
+                "name": "Content-Type",
+                "value": "text/plain; charset=UTF-8"
+              }
+            ],
+            "body": {
+              "size": 19,
+              "data": "Qk9EWS1TRU5USU5FTC1wbGFpbg"
+            }
+          }
+        },
+        {
+          "id": "m-encoded",
+          "threadId": "t-full",
+          "labelIds": [
+            "INBOX"
+          ],
+          "snippet": "snippet of m-encoded",
+          "historyId": "9001",
+          "internalDate": "1794301200000",
+          "sizeEstimate": 1024,
+          "payload": {
+            "partId": "0",
+            "mimeType": "text/plain",
+            "filename": "",
+            "headers": [
+              {
+                "name": "From",
+                "value": "=?UTF-8?Q?Jos=C3=A9_Garc=C3=ADa?= <jose@example.com>"
+              },
+              {
+                "name": "To",
+                "value": "team: a@example.com, b@example.com;"
+              },
+              {
+                "name": "Subject",
+                "value": "=?UTF-8?B?UHLDqXN1cHVlc3Rv?= =?ISO-8859-1?Q?_caf=E9?="
+              },
+              {
+                "name": "Cc",
+                "value": "not an address, c@example.com"
+              },
+              {
+                "name": "Message-ID",
+                "value": "<m-encoded@example.com>"
+              },
+              {
+                "name": "Content-Type",
+                "value": "text/plain; charset=UTF-8"
+              }
+            ],
+            "body": {
+              "size": 21,
+              "data": "Qk9EWS1TRU5USU5FTC1lbmNvZGVk"
+            }
+          }
+        }
+      ]
+    }
+  }
+}

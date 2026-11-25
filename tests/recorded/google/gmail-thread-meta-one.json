@@ -1,0 +1,93 @@
+{
+  "request": {
+    "method": "GET",
+    "url": "https://www.googleapis.com/gmail/v1/users/me/threads/t-one?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Date"
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "id": "t-one",
+      "messages": [
+        {
+          "id": "o1",
+          "threadId": "t-one",
+          "labelIds": [
+            "INBOX"
+          ],
+          "snippet": "snippet of o1",
+          "internalDate": "1794297600000",
+          "payload": {
+            "mimeType": "text/plain",
+            "headers": [
+              {
+                "name": "From",
+                "value": "Ana Lopez <ana@example.com>"
+              },
+              {
+                "name": "Subject",
+                "value": "Older"
+              },
+              {
+                "name": "Date",
+                "value": "Tue, 10 Nov 2026 10:00:00 +0000"
+              }
+            ]
+          }
+        },
+        {
+          "id": "o2",
+          "threadId": "t-one",
+          "labelIds": [
+            "INBOX",
+            "UNREAD"
+          ],
+          "snippet": "snippet of o2",
+          "internalDate": "1794301200000",
+          "payload": {
+            "mimeType": "text/plain",
+            "headers": [
+              {
+                "name": "From",
+                "value": "Ana Lopez <ana@example.com>"
+              },
+              {
+                "name": "Subject",
+                "value": "Thread one"
+              },
+              {
+                "name": "Date",
+                "value": "Tue, 10 Nov 2026 10:00:00 +0000"
+              }
+            ]
+          }
+        },
+        {
+          "id": "o3",
+          "threadId": "t-one",
+          "labelIds": [
+            "DRAFT"
+          ],
+          "snippet": "snippet of o3",
+          "internalDate": "1794340800000",
+          "payload": {
+            "mimeType": "text/plain",
+            "headers": [
+              {
+                "name": "From",
+                "value": "Ana Lopez <ana@example.com>"
+              },
+              {
+                "name": "Subject",
+                "value": "My draft"
+              },
+              {
+                "name": "Date",
+                "value": "Tue, 10 Nov 2026 10:00:00 +0000"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

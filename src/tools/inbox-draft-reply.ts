@@ -9,6 +9,7 @@ import {
   MAX_RECIPIENTS,
   MAX_REFERENCES,
   mailDraftPlanSchema,
+  threadMessageIdsHash,
   rationaleSchema,
   type MailDraftPlan,
 } from "../approval/mail-draft-kind.js";
@@ -83,13 +84,12 @@ function uniqueWithout(xs: readonly string[], exclude: ReadonlySet<string>): str
 }
 
 /**
- * Decision 6. The latest message not sent by the owner: its Reply-To, else its From; `reply_all` adds its To (to) and
+ * Decisions 6 and 9. The latest message not sent by the owner (`sentByOwner`, not its From header): its Reply-To, else its From; `reply_all` adds its To (to) and
  * Cc (cc). When every message is the owner's: the latest message's To (and with `reply_all` its Cc). Never the owner.
  */
 function defaultRecipients(messages: readonly MailMessage[], owner: string, replyAll: boolean): { to: string[]; cc: string[] } {
-  // The same address rule as participants(): an address that only lowercases to the owner's is not the owner.
-  const isOwner = (m: MailMessage) => m.from !== null && isDraftAddress(m.from.address) && lc(m.from.address) === lc(owner);
-  const target = messages.filter((m) => !isOwner(m)).at(-1);
+  // "Mine" is a provider fact (sentByOwner), never the From header, which the sender controls (decision 9).
+  const target = messages.filter((m) => !m.sentByOwner).at(-1);
   const ownerSet = new Set([lc(owner)]);
   if (target) {
     const primary = target.replyTo.length > 0 ? target.replyTo.map((a) => a.address) : target.from ? [target.from.address] : [];
@@ -127,7 +127,12 @@ export async function inboxDraftReplyHandler(ctx: AppContext, input: Input): Pro
 
   let thread;
   let owner: string;
+  let messageIds: string[] | null;
   try {
+    // Before getThread: a message that arrives between the two reads is then missing from the stored hash, so the
+    // plan goes stale at apply instead of being hashed without the planner having seen it (decision 7).
+    messageIds = await mail.threadMessageIds(input.thread_id);
+    if (messageIds === null) return toolError("NOT_FOUND", `No thread with id ${input.thread_id}.`);
     thread = await mail.getThread(input.thread_id, MAX_MESSAGES);
     if (thread === null) return toolError("NOT_FOUND", `No thread with id ${input.thread_id}.`);
     owner = (await mail.profile()).email;
@@ -215,7 +220,7 @@ export async function inboxDraftReplyHandler(ctx: AppContext, input: Input): Pro
       bodyChars: body.length,
       bodySha256: createHash("sha256").update(body, "utf8").digest("hex"),
     },
-    observed: { latestMessageId: latest.id, onThread },
+    observed: { latestMessageId: latest.id, messageIdsSha256: threadMessageIdsHash(messageIds), onThread },
   });
   // Every rule is checked above; this catches anything left (for example an address the agent did not choose), so a
   // plan the schema would refuse is an INVALID_INPUT answer and never a thrown INTERNAL.

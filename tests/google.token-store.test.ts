@@ -1,7 +1,13 @@
-import { existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { openSync, existsSync, lstatSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// Delegates to the real openSync; one test makes a single call fail.
+vi.mock("node:fs", async (orig) => {
+  const actual = await orig<typeof import("node:fs")>();
+  return { ...actual, openSync: vi.fn(actual.openSync) };
+});
 import { ConfigError } from "../src/config/env.js";
 import { readToken, tokenPath, writeToken, type StoredToken } from "../src/providers/google/token-store.js";
 
@@ -18,7 +24,10 @@ let dir: string;
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), "deskhand-token-"));
 });
-afterEach(() => rmSync(dir, { recursive: true, force: true }));
+afterEach(() => {
+  vi.restoreAllMocks();
+  rmSync(dir, { recursive: true, force: true });
+});
 
 describe("token store", () => {
   it("tokenPath is <configDir>/token.json", () => {
@@ -72,5 +81,56 @@ describe("token store", () => {
     expect(() => writeToken(d, tok)).toThrow();
     expect(readdirSync(d)).toEqual(["token.json"]);
     expect(existsSync(join(d, "token.json", "x"))).toBe(true);
+  });
+});
+
+describe("token store temp file (M3b follow-up 1)", () => {
+  const FIXED = 1_700_000_000_000;
+  const tmpName = (n: number) => `token.json.${process.pid}.${FIXED}.${n}.tmp`;
+
+  it("an existing file at the first temp path is left untouched and token.json is still written", () => {
+    vi.spyOn(Date, "now").mockReturnValue(FIXED);
+    writeFileSync(join(dir, tmpName(0)), "PLANTED");
+    writeToken(dir, tok);
+    expect(readFileSync(join(dir, tmpName(0)), "utf8")).toBe("PLANTED");
+    expect(readToken(dir)).toEqual(tok);
+  });
+  it("a symlink at the temp path is not followed", () => {
+    vi.spyOn(Date, "now").mockReturnValue(FIXED);
+    const victim = join(dir, "victim.txt");
+    writeFileSync(victim, "VICTIM");
+    try {
+      symlinkSync(victim, join(dir, tmpName(0)));
+    } catch {
+      return; // symlinks need privileges on some platforms
+    }
+    writeToken(dir, tok);
+    expect(readFileSync(victim, "utf8")).toBe("VICTIM");
+    expect(lstatSync(join(dir, tmpName(0))).isSymbolicLink()).toBe(true);
+    expect(readToken(dir)).toEqual(tok);
+  });
+  it("five collisions in a row throw and write nothing", () => {
+    vi.spyOn(Date, "now").mockReturnValue(FIXED);
+    for (let i = 0; i < 5; i++) writeFileSync(join(dir, tmpName(i)), `PLANTED${i}`);
+    expect(() => writeToken(dir, tok)).toThrow();
+    expect(readToken(dir)).toBeNull();
+    for (let i = 0; i < 5; i++) expect(readFileSync(join(dir, tmpName(i)), "utf8")).toBe(`PLANTED${i}`);
+  });
+  it("a non-EEXIST open failure leaves the planted entry untouched and surfaces the original error", () => {
+    vi.spyOn(Date, "now").mockReturnValue(FIXED);
+    writeFileSync(join(dir, tmpName(0)), "PLANTED");
+    const boom = Object.assign(new Error("too many open files"), { code: "EMFILE" });
+    vi.mocked(openSync).mockImplementationOnce(() => {
+      throw boom;
+    });
+    expect(() => writeToken(dir, tok)).toThrow(boom);
+    expect(readFileSync(join(dir, tmpName(0)), "utf8")).toBe("PLANTED");
+    expect(readToken(dir)).toBeNull();
+  });
+  it("four collisions still succeed on the fifth try", () => {
+    vi.spyOn(Date, "now").mockReturnValue(FIXED);
+    for (let i = 0; i < 4; i++) writeFileSync(join(dir, tmpName(i)), "PLANTED");
+    writeToken(dir, tok);
+    expect(readToken(dir)).toEqual(tok);
   });
 });

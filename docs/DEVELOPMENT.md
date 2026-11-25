@@ -82,6 +82,8 @@ Build first (`pnpm build`), then either:
   pnpm exec mcp-inspector --cli -e DESKHAND_PROVIDER=fixture -e DESKHAND_FIXTURE=<world.json> node dist/server.js --method tools/call --tool-name calendar_list_events --tool-arg time_min=2026-11-10T00:00:00Z --tool-arg time_max=2026-11-11T00:00:00Z
   ```
 
+Gmail (M4b): with `DESKHAND_PROVIDER=google` the `inbox_*` tools use the Gmail adapter and answer `AUTH_REQUIRED` until `deskhand auth login` has run (`deskhand auth upgrade` adds `gmail.compose` for drafts). The adapter is built and tested on recorded responses only; the live check is by hand and was not yet run when M4b was written (`docs/TEST_PLAN.md`, manual Gmail check).
+
 Google mode: `pnpm exec mcp-inspector --cli -e DESKHAND_PROVIDER=google node dist/server.js --method tools/call --tool-name calendar_list_events ...` answers `AUTH_REQUIRED` until `deskhand auth login` has run. Live calls to Google are only ever made by hand (TEST_PLAN, manual Google check); tests and CI never do.
 
 Bin entry files (`src/server.ts`, `src/cli.ts`) must keep the `#!/usr/bin/env node` first line and LF endings (enforced by `.gitattributes` and `tests/packaging.test.ts`).

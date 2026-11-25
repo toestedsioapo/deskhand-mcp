@@ -1,0 +1,15 @@
+{
+  "request": {
+    "method": "GET",
+    "url": "https://www.googleapis.com/gmail/v1/users/me/profile"
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "emailAddress": "me@example.com",
+      "messagesTotal": 12,
+      "threadsTotal": 4,
+      "historyId": "9001"
+    }
+  }
+}

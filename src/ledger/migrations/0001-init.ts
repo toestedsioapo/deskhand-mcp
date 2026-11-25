@@ -2,7 +2,7 @@ import {
   ACTION_STATUSES,
   APPROVAL_METHODS,
   ERROR_CODES_V1,
-  EVENT_KINDS,
+  EVENT_KINDS_V1,
   EVENT_OUTCOMES,
   REJECTION_METHODS,
 } from "../contract.js";
@@ -44,7 +44,7 @@ CREATE TABLE events (
   action_id    TEXT REFERENCES actions(id),
   tool         TEXT NOT NULL,
   kind         TEXT NOT NULL
-    CHECK (kind IN (${list(EVENT_KINDS)})),
+    CHECK (kind IN (${list(EVENT_KINDS_V1)})),
   outcome      TEXT NOT NULL
     CHECK (outcome IN (${list(EVENT_OUTCOMES)})),
   error_code   TEXT

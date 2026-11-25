@@ -9,7 +9,7 @@ import { getAction } from "../src/ledger/actions.js";
 import { queryEvents } from "../src/ledger/events.js";
 import { LedgerDb } from "../src/ledger/db.js";
 import { createGoogleCalendarProvider } from "../src/providers/google/calendar.js";
-import { createGoogleMailProvider } from "../src/providers/google/mail.js";
+import { createGmailProvider } from "../src/providers/google/gmail.js";
 import { GOOGLE_ENDPOINTS } from "../src/providers/google/oauth.js";
 import { writeToken } from "../src/providers/google/token-store.js";
 import { makeTempHome } from "./helpers/home.js";
@@ -66,19 +66,20 @@ function setup(
     const raw = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
     return intercept?.((init?.method ?? "GET").toUpperCase(), new URL(raw)) ?? served(input, init);
   }) as typeof fetch;
-  const provider = createGoogleCalendarProvider({
+  const googleDeps = {
     fetch: f,
     configDir: home.home,
     now: () => NOW,
     oauth: { fetch: f, endpoints: GOOGLE_ENDPOINTS, now: () => NOW },
-  });
+  };
+  const provider = createGoogleCalendarProvider(googleDeps);
   const ctx: AppContext = {
     config: loadConfig({ ...home.env, DESKHAND_ALLOW_WRITES: "1" }),
     db,
     clock: () => NOW,
     ids: { newActionId: () => ACTION_ID },
     provider,
-    mail: createGoogleMailProvider(),
+    mail: createGmailProvider(googleDeps),
     actor: "tester",
   };
   const plan = validPlan(

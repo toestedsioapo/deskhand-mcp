@@ -2,7 +2,7 @@ import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import type { AppContext } from "../app-context.js";
 import { ConfigError } from "../config/env.js";
-import { SCOPE_CALENDAR_WRITE, requestedScopes } from "../config/scopes.js";
+import { SCOPE_CALENDAR_WRITE, SCOPE_GMAIL_COMPOSE, requestedScopes } from "../config/scopes.js";
 import type { ErrorCode } from "../ledger/contract.js";
 import { appendEvent } from "../ledger/events.js";
 import { isoNow } from "../ledger/ids.js";
@@ -126,7 +126,7 @@ function status(ctx: AppContext, io: CliIo): { code: number; scopes: string[] | 
   const scopes = token.scopes.map((s) => oneLine(s, 200));
   io.out("token.json: found\n");
   io.out(`Granted scopes:\n${scopes.map((s) => `  ${s}\n`).join("")}`);
-  io.out(`Write access: ${token.scopes.includes(SCOPE_CALENDAR_WRITE) ? "yes" : "no (run: deskhand auth upgrade)"}\n`);
+  io.out(`Write access: ${token.scopes.includes(SCOPE_CALENDAR_WRITE) && token.scopes.includes(SCOPE_GMAIL_COMPOSE) ? "yes" : "no (run: deskhand auth upgrade)"}\n`);
   io.out(`Signed in at: ${oneLine(token.obtained_at, 40)}\n`);
   const left = Date.parse(token.obtained_at) + TESTING_TOKEN_DAYS * DAY_MS - ctx.clock().getTime();
   io.out(

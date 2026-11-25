@@ -68,6 +68,7 @@ const messageSchema = z
     subject: z.string(),
     body_text: z.string(),
     unread: z.boolean().optional(),
+    sent: z.boolean().optional(),
     draft: z.boolean().optional(),
   })
   .strict();

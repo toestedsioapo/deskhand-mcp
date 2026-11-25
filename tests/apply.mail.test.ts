@@ -4,8 +4,19 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { applyAction, idempotencyKey } from "../src/approval/apply.js";
+import { createPlan } from "../src/approval/plans.js";
 import { approveAction } from "../src/approval/approve.js";
-import { DRAFT_DIFFERS, draftHeaderFor, type MailDraftPlan } from "../src/approval/mail-draft-kind.js";
+import { sweepDraftBodies } from "../src/approval/body-sweep.js";
+import { takeWriteClaim } from "../src/approval/write-claim.js";
+import { writeRecords } from "../src/approval/write-landed.js";
+import {
+  DRAFT_DIFFERS,
+  draftHeaderFor,
+  THREAD_CHANGED,
+  THREAD_UNVERIFIED,
+  threadMessageIdsHash,
+  type MailDraftPlan,
+} from "../src/approval/mail-draft-kind.js";
 import type { CliIo } from "../src/cli/io.js";
 import { getAction } from "../src/ledger/actions.js";
 import { canonicalJson } from "../src/ledger/canonical.js";
@@ -91,7 +102,9 @@ describe("propose -> approve -> apply a draft (end to end on the fixture)", () =
 
     const first = await apply(hh, id);
     expect(first.isError, text(first)).toBeFalsy();
-    const header = draftHeaderFor(idempotencyKey(id));
+    // The fixture, like Gmail, stores a Message-ID of its own (M4b live check).
+    const header = "<fixture.dr_1@mail.fixture.invalid>";
+    expect(header).not.toBe(draftHeaderFor(idempotencyKey(id)));
     const w = (content: string) => ({ untrusted: true, source: "mail:th_budget", content });
     expect(first.structuredContent).toEqual({
       action_id: id,
@@ -114,6 +127,7 @@ describe("propose -> approve -> apply a draft (end to end on the fixture)", () =
         messageId: "msg_dr_1",
         threadId: "th_budget",
         messageIdHeader: header,
+        date: drafts(hh)[0]!.date,
         to: ["ben@example.com"],
         cc: [],
         bcc: [],
@@ -147,14 +161,14 @@ describe("propose -> approve -> apply a draft (end to end on the fixture)", () =
     }
     expect(rawResult(hh, id)).not.toContain(SECRET);
     for (const row of hh.rows()) expect(row.preview_json).not.toContain(SECRET);
-    expect(lifecycle(hh, id)).toEqual(["plan_created", "approved", "cli_command", "applied"]);
+    expect(lifecycle(hh, id)).toEqual(["plan_created", "approved", "cli_command", "write_claimed", "write_landed", "applied"]);
 
     // No-send: the provider object never grew a send member, and the write log holds only the one draft line,
     // with In-Reply-To and References from the thread and the body omitted.
     expectNoSend(hh);
     const lines = readFileSync(writeLog, "utf8").trim().split("\n").map((l) => JSON.parse(l) as Record<string, unknown>);
     expect(lines.map((l) => l["op"])).toEqual(["mail.createDraft"]);
-    expect(lines[0]!["idempotency_key"]).toBe(header);
+    expect(lines[0]!["idempotency_key"]).toBe(idempotencyKey(id));
     expect(lines[0]!["request"]).toMatchObject({
       inReplyTo: "<m2@example.com>",
       references: ["<m1@example.com>", "<m2@example.com>"],
@@ -229,11 +243,15 @@ describe("the re-check (decision 8) and the differs phrase", () => {
     expect(await applyAction(hh.ctx, id)).toMatchObject({ ok: true, replayed: false });
   });
 
-  it("a draft under our Message-ID with a different bcc: STALE_PLAN with the fixed differs phrase, no second draft", async () => {
+  it("the draft this action recorded, with a different bcc: STALE_PLAN with the fixed differs phrase, no second draft", async () => {
     const { hh } = await harness();
     const id = await proposeAndApprove(hh);
     const d = planOf(hh, id).draft;
-    await hh.ctx.mail!.createDraft({ ...d, body: BODY, bcc: ["mallory@example.com"] });
+    const changed = await hh.ctx.mail!.createDraft(
+      { ...d, idempotencyKey: idempotencyKey(id), body: BODY, bcc: ["mallory@example.com"] },
+      (draftId) => void writeRecords(hh.ctx, id).record(draftId),
+    );
+    expect(changed.draftId).toBe("dr_1");
     const r = await apply(hh, id);
     expect(text(r)).toBe(`STALE_PLAN: ${DRAFT_DIFFERS}`);
     expect(DRAFT_DIFFERS).toBe("a draft with this action's id exists but differs from the approved plan");
@@ -242,13 +260,123 @@ describe("the re-check (decision 8) and the differs phrase", () => {
   });
 });
 
+describe("the re-check compares the thread's whole message set (decision 7)", () => {
+  const CHANGED = `STALE_PLAN: The world changed since planning: the thread's messages changed since planning.`;
+  const M0 = msg("m0", "2026-11-09T09:00:00.000Z", { message_id: "<m0@example.com>" });
+  const MB = msg("mb", "2026-11-09T10:30:00.000Z", { message_id: "<mb@example.com>" });
+
+  async function expectStale(hh: H, id: string, expected: string): Promise<void> {
+    const r = await apply(hh, id);
+    expect(r.isError).toBe(true);
+    expect(text(r)).toBe(expected);
+    expect(getAction(hh.db, id)!.status).toBe("failed");
+    expect(drafts(hh)).toHaveLength(0);
+  }
+
+  it("the constants hold the contract phrases", () => {
+    expect(THREAD_CHANGED).toBe("the thread's messages changed since planning");
+    expect(THREAD_UNVERIFIED).toBe("the plan has no record of the thread's messages");
+  });
+
+  it("a backdated message older than the latest: STALE_PLAN", async () => {
+    const { hh } = await harness();
+    const id = await proposeAndApprove(hh);
+    useMail(hh, [{ ...THREAD, messages: [M0, M1, M2] }]);
+    await expectStale(hh, id, CHANGED);
+  });
+
+  it("a backdated message between two messages: STALE_PLAN", async () => {
+    const { hh } = await harness();
+    const id = await proposeAndApprove(hh);
+    useMail(hh, [{ ...THREAD, messages: [M1, MB, M2] }]);
+    await expectStale(hh, id, CHANGED);
+  });
+
+  it("a backdated message outside the newest 100: STALE_PLAN", async () => {
+    const base = Array.from({ length: 101 }, (_, i) =>
+      msg(`x${String(i).padStart(3, "0")}`, new Date(Date.UTC(2026, 10, 1, 0, i)).toISOString(), { message_id: `<x${i}@example.com>` }),
+    );
+    const { hh } = await harness([{ id: "th_budget", messages: base }]);
+    const id = await proposeAndApprove(hh);
+    // Older than every message the plan's getThread (newest 100) could have shown.
+    const old = msg("old", "2026-10-01T00:00:00.000Z", { message_id: "<old@example.com>" });
+    useMail(hh, [{ id: "th_budget", messages: [old, ...base] }]);
+    await expectStale(hh, id, CHANGED);
+  });
+
+  it("an older message removed: STALE_PLAN", async () => {
+    const { hh } = await harness();
+    const id = await proposeAndApprove(hh);
+    useMail(hh, [{ ...THREAD, messages: [M2] }]);
+    await expectStale(hh, id, CHANGED);
+  });
+
+  it("a message arriving between the plan's two reads: STALE_PLAN", async () => {
+    const { hh } = await harness();
+    const real = hh.ctx.mail!;
+    const withMb = createFixtureMailProvider(mailWorld([{ ...THREAD, messages: [M1, MB, M2] }]));
+    // The message arrives right after threadMessageIds returns, so getThread sees it and the stored hash does not.
+    hh.ctx.mail = { ...real, getThread: (t, n) => withMb.getThread(t, n) };
+    const id = await proposeAndApprove(hh);
+    hh.ctx.mail = withMb;
+    await expectStale(hh, id, CHANGED);
+  });
+
+  it("a read-state change or a draft in the thread does not stale the plan", async () => {
+    const { hh } = await harness();
+    const id = await proposeAndApprove(hh);
+    const draftMsg = msg("md", "2026-11-09T13:00:00.000Z", { draft: true });
+    useMail(hh, [{ ...THREAD, messages: [{ ...M1, unread: true }, { ...M2, unread: true }, draftMsg] }]);
+    expect(await applyAction(hh.ctx, id)).toMatchObject({ ok: true, replayed: false });
+    expect(drafts(hh)).toHaveLength(1);
+  });
+
+  it("a plan without messageIdsSha256 cannot be applied: THREAD_UNVERIFIED", async () => {
+    const { hh } = await harness();
+    const id = await propose(hh);
+    const plan = planOf(hh, id);
+    const { messageIdsSha256: _m, ...observed } = plan.observed;
+    // An M4a-era plan: stored without the field, with the hash of what is stored, then approved.
+    const { actionId } = createPlan(hh.ctx, { tool: "inbox_draft_reply", input: {}, plan: { ...plan, observed } });
+    expect(await approveAction(hh.ctx, actionId, approvalIo(actionId))).toEqual({ ok: true });
+    await expectStale(hh, actionId, `STALE_PLAN: The world changed since planning: ${THREAD_UNVERIFIED}.`);
+  });
+
+  it("an edited messageIdsSha256 is PLAN_MODIFIED", async () => {
+    const { hh } = await harness();
+    const id = await proposeAndApprove(hh);
+    const plan = planOf(hh, id);
+    hh.db.run("UPDATE actions SET plan_json = ? WHERE id = ?", [
+      canonicalJson({ ...plan, observed: { ...plan.observed, messageIdsSha256: "0".repeat(64) } }),
+      id,
+    ]);
+    expect(await applyAction(hh.ctx, id)).toMatchObject({ ok: false, errorCode: "PLAN_MODIFIED" });
+    expect(drafts(hh)).toHaveLength(0);
+  });
+
+  it("a swept plan keeps messageIdsSha256 and plan_hash", async () => {
+    const { hh } = await harness();
+    const id = await proposeAndApprove(hh);
+    const before = getAction(hh.db, id)!;
+    const hash = threadMessageIdsHash(["m1", "m2"]);
+    expect((before.plan_json as MailDraftPlan).observed.messageIdsSha256).toBe(hash);
+    hh.db.run("UPDATE actions SET expires_at = ? WHERE id = ?", ["2000-01-01T00:00:00.000Z", id]);
+    expect(sweepDraftBodies(hh.ctx)).toBe(1);
+    const after = getAction(hh.db, id)!;
+    expect((after.plan_json as MailDraftPlan).draft.bodyRemoved).toBe(true);
+    expect((after.plan_json as MailDraftPlan).observed.messageIdsSha256).toBe(hash);
+    expect(after.plan_hash).toBe(before.plan_hash);
+  });
+});
+
 describe("gate 7a: a swept plan whose draft already exists is recovered (carried item 4)", () => {
   it("an approved bodyRemoved plan whose draft exists is recorded applied (recovered) with no second write", async () => {
     const { hh } = await harness();
     const id = await proposeAndApprove(hh);
     const plan = planOf(hh, id);
-    // A crashed apply left the draft behind ...
-    await hh.ctx.mail!.createDraft({ ...plan.draft, body: BODY });
+    // A crashed apply (it took its write claim) left the draft behind ...
+    expect(takeWriteClaim(hh.ctx, id)).toMatchObject({ ok: true });
+    await hh.ctx.mail!.createDraft({ ...plan.draft, idempotencyKey: idempotencyKey(id), body: BODY }, () => undefined);
     // ... and the sweep then removed the body (plan_hash unchanged by construction).
     const { body: _b, ...rest } = plan.draft;
     hh.db.run("UPDATE actions SET plan_json = ? WHERE id = ?", [canonicalJson({ ...plan, draft: { ...rest, bodyRemoved: true } }), id]);

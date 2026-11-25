@@ -97,6 +97,31 @@ describe("stdio server with no provider configured", () => {
     }
   });
 
+  it("an inbox tool and a calendar tool both answer the provider-neutral message", async () => {
+    const home = makeTempHome();
+    try {
+      const { client, stderr, close } = await spawnBin(home.env);
+      try {
+        const calls = [
+          { name: "inbox_search", arguments: { query: "budget" } },
+          { name: "calendar_list_events", arguments: { time_min: "2026-11-09T00:00:00Z", time_max: "2026-11-16T00:00:00Z" } },
+        ];
+        for (const c of calls) {
+          const r = await client.callTool(c);
+          expect(r.isError).toBe(true);
+          const meta = r._meta as { deskhand?: { error_code?: string } } | undefined;
+          expect(meta?.deskhand?.error_code).toBe("PROVIDER_NOT_CONFIGURED");
+          expect(JSON.stringify(r.content)).toContain("No provider is configured (set DESKHAND_PROVIDER).");
+        }
+      } finally {
+        await close();
+      }
+      expect(stderr()).toBe("");
+    } finally {
+      home.cleanup();
+    }
+  });
+
   it("exits 1 with one line when DESKHAND_FIXTURE is set without DESKHAND_PROVIDER=fixture", () => {
     const home = makeTempHome();
     try {
@@ -143,6 +168,34 @@ describe("stdio server with DESKHAND_PROVIDER=google and no token", () => {
           { tool: "ping", kind: "tool_call", outcome: "ok", error_code: null },
           { tool: "calendar_list_events", kind: "tool_call", outcome: "rejected", error_code: "AUTH_REQUIRED" },
         ]);
+      } finally {
+        db.close();
+      }
+    } finally {
+      home.cleanup();
+    }
+  });
+
+  it("inbox_search answers AUTH_REQUIRED (rejected row) with no token and no network", async () => {
+    const home = makeTempHome();
+    try {
+      const { client, stderr, close } = await spawnBin({ ...home.env, DESKHAND_PROVIDER: "google" });
+      try {
+        const r = await client.callTool({ name: "inbox_search", arguments: { query: "budget" } });
+        expect(r.isError).toBe(true);
+        const meta = r._meta as { deskhand?: { error_code?: string } } | undefined;
+        expect(meta?.deskhand?.error_code).toBe("AUTH_REQUIRED");
+        expect(JSON.stringify(r.content)).toContain("deskhand auth login");
+      } finally {
+        await close();
+      }
+      expect(stderr()).toBe("");
+      const db = LedgerDb.open(join(home.home, "ledger.db"));
+      try {
+        const rows = db.all<{ tool: string; kind: string; outcome: string; error_code: string | null }>(
+          "SELECT tool, kind, outcome, error_code FROM events ORDER BY id",
+        );
+        expect(rows).toEqual([{ tool: "inbox_search", kind: "tool_call", outcome: "rejected", error_code: "AUTH_REQUIRED" }]);
       } finally {
         db.close();
       }

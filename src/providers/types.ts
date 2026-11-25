@@ -97,6 +97,8 @@ export interface MailMessage {
   bodyText: string;
   bodyTruncated: boolean;
   unread: boolean;
+  /** True only when the provider says the owner sent it (Gmail `SENT` label; fixture `sent: true`). A From header proves nothing. */
+  sentByOwner: boolean;
 }
 
 /** Messages oldest first; drafts, trash and spam excluded. `truncated`: older messages were left out. */
@@ -116,10 +118,14 @@ export interface ThreadSummary {
   unread: boolean;
 }
 
-/** A draft reply as the apply engine asks for it. `messageIdHeader` is derived from the idempotency key. */
+/**
+ * A draft reply as the apply engine asks for it. It carries no Message-ID: the provider assigns its own (Gmail rewrites
+ * a client-supplied one; M4b live check, 2026-11-25). `idempotencyKey` is the action's key, for the fixture's write log
+ * only; it never reaches Gmail.
+ */
 export interface NewDraft {
   threadId: string;
-  messageIdHeader: string;
+  idempotencyKey: string;
   inReplyTo: string | null;
   references: string[];
   to: string[];
@@ -134,16 +140,18 @@ export interface DraftRef {
   draftId: string;
   messageId: string;
   threadId: string;
+  /** The Message-ID the provider stored (its own). Recorded, never used to identify the draft. */
   messageIdHeader: string;
+  /** When the provider stored this version of the draft (ISO 8601); orders identical drafts, oldest first. */
+  date: string;
   to: string[];
   cc: string[];
   bcc: string[];
   subject: string;
   bodySha256: string;
+  /** The stored recipient headers could not be read exactly, so this draft can never count as the approved one. */
+  recipientsMalformed?: true;
 }
-
-/** What a provider holds under one Message-ID header. Drafts have no "deleted" state a provider can report. */
-export type DraftLookup = { state: "absent" } | { state: "present"; draft: DraftRef };
 
 /**
  * The only door to a mailbox. No send method, by design (ADR 0001, ADR 0007): Deskhand writes drafts only. The only
@@ -154,9 +162,24 @@ export interface MailProvider {
   searchThreads(query: string, limit: number): Promise<{ threads: ThreadSummary[]; truncated: boolean }>;
   /** null when the thread does not exist. At most the newest `maxMessages` messages. */
   getThread(threadId: string, maxMessages: number): Promise<MailThread | null>;
-  lookupDraft(messageIdHeader: string): Promise<DraftLookup>;
-  /** Existing messageIdHeader: returns the existing draft, never a second one. */
-  createDraft(draft: NewDraft): Promise<DraftRef>;
+  /**
+   * Every message id of the thread except drafts, trash and spam, in no particular order and with no cap; null when
+   * the thread does not exist. Ids only: no bodies or headers (M4b decision 7).
+   */
+  threadMessageIds(threadId: string): Promise<string[] | null>;
+  /** The draft with this id as the provider holds it now; null when it no longer exists (deleted, or sent). */
+  getDraft(draftId: string): Promise<DraftRef | null>;
+  /**
+   * Every draft in the thread, in no particular order. Fails (never a partial list) when it cannot read them all, so a
+   * missing draft is never taken as absent.
+   */
+  threadDrafts(threadId: string): Promise<DraftRef[]>;
+  /**
+   * Writes the draft (one POST). It never de-duplicates: each call can create a new draft, so the apply engine looks
+   * up under its write claim first. `onCreated` is called with the draft id as soon as the provider confirms the draft
+   * exists, before anything else can fail, so the engine records it (M4b live check).
+   */
+  createDraft(draft: NewDraft, onCreated: (draftId: string) => void): Promise<DraftRef>;
 }
 
 /** Every provider a plan kind may use, handed over by the apply engine. */

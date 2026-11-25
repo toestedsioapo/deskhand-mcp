@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
+import { ProviderError } from "../src/providers/errors.js";
 import { createFixtureMailProvider } from "../src/providers/fixture/index.js";
 import type { FixtureMessage, FixtureWorld } from "../src/providers/fixture/world.js";
 import type { NewDraft } from "../src/providers/types.js";
@@ -34,7 +35,7 @@ const sha = (s: string) => createHash("sha256").update(s, "utf8").digest("hex");
 
 const draft = (over: Partial<NewDraft> = {}): NewDraft => ({
   threadId: "t1",
-  messageIdHeader: "<deskhand.k1@deskhand.invalid>",
+  idempotencyKey: "k1",
   inReplyTo: null,
   references: [],
   to: ["ana@example.com"],
@@ -108,6 +109,21 @@ describe("fixture mailbox search", () => {
   });
 });
 
+describe("fixture mailbox threadMessageIds", () => {
+  it("leaves out drafts, has no cap, and returns null for an unknown thread", async () => {
+    const messages = [
+      ...Array.from({ length: 150 }, (_, i) => msg(`m${i}`, new Date(Date.UTC(2026, 0, 1, 0, i)).toISOString())),
+      msg("md", "2026-11-09T11:00:00.000Z", { draft: true }),
+    ];
+    const mail = createFixtureMailProvider(world([{ id: "t1", messages }]));
+    const ids = await mail.threadMessageIds("t1");
+    expect(ids).toHaveLength(150);
+    expect(ids).not.toContain("md");
+    expect(new Set(ids)).toEqual(new Set(messages.slice(0, 150).map((m) => m.id)));
+    expect(await mail.threadMessageIds("nope")).toBeNull();
+  });
+});
+
 describe("fixture mailbox getThread", () => {
   it("returns oldest first, drops drafts, null for unknown", async () => {
     const w = world([
@@ -127,6 +143,23 @@ describe("fixture mailbox getThread", () => {
     expect(t!.messages[0]).toMatchObject({ messageIdHeader: "<a@x>", threadId: "t1", unread: false });
     expect(t!.messages[1]!.messageIdHeader).toBeNull();
     expect(await mail.getThread("nope", 100)).toBeNull();
+  });
+
+  it("sentByOwner is true only for an explicit sent: true, never from the From address", async () => {
+    const mail = createFixtureMailProvider(
+      world([
+        {
+          id: "t1",
+          messages: [
+            msg("m1", "2026-11-08T10:00:00.000Z"),
+            msg("m2", "2026-11-09T10:00:00.000Z", { from: { address: "me@example.com" } }),
+            msg("m3", "2026-11-09T11:00:00.000Z", { from: { address: "me@example.com" }, sent: true }),
+          ],
+        },
+      ]),
+    );
+    const t = await mail.getThread("t1", 100);
+    expect(t!.messages.map((m) => m.sentByOwner)).toEqual([false, false, true]);
   });
 
   it("keeps the newest maxMessages and flags truncation", async () => {
@@ -154,27 +187,48 @@ describe("fixture mailbox getThread", () => {
 describe("fixture mailbox createDraft", () => {
   const one = [{ id: "t1", messages: [msg("m1", "2026-11-08T10:00:00.000Z")] }];
 
-  it("is idempotent on messageIdHeader and numbers drafts", async () => {
+  it("like Gmail, never de-duplicates: every call is a new draft with its own Message-ID, reported by id", async () => {
     const logPath = join(dir, "w1.log");
     let writes = 0;
+    const reported: string[] = [];
     const mail = createFixtureMailProvider(world(one, logPath), { afterWrite: () => void (writes += 1) });
-    expect(await mail.lookupDraft("<deskhand.k1@deskhand.invalid>")).toEqual({ state: "absent" });
-    const a = await mail.createDraft(draft());
-    const b = await mail.createDraft(draft({ body: "different" }));
-    expect(b).toEqual(a);
-    expect(a).toMatchObject({ draftId: "dr_1", messageId: "msg_dr_1", bodySha256: sha("SECRET BODY TEXT") });
+    expect(await mail.threadDrafts("t1")).toEqual([]);
+    const a = await mail.createDraft(draft(), (id) => void reported.push(id));
+    const b = await mail.createDraft(draft(), (id) => void reported.push(id));
+    expect(a).toMatchObject({
+      draftId: "dr_1",
+      messageId: "msg_dr_1",
+      messageIdHeader: "<fixture.dr_1@mail.fixture.invalid>",
+      bodySha256: sha("SECRET BODY TEXT"),
+    });
+    expect(b).toMatchObject({ draftId: "dr_2", messageIdHeader: "<fixture.dr_2@mail.fixture.invalid>" });
+    expect(Date.parse(a.date)).toBeLessThan(Date.parse(b.date));
+    expect(reported).toEqual(["dr_1", "dr_2"]);
+    expect(writes).toBe(2);
+    expect(await mail.getDraft("dr_1")).toEqual(a);
+    expect(await mail.getDraft("dr_9")).toBeNull();
+    expect(await mail.threadDrafts("t1")).toEqual([a, b]);
+    expect(await mail.threadDrafts("t2")).toEqual([]);
+    const lines = readFileSync(logPath, "utf8").trim().split("\n").map((l) => JSON.parse(l) as { idempotency_key: string });
+    expect(lines.map((l) => l.idempotency_key)).toEqual(["k1", "k1"]);
+  });
+
+  it("a callback that fails after the write is a retryable error", async () => {
+    const mail = createFixtureMailProvider(world(one));
+    const e = await mail
+      .createDraft(draft(), () => {
+        throw new Error("database is locked");
+      })
+      .then(() => undefined, (x: unknown) => x);
+    expect(e).toBeInstanceOf(ProviderError);
+    expect((e as ProviderError).retryable).toBe(true);
     expect(mail.drafts).toHaveLength(1);
-    expect(writes).toBe(1);
-    expect(await mail.lookupDraft(a.messageIdHeader)).toEqual({ state: "present", draft: a });
-    const c = await mail.createDraft(draft({ messageIdHeader: "<deskhand.k2@deskhand.invalid>" }));
-    expect(c.draftId).toBe("dr_2");
-    expect(readFileSync(logPath, "utf8").trim().split("\n")).toHaveLength(2);
   });
 
   it("logs no body text", async () => {
     const logPath = join(dir, "w2.log");
     const mail = createFixtureMailProvider(world(one, logPath));
-    await mail.createDraft(draft());
+    await mail.createDraft(draft(), () => undefined);
     const text = readFileSync(logPath, "utf8");
     expect(text).not.toContain("SECRET BODY TEXT");
     expect(text).toContain("mail.createDraft");
@@ -183,7 +237,7 @@ describe("fixture mailbox createDraft", () => {
 
   it("does not show drafts in getThread and has no send member", async () => {
     const mail = createFixtureMailProvider(world(one));
-    await mail.createDraft(draft());
+    await mail.createDraft(draft(), () => undefined);
     expect((await mail.getThread("t1", 10))!.messages).toHaveLength(1);
     expect(Object.keys(mail).filter((k) => /send/i.test(k))).toEqual([]);
   });

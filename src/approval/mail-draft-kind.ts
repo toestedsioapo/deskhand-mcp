@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import { omittedMarker } from "../ledger/redact.js";
+import { ProviderError } from "../providers/errors.js";
 import type { DraftRef } from "../providers/types.js";
 import { untrusted } from "../util/untrusted.js";
 import { isPlainLine, MAX_BODY_CHARS, normaliseBody, VISIBLE_ASCII } from "../util/sanitize.js";
@@ -15,6 +16,13 @@ import type { PlanKind } from "./plan-kinds.js";
  */
 
 const sha256Hex = (s: string): string => createHash("sha256").update(s, "utf8").digest("hex");
+
+/**
+ * Decision 7: lowercase hex SHA-256 of `JSON.stringify` of the unique message ids, sorted by code unit. The plan stores
+ * it and the apply re-check recomputes it, so a message added anywhere in the thread, or removed, changes it.
+ */
+export const threadMessageIdsHash = (ids: readonly string[]): string =>
+  sha256Hex(JSON.stringify([...new Set(ids)].sort()));
 
 /** The address rule (decision 4), as the tool states it when it refuses an address. */
 export const ADDRESS_RULE =
@@ -36,12 +44,12 @@ const headerValue = z
 export const isHeaderValue = (v: string): boolean => headerValue.safeParse(v).success;
 /** Most References values a draft carries (the newest ones). */
 export const MAX_REFERENCES = 10;
-/** The draft's own Message-ID, derived from the idempotency key. */
+/** The plan's Message-ID field, from the idempotency key: in the plan contract, never sent (M4b live check). */
 const OUR_HEADER = /^<deskhand\.[0-9a-f]{64}@deskhand\.invalid>$/;
 const SHA256 = /^[0-9a-f]{64}$/;
 export const MAX_RECIPIENTS = 50;
 
-/** The draft's Message-ID for an idempotency key (ARCHITECTURE, "Gmail draft idempotency"). */
+/** The plan's Message-ID for an idempotency key. The recorded draft id, not this, identifies the draft (ARCHITECTURE). */
 export const draftHeaderFor = (key: string): string => `<deskhand.${key}@deskhand.invalid>`;
 
 /** True when `body` is the text `bodyChars` (UTF-16 length) and `bodySha256` (of its UTF-8 bytes) describe. */
@@ -112,6 +120,8 @@ export const mailDraftPlanSchema = z
     observed: z
       .object({
         latestMessageId: z.string().min(1).max(256).regex(VISIBLE_ASCII),
+        // SHA-256 of the thread's whole message-id set (threadMessageIdsHash). Optional so applied M4a plans stay valid.
+        messageIdsSha256: z.string().regex(SHA256).optional(),
         // Computed by the tool from the provider (never from the agent), lowercased.
         onThread: z
           .array(address.refine((a) => a === a.toLowerCase(), { message: "must be lowercase" }))
@@ -157,16 +167,46 @@ const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "obj
 
 export const DRAFT_DIFFERS = "a draft with this action's id exists but differs from the approved plan";
 /** Re-check phrases (decision 8 and the account check); apply prefixes each with `The world changed since planning: `. */
+export const THREAD_CHANGED = "the thread's messages changed since planning";
+export const THREAD_UNVERIFIED = "the plan has no record of the thread's messages";
 export const THREAD_GONE = "the thread no longer exists";
 export const THREAD_NEW_MESSAGE = "the thread has a new message since planning";
 export const ACCOUNT_CHANGED = "the mailbox account changed since planning";
-/** Never used: a mail provider cannot report a deleted draft (decision 7). Kept so every kind names both phrases. */
+/** The draft id this action recorded no longer resolves: the user deleted (or sent) the draft. It is never recreated. */
 export const DRAFT_DELETED = "a draft with this action's id was created and later deleted";
+
+/** The thread, the subject, exactly readable address sets and the body hash all equal the approved plan. */
+function sameContent(plan: MailDraftPlan, r: DraftRef): boolean {
+  const d = plan.draft;
+  return (
+    r.threadId === d.threadId &&
+    r.subject === d.subject &&
+    r.recipientsMalformed !== true &&
+    sameSet(r.to, d.to) &&
+    sameSet(r.cc, d.cc) &&
+    sameSet(r.bcc, d.bcc) &&
+    r.bodySha256 === d.bodySha256
+  );
+}
+
+/** Oldest stored first; an unreadable date sorts last; equal dates by draft id, so the order is total. */
+function oldestFirst(a: DraftRef, b: DraftRef): number {
+  const t = (d: DraftRef): number => {
+    const ms = Date.parse(d.date);
+    return Number.isNaN(ms) ? Number.POSITIVE_INFINITY : ms;
+  };
+  return t(a) - t(b) || (a.draftId < b.draftId ? -1 : a.draftId > b.draftId ? 1 : 0);
+}
+
+const ID_NOT_RECORDED = "the draft was created but its id could not be recorded";
+const ID_TAKEN = "the draft's id is already recorded by another action";
 
 export const mailCreateDraftReply: PlanKind<MailDraftPlan, DraftRef> = {
   kind: "mail.create_draft_reply",
   schema: mailDraftPlanSchema,
   phrases: { differs: DRAFT_DIFFERS, deleted: DRAFT_DELETED },
+  // Gmail has no unique key on a draft (M4b decision 8), and it rewrites the Message-ID we send (M4b live check).
+  needsWriteClaim: true,
 
   // Decision 3. The approver sees every body row, each behind `  > `; the agent gets one omitted row instead.
   // Ruling R3: the agent audience also gets the subject and every address value as its omitted marker (mailbox
@@ -235,51 +275,76 @@ export const mailCreateDraftReply: PlanKind<MailDraftPlan, DraftRef> = {
   async recheck(plan, { mail }) {
     const { email } = await mail.profile();
     if (email.toLowerCase() !== plan.draft.from.toLowerCase()) return { ok: false, reason: ACCOUNT_CHANGED };
-    const thread = await mail.getThread(plan.draft.threadId, 1);
+    const ids = await mail.threadMessageIds(plan.draft.threadId);
+    const thread = ids === null ? null : await mail.getThread(plan.draft.threadId, 1);
     const latest = thread?.messages.at(-1);
-    if (!thread || !latest) return { ok: false, reason: THREAD_GONE };
+    if (ids === null || !thread || !latest) return { ok: false, reason: THREAD_GONE };
     if (latest.id !== plan.observed.latestMessageId) return { ok: false, reason: THREAD_NEW_MESSAGE };
+    // Any other difference in the whole set (a backdated message, a removed one) is stale too (decision 7).
+    if (plan.observed.messageIdsSha256 === undefined) return { ok: false, reason: THREAD_UNVERIFIED };
+    if (threadMessageIdsHash(ids) !== plan.observed.messageIdsSha256) return { ok: false, reason: THREAD_CHANGED };
     return { ok: true };
   },
 
-  async lookupExisting(_plan, key, { mail }) {
-    const l = await mail.lookupDraft(draftHeaderFor(key));
-    return l.state === "present" ? { state: "present", value: l.draft } : { state: "absent" };
+  /**
+   * M4b live check (owner decision 2026-11-25). The draft id this action recorded decides: gone is `cancelled`, never
+   * recreated, and an edited draft fails `matches`. With no id recorded, only an action that took a write claim (so it
+   * may have POSTed: a crash or an ambiguous failure before the id came back) looks at the thread's drafts with the
+   * approved content, oldest first; the first one no other action recorded is adopted, and recorded as this action's
+   * before it is returned. An action that never claimed has written nothing to recover, so it never adopts a draft that
+   * another action's in-flight POST just created (M4b re-review).
+   */
+  async lookupExisting(plan, _key, { mail }, writes) {
+    const recorded = writes.landed()[0];
+    if (recorded !== undefined) {
+      const draft = await mail.getDraft(recorded);
+      return draft === null ? { state: "cancelled" } : { state: "present", value: draft };
+    }
+    if (!writes.mayHaveWritten()) return { state: "absent" };
+    const candidates = (await mail.threadDrafts(plan.draft.threadId)).filter((d) => sameContent(plan, d)).sort(oldestFirst);
+    for (const draft of candidates) {
+      if (writes.record(draft.draftId)) return { state: "present", value: draft };
+    }
+    return { state: "absent" };
   },
 
-  // Our Message-ID (and the plan's), the thread, the subject, the address sets and the body hash.
+  // The plan's own Message-ID (an integrity check on the stored plan), then the approved content. The stored draft's
+  // Message-ID is the provider's own and is not compared (M4b live check).
   matches(plan, key, r) {
-    const d = plan.draft;
-    const header = draftHeaderFor(key);
-    return (
-      d.messageIdHeader === header &&
-      r.messageIdHeader === header &&
-      r.threadId === d.threadId &&
-      r.subject === d.subject &&
-      sameSet(r.to, d.to) &&
-      sameSet(r.cc, d.cc) &&
-      sameSet(r.bcc, d.bcc) &&
-      r.bodySha256 === d.bodySha256
-    );
+    return plan.draft.messageIdHeader === draftHeaderFor(key) && sameContent(plan, r);
   },
 
-  async execute(plan, key, { mail }) {
+  async execute(plan, key, { mail }, writes) {
     const d = plan.draft;
     // Never reached through the gates (7a refuses a swept plan; the tool derives the header from the key); a plain
     // Error is a definite failure, so the plan fails without a write.
     if (d.body === undefined) throw new Error("the plan's body was removed; it cannot be written");
     if (d.messageIdHeader !== draftHeaderFor(key)) throw new Error("the plan's Message-ID is not this action's");
-    return mail.createDraft({
-      threadId: d.threadId,
-      messageIdHeader: d.messageIdHeader,
-      inReplyTo: d.inReplyTo,
-      references: d.references,
-      to: d.to,
-      cc: d.cc,
-      bcc: d.bcc,
-      subject: d.subject,
-      body: d.body,
-    });
+    return mail.createDraft(
+      {
+        threadId: d.threadId,
+        idempotencyKey: key,
+        inReplyTo: d.inReplyTo,
+        references: d.references,
+        to: d.to,
+        cc: d.cc,
+        bcc: d.bcc,
+        subject: d.subject,
+        body: d.body,
+      },
+      // The draft exists now: any failure to record its id is retryable, so the claim is kept and the plan stays
+      // approved (never `failed` with a draft left behind). Another action may have adopted it in the window before
+      // the record; it is then not this action's draft, and a retry after the hold writes this action's own.
+      (draftId) => {
+        let recorded: boolean;
+        try {
+          recorded = writes.record(draftId);
+        } catch {
+          throw new ProviderError("mail draft", "record", { phrase: ID_NOT_RECORDED, retryable: true });
+        }
+        if (!recorded) throw new ProviderError("mail draft", "record", { phrase: ID_TAKEN, retryable: true });
+      },
+    );
   },
 
   // Ids, header, addresses, subject and the body hash; never the body.

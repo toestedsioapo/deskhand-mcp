@@ -1,0 +1,22 @@
+{
+  "request": {
+    "method": "GET",
+    "url": "https://www.googleapis.com/gmail/v1/users/me/threads/t-missing?format=full"
+  },
+  "response": {
+    "status": 404,
+    "body": {
+      "error": {
+        "code": 404,
+        "message": "Requested entity was not found.",
+        "errors": [
+          {
+            "message": "Requested entity was not found.",
+            "domain": "global",
+            "reason": "notFound"
+          }
+        ]
+      }
+    }
+  }
+}

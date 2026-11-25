@@ -1,0 +1,12 @@
+{
+  "request": {
+    "method": "GET",
+    "url": "https://www.googleapis.com/gmail/v1/users/me/drafts/dr-1?format=full"
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "id": "dr-1"
+    }
+  }
+}

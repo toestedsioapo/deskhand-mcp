@@ -41,7 +41,7 @@ CREATE TABLE "events" (
   action_id    TEXT REFERENCES actions(id),
   tool         TEXT NOT NULL,
   kind         TEXT NOT NULL
-    CHECK (kind IN ('tool_call','cli_command','plan_created','approved','approve_refused','rejected','applied','apply_refused','apply_failed')),
+    CHECK (kind IN ('tool_call','cli_command','plan_created','approved','approve_refused','rejected','applied','apply_refused','apply_failed','write_claimed','write_landed')),
   outcome      TEXT NOT NULL
     CHECK (outcome IN ('ok','error','rejected')),
   error_code   TEXT
@@ -121,6 +121,8 @@ exports[`snapshots > value sets 1`] = `
     "applied",
     "apply_refused",
     "apply_failed",
+    "write_claimed",
+    "write_landed",
   ],
   "event_outcomes": [
     "ok",

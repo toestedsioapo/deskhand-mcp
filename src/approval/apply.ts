@@ -7,12 +7,15 @@ import { redactInput, scrubSecrets } from "../ledger/redact.js";
 import { AuthRequiredError, ProviderError } from "../providers/errors.js";
 import type { Providers } from "../providers/types.js";
 import { getPlanKind, type AnyPlanKind, type ApplyOutputResult, type Lookup } from "./plan-kinds.js";
+import { checkBeforeWrite, hasLiveClaim, takeWriteClaim } from "./write-claim.js";
+import { writeRecords } from "./write-landed.js";
 
 /**
  * The apply engine: the ONLY place a plan kind's write is executed (a
  * structural test enforces it). Gate order is fixed by docs/ledger-contract.md
  * ("Apply gate order"): writes flag, provider configured, exists, applied-replay, approved, hash (and the kind's
- * integrity hook), recovery, expiry, the kind's writable hook (7a), re-check, write.
+ * integrity hook), recovery, expiry, the kind's writable hook (7a), re-check, write claim (8b, kinds that need one),
+ * write.
  */
 
 /** `output` is the plan kind's `action_apply` result, built from `result_json` (the first apply and a replay alike). */
@@ -55,14 +58,24 @@ const outcomeFor = (code: ErrorCode): EventOutcome => (GATE_REFUSALS.includes(co
 /** Provider error text, through the ledger redactor (long strings are cut and hashed). */
 const errText = (e: unknown): string => String(redactInput(scrubSecrets(e instanceof Error ? e.message : String(e))));
 
-function preview(actionId: string, existing: boolean, note: string | null): unknown {
-  const p: Record<string, unknown> = { v: 1, input: { action_id: actionId }, output: null, note };
+function preview(actionId: string, existing: boolean, note: string | null, output: unknown = null): unknown {
+  const p: Record<string, unknown> = { v: 1, input: { action_id: actionId }, output, note };
   if (existing) p["action_id"] = actionId;
   return p;
 }
 
-/** Refusal: an apply_refused row in its own transaction; `actions` untouched. */
-function refuse(ctx: AppContext, actionId: string, existing: boolean, code: ErrorCode, message: string): ApplyResult {
+/**
+ * Refusal: an apply_refused row in its own transaction; `actions` untouched. `releasedClaim` is passed only by an exit
+ * known to have sent no POST: the row then also releases that write claim (and no other).
+ */
+function refuse(
+  ctx: AppContext,
+  actionId: string,
+  existing: boolean,
+  code: ErrorCode,
+  message: string,
+  releasedClaim?: number,
+): ApplyResult {
   ctx.db.transaction(() => {
     appendEvent(ctx.db, {
       ts: isoNow(ctx.clock),
@@ -71,16 +84,16 @@ function refuse(ctx: AppContext, actionId: string, existing: boolean, code: Erro
       kind: "apply_refused",
       outcome: outcomeFor(code),
       errorCode: code,
-      preview: preview(actionId, existing, message),
+      preview: preview(actionId, existing, message, releasedClaim === undefined ? null : { releasedClaim }),
     });
   }, "immediate");
   return { ok: false, errorCode: code, message };
 }
 
 /** A provider call failed during apply: AUTH_REQUIRED for a sign-in problem, else PROVIDER_ERROR. Status unchanged. */
-function refuseProvider(ctx: AppContext, actionId: string, e: unknown, what: string): ApplyResult {
-  if (e instanceof AuthRequiredError) return refuse(ctx, actionId, true, "AUTH_REQUIRED", errText(e));
-  return refuse(ctx, actionId, true, "PROVIDER_ERROR", `${what}: ${errText(e)}`);
+function refuseProvider(ctx: AppContext, actionId: string, e: unknown, what: string, releasedClaim?: number): ApplyResult {
+  if (e instanceof AuthRequiredError) return refuse(ctx, actionId, true, "AUTH_REQUIRED", errText(e), releasedClaim);
+  return refuse(ctx, actionId, true, "PROVIDER_ERROR", `${what}: ${errText(e)}`, releasedClaim);
 }
 
 /** The registered kind a raw stored plan names, if any. */
@@ -110,6 +123,10 @@ const outputFrom = (kind: AnyPlanKind, plan: unknown, resultJson: string): Apply
 const WRITE_FAILED = "Provider write failed: ";
 /** Fixed note: a failed re-check after an earlier ambiguous write attempt (ledger contract, gate 8). */
 const STILL_LANDING = "an earlier write attempt may still be landing; retry later";
+/** Fixed note: the write claim is held by another apply, or ours can no longer start a POST (ledger contract, gate 8b). */
+const CLAIM_HELD = "another apply of this action is in progress or may still be landing; retry in a minute";
+/** Fixed note: the plan's content was swept (gate 7a, and the last check at gate 8b). */
+const CONTENT_REMOVED = "The plan's content was removed after the action ended; it can no longer be written.";
 
 /**
  * True when this action's own ledger rows show an earlier write attempt whose outcome was unknown. Gate 9 writes
@@ -222,7 +239,7 @@ export async function applyAction(ctx: AppContext, actionId: string): Promise<Ap
       actionId,
       row !== undefined,
       "PROVIDER_NOT_CONFIGURED",
-      "No provider is configured (set DESKHAND_PROVIDER=fixture).",
+      "No provider is configured (set DESKHAND_PROVIDER).",
     );
   }
   // 2. Exists.
@@ -264,12 +281,14 @@ export async function applyAction(ctx: AppContext, actionId: string): Promise<Ap
   const { kind, plan: validPlan } = stored;
   const providers: Providers = { calendar: ctx.provider, mail: ctx.mail };
   const key = idempotencyKey(actionId);
+  // The provider write ids this action recorded (a draft's id; M4b live check). Read from the ledger on every lookup.
+  const writes = writeRecords(ctx, actionId);
 
   // What the provider holds under the idempotency key. A read error is retryable: refuse, status unchanged.
   type Found = { found: Lookup<unknown> } | { failed: unknown };
   const lookup = async (): Promise<Found> => {
     try {
-      return { found: await kind.lookupExisting(validPlan, key, providers) };
+      return { found: await kind.lookupExisting(validPlan, key, providers, writes) };
     } catch (e) {
       return { failed: e };
     }
@@ -305,7 +324,7 @@ export async function applyAction(ctx: AppContext, actionId: string): Promise<Ap
   // 7a. A plan that can no longer be written (a draft whose body was swept) fails here, after recovery and expiry,
   // so the provider is never asked to write it.
   if (kind.writable && !kind.writable(validPlan)) {
-    return fail(ctx, actionId, "PLAN_MODIFIED", "The plan's content was removed after the action ended; it can no longer be written.");
+    return fail(ctx, actionId, "PLAN_MODIFIED", CONTENT_REMOVED);
   }
   // 8. Re-check against the real world. A read error is retryable (status unchanged).
   let check: Awaited<ReturnType<typeof kind.recheck>>;
@@ -323,19 +342,55 @@ export async function applyAction(ctx: AppContext, actionId: string): Promise<Ap
     if (settled) return settled;
     // An earlier attempt of this action may have written the event that now makes the slot busy, while the
     // provider cannot read it back yet. Not terminal: refuse, status unchanged; a later apply recovers it.
-    if (hadAmbiguousWrite(ctx, actionId)) return refuse(ctx, actionId, true, "PROVIDER_ERROR", STILL_LANDING);
+    // The same holds while another apply's unreleased claim is live: its write may be in flight.
+    if (hadAmbiguousWrite(ctx, actionId) || hasLiveClaim(ctx, actionId)) {
+      return refuse(ctx, actionId, true, "PROVIDER_ERROR", STILL_LANDING);
+    }
     return fail(ctx, actionId, "STALE_PLAN", `The world changed since planning: ${check.reason}.`);
+  }
+  // 8b. Write claim, for a kind whose provider cannot refuse a second write. Only an exit known to have sent no POST
+  // releases it; a crash, timeout, network error, 429, 5xx or unreadable 2xx leaves it to age out.
+  let claimId: number | undefined;
+  if (kind.needsWriteClaim) {
+    const claim = takeWriteClaim(ctx, actionId);
+    if (!claim.ok) {
+      return claim.reason === "held" ? refuse(ctx, actionId, true, "PROVIDER_ERROR", CLAIM_HELD) : afterLostCas(ctx, actionId);
+    }
+    claimId = claim.claimId;
+    writes.holdingClaim(claimId);
+    const underClaim = await lookup();
+    if ("failed" in underClaim) {
+      return refuseProvider(ctx, actionId, underClaim.failed, "Provider lookup under the write claim failed", claimId);
+    }
+    const settled = settle(underClaim.found);
+    if (settled) return settled;
+    // The last check, on the stored row: the plan may have expired or been swept during the lookups. No POST was sent.
+    const last = checkBeforeWrite(ctx, actionId, claimId, (planJson) => {
+      const current = parseStored(planJson);
+      return current !== undefined && (current.kind.writable?.(current.plan) ?? true);
+    });
+    if (last === "expired") {
+      return refuse(ctx, actionId, true, "PLAN_EXPIRED", `Action ${actionId} expired at ${row.expires_at}.`, claimId);
+    }
+    if (last === "not_writable") return fail(ctx, actionId, "PLAN_MODIFIED", CONTENT_REMOVED);
+    if (last === "claim_lost") return refuse(ctx, actionId, true, "PROVIDER_ERROR", CLAIM_HELD, claimId);
   }
   // 9. Write with the idempotency key, then commit.
   let result: unknown;
+  // From here the provider may hold a write of this apply's, so a lookup may adopt it by content.
+  writes.writing();
   try {
-    result = await kind.execute(validPlan, key, providers);
+    result = await kind.execute(validPlan, key, providers, writes);
   } catch (e) {
     // The write may have happened anyway (e.g. a timeout after the provider accepted it): look for our event.
     const ambiguous = e instanceof ProviderError && e.retryable;
     const after = await lookup();
     if ("failed" in after) {
-      if (!ambiguous) return refuseProvider(ctx, actionId, after.failed, "Provider lookup after a failed write failed");
+      if (!ambiguous) {
+        // An auth failure means no draft was written, so its claim is released; any other failure keeps it.
+        const release = e instanceof AuthRequiredError ? claimId : undefined;
+        return refuseProvider(ctx, actionId, after.failed, "Provider lookup after a failed write failed", release);
+      }
       // Record the ambiguous attempt even though the lookup failed (the note starts with WRITE_FAILED), so a later
       // busy re-check is not terminal. Status unchanged either way.
       const code = after.failed instanceof AuthRequiredError ? "AUTH_REQUIRED" : "PROVIDER_ERROR";
@@ -344,10 +399,11 @@ export async function applyAction(ctx: AppContext, actionId: string): Promise<Ap
     const settled = settle(after.found);
     if (settled) return settled;
     // Nothing there. An auth failure means the write was not attempted or not authorised: never terminal.
-    if (e instanceof AuthRequiredError) return refuse(ctx, actionId, true, "AUTH_REQUIRED", errText(e));
+    if (e instanceof AuthRequiredError) return refuse(ctx, actionId, true, "AUTH_REQUIRED", errText(e), claimId);
     const msg = `${WRITE_FAILED}${errText(e)}`;
-    // Ambiguous (timeout, network, 429, 5xx): it may still land, and a retry with the same key cannot duplicate
-    // it (recovery or the provider's existing-id path finds it). Stay approved. Only a definite rejection fails.
+    // Ambiguous (timeout, network, 429, 5xx): it may still land. Stay approved; only a definite rejection fails. A
+    // retry finds it by recovery or the provider's fixed id. A kind with a write claim keeps it (not released here), so
+    // a retry may write again only after the hold and a lookup that finds nothing (residual risk in SECURITY.md).
     if (ambiguous) return refuse(ctx, actionId, true, "PROVIDER_ERROR", msg);
     return fail(ctx, actionId, "PROVIDER_ERROR", msg);
   }

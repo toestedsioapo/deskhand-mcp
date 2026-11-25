@@ -1,0 +1,21 @@
+{
+  "request": {
+    "method": "GET",
+    "url": "https://www.googleapis.com/gmail/v1/users/me/drafts?maxResults=100"
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "drafts": [
+        {
+          "id": "dr-other-1",
+          "message": {
+            "id": "dm-other-1",
+            "threadId": "t-other"
+          }
+        }
+      ],
+      "nextPageToken": "page2"
+    }
+  }
+}

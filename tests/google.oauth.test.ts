@@ -312,6 +312,32 @@ describe("refreshAccessToken", () => {
     expect(out.refresh_token).toBe("1//rotated");
   });
 
+  describe("scope intersection (M3b follow-up 2)", () => {
+    const CAL = "https://www.googleapis.com/auth/calendar.readonly";
+    const MAIL = "https://www.googleapis.com/auth/gmail.readonly";
+    const WRITE = "https://www.googleapis.com/auth/calendar.events";
+    const two = { ...stored, scopes: [CAL, MAIL] };
+    const reply = (scope?: string) =>
+      fake.respond((_req, res) =>
+        jsonReply(res, 200, { access_token: "new", expires_in: 60, ...(scope === undefined ? {} : { scope }), token_type: "Bearer" }),
+      );
+
+    it("narrows to the returned scopes, keeping the stored order", async () => {
+      reply(CAL);
+      expect((await refreshAccessToken(client, two, deps())).scopes).toEqual([CAL]);
+      reply(`${MAIL} ${CAL}`);
+      expect((await refreshAccessToken(client, two, deps())).scopes).toEqual([CAL, MAIL]);
+    });
+    it("never adds a returned scope that was not stored", async () => {
+      reply(`${CAL} ${WRITE}`);
+      expect((await refreshAccessToken(client, two, deps())).scopes).toEqual([CAL]);
+    });
+    it("a response without scope keeps the stored list", async () => {
+      reply();
+      expect((await refreshAccessToken(client, two, deps())).scopes).toEqual([CAL, MAIL]);
+    });
+  });
+
   it("maps invalid_grant to the fixed sentence", async () => {
     fake.respond((_req, res) => jsonReply(res, 400, { error: "invalid_grant", error_description: "ya29.SECRET" }));
     const err = await refreshAccessToken(client, stored, deps()).catch((e: unknown) => e);

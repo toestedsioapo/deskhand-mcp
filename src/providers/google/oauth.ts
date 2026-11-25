@@ -241,5 +241,8 @@ export async function refreshAccessToken(client: OAuthClient, token: StoredToken
     throw new OAuthError("Google sign-in failed: the token response had no access token.", "PROVIDER_ERROR");
   }
   const refreshed = typeof body.refresh_token === "string" && body.refresh_token !== "" ? body.refresh_token : token.refresh_token;
-  return { ...token, refresh_token: refreshed, access_token: body.access_token, expires_at: expiresAt(body, deps.now()) };
+  // A refresh may narrow the stored scopes (a grant was revoked) but never widen them. No `scope` keeps the list.
+  const returned = typeof body.scope === "string" ? body.scope.split(" ").filter((s) => s !== "") : null;
+  const scopes = returned === null ? token.scopes : token.scopes.filter((s) => returned.includes(s));
+  return { ...token, scopes, refresh_token: refreshed, access_token: body.access_token, expires_at: expiresAt(body, deps.now()) };
 }

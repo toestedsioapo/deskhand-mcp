@@ -6,6 +6,7 @@ import { isPlainLine, VISIBLE_ASCII } from "../util/sanitize.js";
 import { omittedMarker } from "../ledger/redact.js";
 import { EVENT_DELETED } from "../providers/errors.js";
 import { mailCreateDraftReply } from "./mail-draft-kind.js";
+import type { WriteRecords } from "./write-landed.js";
 
 export type RecheckResult = { ok: true } | { ok: false; reason: string };
 
@@ -42,15 +43,19 @@ export interface PlanKind<P, R> {
    */
   renderDiff(plan: P, viewerTimeZone: string, audience: DiffAudience): string[];
   recheck(plan: P, p: Providers): Promise<RecheckResult>;
-  /** What the provider holds under the idempotency key: absent, cancelled (deleted) or present. */
-  lookupExisting(plan: P, key: string, p: Providers): Promise<Lookup<R>>;
+  /**
+   * What the provider holds under the idempotency key: absent, cancelled (deleted) or present. `writes` is this
+   * action's record of provider write ids in the ledger, for a kind whose provider has no key of ours (a draft).
+   */
+  lookupExisting(plan: P, key: string, p: Providers, writes: WriteRecords): Promise<Lookup<R>>;
   /**
    * True only when `r` is the approved plan's own write: our id and every approved field. The apply engine calls
    * it for every value it would accept (recovery, the re-lookups, and the value `execute` returns, which may be an
    * existing one), so a foreign or edited write under our id is never recorded as applied.
    */
   matches(plan: P, key: string, r: R): boolean;
-  execute(plan: P, key: string, p: Providers): Promise<R>;
+  /** The write. A kind whose provider assigns the id records it through `writes` as soon as the provider returns it. */
+  execute(plan: P, key: string, p: Providers, writes: WriteRecords): Promise<R>;
   /** What is stored as `result_json` (canonical JSON of it). Never holds text the ledger must not keep. */
   store(r: R): unknown;
   /** The `action_apply` `result`, built from the parsed `result_json`: the first apply and a replay alike. */
@@ -69,6 +74,11 @@ export interface PlanKind<P, R> {
    * re-check, so the provider is never asked to write.
    */
   writable?(plan: P): boolean;
+  /**
+   * Optional: true when the provider has no unique key that refuses a second write, so apply must hold a ledger write
+   * claim around it (gate 8b, src/approval/write-claim.ts).
+   */
+  needsWriteClaim?: boolean;
   /** Optional lines `deskhand approve` prints between the diff and the prompt (approver only, display only). */
   approveSummary?(plan: P): string[];
 }
@@ -252,7 +262,7 @@ const DRAFT_KEYS = new Set([
   "bodyChars",
   "bodySha256",
 ]);
-const OBSERVED_KEYS = new Set(["latestMessageId", "onThread"]);
+const OBSERVED_KEYS = new Set(["latestMessageId", "messageIdsSha256", "onThread"]);
 const PLAN_KEYS = new Set(["rationale", "rationaleSha256"]);
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);

@@ -2,7 +2,8 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { SCOPE_CALENDAR_READ, SCOPE_CALENDAR_WRITE } from "../src/config/scopes.js";
+import { SCOPE_CALENDAR_READ, SCOPE_CALENDAR_WRITE, SCOPE_GMAIL_COMPOSE, SCOPE_GMAIL_READ } from "../src/config/scopes.js";
+import { scrubSecrets } from "../src/ledger/redact.js";
 import { AuthRequiredError, ProviderError } from "../src/providers/errors.js";
 import { googleRequest, type GoogleHttpDeps } from "../src/providers/google/http.js";
 import { GOOGLE_ENDPOINTS } from "../src/providers/google/oauth.js";
@@ -75,7 +76,7 @@ const never: typeof fetch = (() => {
   throw new Error("fetch must not be called");
 }) as typeof fetch;
 const getList = (d: GoogleHttpDeps, scope = SCOPE_CALENDAR_READ) =>
-  googleRequest(d, "events.list", { method: "GET", url: LIST_URL, requiredScope: scope });
+  googleRequest(d, "events.list", { service: "calendar", method: "GET", url: LIST_URL, requiredScope: scope });
 const reject = async (p: Promise<unknown>): Promise<Error> => {
   try {
     await p;
@@ -289,7 +290,7 @@ describe("googleRequest transport", () => {
   it("a host other than www.googleapis.com is refused before any request", async () => {
     writeToken(dir, token());
     for (const url of ["https://evil.example.com/x", "http://www.googleapis.com/x", "https://www.googleapis.com.evil.example/x"]) {
-      const e = await reject(googleRequest(deps(never), "events.list", { method: "GET", url, requiredScope: SCOPE_CALENDAR_READ }));
+      const e = await reject(googleRequest(deps(never), "events.list", { service: "calendar", method: "GET", url, requiredScope: SCOPE_CALENDAR_READ }));
       expect(e).toBeInstanceOf(ProviderError);
       expect(e.message).toContain("unexpected host");
       expect((e as ProviderError).retryable).toBe(false);
@@ -326,7 +327,7 @@ describe("googleRequest fixes", () => {
   it("a URL with a port or userinfo is refused before any request", async () => {
     writeToken(dir, token());
     for (const url of ["https://www.googleapis.com:8443/x", "https://user:pw@www.googleapis.com/x", "https://user@www.googleapis.com/x"]) {
-      const e = await reject(googleRequest(deps(never), "events.list", { method: "GET", url, requiredScope: SCOPE_CALENDAR_READ }));
+      const e = await reject(googleRequest(deps(never), "events.list", { service: "calendar", method: "GET", url, requiredScope: SCOPE_CALENDAR_READ }));
       expect(e).toBeInstanceOf(ProviderError);
       expect(e.message).toContain("unexpected host");
     }
@@ -347,6 +348,63 @@ describe("googleRequest fixes", () => {
   });
 });
 
+describe("googleRequest singleSend (a write with no unique key, M4b decision 8)", () => {
+  const TOKEN_HOST = "https://oauth2.googleapis.com/";
+  const getOnce = (d: GoogleHttpDeps, singleSend?: boolean) =>
+    googleRequest(d, "drafts.create", {
+      service: "calendar",
+      method: "GET",
+      url: LIST_URL,
+      requiredScope: SCOPE_CALENDAR_READ,
+      ...(singleSend === undefined ? {} : { singleSend }),
+    });
+  const apiSends = () => replay!.seen.filter((s) => !s.url.startsWith(TOKEN_HOST));
+  const refreshes = () => replay!.seen.filter((s) => s.url.startsWith(TOKEN_HOST));
+
+  it("a 401 makes one API send and one refresh, saves the token and throws the retryable fixed error", async () => {
+    writeToken(dir, token());
+    const e = await reject(getOnce(use(["events-list-401", "oauth-refresh"]), true));
+    expect(apiSends()).toHaveLength(1);
+    expect(refreshes()).toHaveLength(1);
+    expect(e).toBeInstanceOf(ProviderError);
+    expect((e as ProviderError).retryable).toBe(true);
+    expect(e.message).toBe("google calendar drafts.create failed: access token refreshed; retry");
+    // apply stores this text through scrubSecrets, so the fixed phrase must survive it.
+    expect(scrubSecrets(e.message)).toBe(e.message);
+    for (const secret of ["ya29.", "1//", "Bearer", "CLIENT-SECRET"]) expect(e.message).not.toContain(secret);
+    expect(readToken(dir)!.access_token).toBe("ya29.NEW-ACCESS-TOKEN");
+  });
+
+  it("a refresh that needs a new sign-in propagates unchanged, after one API send", async () => {
+    writeToken(dir, token());
+    const e = await reject(getOnce(use(["events-list-401", "oauth-invalid-grant"]), true));
+    expect(e).toBeInstanceOf(AuthRequiredError);
+    expect(e.message).toBe(EXPIRED);
+    expect(apiSends()).toHaveLength(1);
+  });
+
+  it("a refresh that fails on the network propagates unchanged, after one API send", async () => {
+    writeToken(dir, token());
+    let sends = 0;
+    const f = ((input: string | URL | Request) => {
+      if (String(input).startsWith(TOKEN_HOST)) return Promise.reject(new Error("socket hang up"));
+      sends += 1;
+      return Promise.resolve(new Response("{}", { status: 401 }));
+    }) as typeof fetch;
+    const e = await reject(getOnce(deps(f), true));
+    expect(e).toBeInstanceOf(ProviderError);
+    expect(e.message).toBe("google calendar drafts.create failed: token refresh failed");
+    expect(sends).toBe(1);
+  });
+
+  it.each([[undefined], [false]])("with singleSend %s the 401 retry still sends twice", async (singleSend) => {
+    writeToken(dir, token());
+    const r = await getOnce(use(["events-list-401", "oauth-refresh", "events-list-page"]), singleSend);
+    expect(r.status).toBe(200);
+    expect(apiSends()).toHaveLength(2);
+  });
+});
+
 describe("googleRequest redirects (red-team round 18)", () => {
   /** Sends what googleRequest asks for to `target` instead, with the caller's init unchanged (redirect mode included). */
   const via = (target: string): typeof fetch => ((_u: unknown, init?: RequestInit) => fetch(target, init)) as typeof fetch;
@@ -358,6 +416,7 @@ describe("googleRequest redirects (red-team round 18)", () => {
       try {
         const e = await reject(
           googleRequest(deps(via(pair.redirectUrl)), "events.insert", {
+            service: "calendar",
             method: "POST",
             url: "https://www.googleapis.com/calendar/v3/calendars/primary/events",
             body: { summary: "x" },
@@ -388,5 +447,155 @@ describe("googleRequest redirects (red-team round 18)", () => {
     } finally {
       await pair.close();
     }
+  });
+});
+
+const GM = "https://www.googleapis.com/gmail/v1/users/me";
+const gmailToken = (scopes: string[] = [SCOPE_CALENDAR_READ, SCOPE_GMAIL_READ]) => token({ scopes });
+function countingFetch(): { f: typeof fetch; calls: string[] } {
+  const calls: string[] = [];
+  const f = (async (input: string | URL | Request) => {
+    calls.push(String(input));
+    return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+  return { f, calls };
+}
+const gmail = (d: GoogleHttpDeps, method: "GET" | "POST", url: string, requiredScope = SCOPE_GMAIL_READ) =>
+  googleRequest(d, "gmail.test", { service: "gmail", method, url, requiredScope, ...(method === "POST" ? { body: {} } : {}) });
+const ALL_FOUR = [SCOPE_CALENDAR_READ, SCOPE_GMAIL_READ, SCOPE_CALENDAR_WRITE, SCOPE_GMAIL_COMPOSE];
+
+describe("Gmail endpoint allowlist (M4b decision 2)", () => {
+  const ALLOWED: [string, "GET" | "POST", string][] = [
+    ["profile", "GET", `${GM}/profile`],
+    ["thread list", "GET", `${GM}/threads?q=in%3Ainbox&maxResults=5`],
+    ["thread", "GET", `${GM}/threads/18c2a_B-9?format=full`],
+    ["draft list", "GET", `${GM}/drafts`],
+    ["draft", "GET", `${GM}/drafts/r-123_ABC`],
+    ["draft create", "POST", `${GM}/drafts`],
+  ];
+  it.each(ALLOWED)("accepts %s", async (_n, method, url) => {
+    writeToken(dir, gmailToken(ALL_FOUR));
+    const { f, calls } = countingFetch();
+    const r = await gmail(deps(f), method, url, method === "POST" ? SCOPE_GMAIL_COMPOSE : SCOPE_GMAIL_READ);
+    expect(r.status).toBe(200);
+    expect(calls).toEqual([url]);
+  });
+
+  const REFUSED: [string, "GET" | "POST", string][] = [
+    ["POST /drafts/send", "POST", `${GM}/drafts/send`],
+    ["POST /messages/send", "POST", `${GM}/messages/send`],
+    ["POST /threads/{id}/modify", "POST", `${GM}/threads/abc/modify`],
+    ["POST /messages/{id}/trash", "POST", `${GM}/messages/abc/trash`],
+    ["GET /messages", "GET", `${GM}/messages`],
+    ["GET /messages/{id}", "GET", `${GM}/messages/abc`],
+    ["POST /threads/{id}", "POST", `${GM}/threads/abc`],
+    ["POST /drafts/{id}", "POST", `${GM}/drafts/abc`],
+    ["GET /profile/extra", "GET", `${GM}/profile/extra`],
+    ["GET /drafts/{id}/send", "GET", `${GM}/drafts/abc/send`],
+    ["another user", "GET", "https://www.googleapis.com/gmail/v1/users/someone/threads"],
+    ["a calendar path", "GET", "https://www.googleapis.com/calendar/v3/calendars/primary/events"],
+    ["the API root", "GET", "https://www.googleapis.com/"],
+    ["a trailing slash", "GET", `${GM}/threads/abc/`],
+    ["an empty id", "GET", `${GM}/threads/`],
+    ["an id with %2F", "GET", `${GM}/threads/abc%2Fmodify`],
+    ["an id with %2f", "GET", `${GM}/threads/abc%2fdef`],
+    ["an id that is ..", "GET", `${GM}/threads/..`],
+    ["an id that is %2e%2e", "GET", `${GM}/threads/%2e%2e`],
+    ["an id with an encoded ?", "GET", `${GM}/threads/abc%3Fx`],
+    ["a double-encoded id", "GET", `${GM}/threads/abc%252Fmodify`],
+    ["an id with a backslash", "GET", `${GM}/threads/abc%5Cdef`],
+    ["an id with a space", "GET", `${GM}/drafts/a%20b`],
+    ["an over-long id", "GET", `${GM}/threads/${"a".repeat(65)}`],
+  ];
+  it.each(REFUSED)("refuses %s with no fetch", async (_n, method, url) => {
+    writeToken(dir, gmailToken(ALL_FOUR));
+    const { f, calls } = countingFetch();
+    const e = await reject(gmail(deps(f), method, url, method === "POST" ? SCOPE_GMAIL_COMPOSE : SCOPE_GMAIL_READ));
+    expect(e).toBeInstanceOf(ProviderError);
+    expect(e.message).toBe("google gmail gmail.test failed: refused request to an endpoint outside the allowlist");
+    expect((e as ProviderError).retryable).toBe(false);
+    expect(calls).toEqual([]);
+  });
+
+  it("refuses before the token is loaded or refreshed (no token.json, then an expired token)", async () => {
+    const { f, calls } = countingFetch();
+    const e = await reject(gmail(deps(f), "POST", `${GM}/messages/send`, SCOPE_GMAIL_COMPOSE));
+    expect(e).toBeInstanceOf(ProviderError);
+    writeToken(dir, token({ ...expired(), scopes: [SCOPE_CALENDAR_READ, SCOPE_GMAIL_READ] }));
+    const e2 = await reject(gmail(deps(f), "GET", `${GM}/messages`));
+    expect(e2).toBeInstanceOf(ProviderError);
+    expect(calls).toEqual([]);
+    expect(readToken(dir)!.access_token).toBe("ya29.OLD-ACCESS-TOKEN");
+  });
+
+  const CAL_REFUSED: [string, string][] = [
+    ["Gmail drafts/send", `${GM}/drafts/send`],
+    ["Gmail messages/send", `${GM}/messages/send`],
+    ["/batch/gmail/v1", "https://www.googleapis.com/batch/gmail/v1"],
+    ["/upload/gmail/v1/...", "https://www.googleapis.com/upload/gmail/v1/users/me/messages/send"],
+    ["a dot segment out of /calendar/v3/", "https://www.googleapis.com/calendar/v3/../../gmail/v1/users/me/drafts/send"],
+    ["an encoded dot segment", "https://www.googleapis.com/calendar/v3/%2e%2e/%2e%2e/gmail/v1/users/me/drafts/send"],
+    ["a mixed-case encoded dot segment", "https://www.googleapis.com/calendar/v3/.%2E/.%2e/gmail/v1/users/me/drafts/send"],
+    ["a path that only starts like it", "https://www.googleapis.com/calendar/v30/x"],
+    ["the bare /calendar/v3", "https://www.googleapis.com/calendar/v3"],
+    ["the API root", "https://www.googleapis.com/"],
+  ];
+  it.each(CAL_REFUSED)("a calendar-labelled request to %s is refused with no fetch", async (_n, url) => {
+    writeToken(dir, gmailToken(ALL_FOUR));
+    const { f, calls } = countingFetch();
+    const e = await reject(
+      googleRequest(deps(f), "events.list", { service: "calendar", method: "POST", url, body: {}, requiredScope: SCOPE_CALENDAR_READ }),
+    );
+    expect(e).toBeInstanceOf(ProviderError);
+    expect(e.message).toBe("google calendar events.list failed: refused request to an endpoint outside the allowlist");
+    expect(calls).toEqual([]);
+  });
+
+  it("a calendar-labelled refusal happens before the token is loaded", async () => {
+    const e = await reject(
+      googleRequest(deps(never), "events.list", { service: "calendar", method: "GET", url: `${GM}/drafts`, requiredScope: SCOPE_CALENDAR_READ }),
+    );
+    expect(e).toBeInstanceOf(ProviderError);
+  });
+
+  it("the calendar service is not subject to the Gmail allowlist", async () => {
+    writeToken(dir, token());
+    const { f, calls } = countingFetch();
+    await googleRequest(deps(f), "events.list", { service: "calendar", method: "GET", url: LIST_URL, requiredScope: SCOPE_CALENDAR_READ });
+    expect(calls).toEqual([LIST_URL]);
+  });
+
+  it("the provider label follows the service", async () => {
+    const e = await reject(gmail(deps(never), "GET", `${GM}/messages`));
+    expect(e.message).toContain("google gmail ");
+  });
+});
+
+describe("Gmail scopes in googleRequest", () => {
+  it("Review Focus 3: a calendar-only token cannot read Gmail, sends nothing, and still reads the calendar", async () => {
+    writeToken(dir, token());
+    const e = await reject(gmail(deps(never), "GET", `${GM}/threads`));
+    expect(e).toBeInstanceOf(AuthRequiredError);
+    expect(e.message).toBe(LOGIN);
+    const { f, calls } = countingFetch();
+    await expect(gmail(deps(f), "GET", `${GM}/threads`)).rejects.toThrow(LOGIN);
+    expect(calls).toEqual([]);
+    const r = await getList(use(["events-list-page"]));
+    expect(r.status).toBe(200);
+  });
+
+  it("a missing gmail.compose is the upgrade sentence, before any request", async () => {
+    writeToken(dir, gmailToken());
+    const e = await reject(gmail(deps(never), "POST", `${GM}/drafts`, SCOPE_GMAIL_COMPOSE));
+    expect(e).toBeInstanceOf(AuthRequiredError);
+    expect(e.message).toBe(UPGRADE);
+  });
+
+  it("a 403 insufficientPermissions is the upgrade sentence for a draft write and the login sentence for a read", async () => {
+    writeToken(dir, gmailToken([SCOPE_CALENDAR_READ, SCOPE_GMAIL_READ, SCOPE_GMAIL_COMPOSE]));
+    const denied = (async () =>
+      new Response(JSON.stringify({ error: { errors: [{ reason: "insufficientPermissions" }] } }), { status: 403 })) as unknown as typeof fetch;
+    expect((await reject(gmail(deps(denied), "POST", `${GM}/drafts`, SCOPE_GMAIL_COMPOSE))).message).toBe(UPGRADE);
+    expect((await reject(gmail(deps(denied), "GET", `${GM}/threads`))).message).toBe(LOGIN);
   });
 });

@@ -141,6 +141,7 @@ export function validDraftPlan(over: Record<string, unknown> = {}, draftOver: Re
     },
     observed: {
       latestMessageId: "m2",
+      messageIdsSha256: sha256Hex(JSON.stringify(["m1", "m2"])),
       onThread: ["ana@example.com", "ben@example.com", "cara@example.com", "me@example.com"],
     },
     ...over,

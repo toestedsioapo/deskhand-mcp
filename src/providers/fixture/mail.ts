@@ -3,7 +3,6 @@ import { appendFileSync } from "node:fs";
 import { redactPreview } from "../../ledger/redact.js";
 import { ProviderError } from "../errors.js";
 import type {
-  DraftLookup,
   DraftRef,
   MailAddress,
   MailMessage,
@@ -49,6 +48,7 @@ function toMessage(threadId: string, m: FixtureMessage): MailMessage {
     bodyText: m.body_text.slice(0, BODY_CHARS),
     bodyTruncated: m.body_text.length > BODY_CHARS,
     unread: m.unread === true,
+    sentByOwner: m.sent === true,
   };
 }
 
@@ -92,7 +92,9 @@ export function createFixtureMailProvider(
       profile: () => refuse("profile"),
       searchThreads: () => refuse("searchThreads"),
       getThread: () => refuse("getThread"),
-      lookupDraft: () => refuse("lookupDraft"),
+      threadMessageIds: () => refuse("threadMessageIds"),
+      getDraft: () => refuse("getDraft"),
+      threadDrafts: () => refuse("threadDrafts"),
       createDraft: () => refuse("createDraft"),
     };
   }
@@ -154,22 +156,34 @@ export function createFixtureMailProvider(
       };
     },
 
-    async lookupDraft(messageIdHeader): Promise<DraftLookup> {
+    async threadMessageIds(threadId) {
       await delay();
-      const found = drafts.find((d) => d.messageIdHeader === messageIdHeader);
-      return found ? { state: "present", draft: copyDraft(found) } : { state: "absent" };
+      const messages = threads.get(threadId);
+      return messages ? messages.map((m) => m.id) : null;
     },
 
-    async createDraft(draft: NewDraft) {
+    async getDraft(draftId) {
       await delay();
-      const existing = drafts.find((d) => d.messageIdHeader === draft.messageIdHeader);
-      if (existing) return copyDraft(existing);
+      const found = drafts.find((d) => d.draftId === draftId);
+      return found ? copyDraft(found) : null;
+    },
+
+    async threadDrafts(threadId) {
+      await delay();
+      return drafts.filter((d) => d.threadId === threadId).map(copyDraft);
+    },
+
+    // Like Gmail (M4b live check): every call is a new draft, and the Message-ID is the provider's own.
+    async createDraft(draft: NewDraft, onCreated) {
+      await delay();
       draftSeq += 1;
       const created: DraftRef = {
         draftId: `dr_${draftSeq}`,
         messageId: `msg_dr_${draftSeq}`,
         threadId: draft.threadId,
-        messageIdHeader: draft.messageIdHeader,
+        messageIdHeader: `<fixture.dr_${draftSeq}@mail.fixture.invalid>`,
+        // The fake clock does not move, so each draft is one millisecond after the last: creation order is date order.
+        date: new Date(Date.parse(world.now) + draftSeq).toISOString(),
         to: [...draft.to],
         cc: [...draft.cc],
         bcc: [...draft.bcc],
@@ -183,12 +197,21 @@ export function createFixtureMailProvider(
           seq,
           ts: world.now,
           op: "mail.createDraft",
-          idempotency_key: draft.messageIdHeader,
+          idempotency_key: draft.idempotencyKey,
           request: redactPreview(draft),
         });
         appendFileSync(writeLog, `${line}\n`);
       }
-      opts.afterWrite?.();
+      try {
+        onCreated(created.draftId);
+      } catch (e) {
+        // After the write, every failure is retryable (as on Gmail).
+        throw e instanceof ProviderError
+          ? e
+          : new ProviderError("fixture mail", "createDraft", { phrase: "the draft was created but its id could not be recorded", retryable: true });
+      } finally {
+        opts.afterWrite?.();
+      }
       return copyDraft(created);
     },
   };

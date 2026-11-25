@@ -1,0 +1,66 @@
+{
+  "request": {
+    "method": "GET",
+    "url": "https://www.googleapis.com/gmail/v1/users/me/threads/t-full?format=minimal"
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "id": "t-full",
+      "historyId": "9001",
+      "messages": [
+        {
+          "id": "k1",
+          "threadId": "t-full",
+          "labelIds": [
+            "INBOX"
+          ],
+          "snippet": "",
+          "internalDate": "1794301200000"
+        },
+        {
+          "id": "k2",
+          "threadId": "t-full",
+          "labelIds": [
+            "SENT"
+          ],
+          "snippet": "",
+          "internalDate": "1794304800000"
+        },
+        {
+          "id": "k3",
+          "threadId": "t-full",
+          "snippet": "",
+          "internalDate": "1794308400000"
+        },
+        {
+          "id": "x-draft",
+          "threadId": "t-full",
+          "labelIds": [
+            "DRAFT"
+          ],
+          "snippet": "",
+          "internalDate": "1794312000000"
+        },
+        {
+          "id": "x-trash",
+          "threadId": "t-full",
+          "labelIds": [
+            "TRASH"
+          ],
+          "snippet": "",
+          "internalDate": "1794315600000"
+        },
+        {
+          "id": "x-spam",
+          "threadId": "t-full",
+          "labelIds": [
+            "SPAM"
+          ],
+          "snippet": "",
+          "internalDate": "1794319200000"
+        }
+      ]
+    }
+  }
+}

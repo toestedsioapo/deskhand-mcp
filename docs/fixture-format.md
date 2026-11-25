@@ -89,13 +89,14 @@ An optional top-level `mail` key holds the mailbox of the account owner. It is o
 | `messages[].reply_to`, `to`, `cc` | `{ address, name? }[]` | `to` yes; the others no (default `[]`) | |
 | `messages[].subject`, `body_text` | string | yes | text only; there is no HTML in the fixture |
 | `messages[].unread` | boolean | no, default `false` | |
+| `messages[].sent` | boolean | no, default `false` | the owner sent this message (`MailMessage.sentByOwner`). Only this makes a message "mine" for default recipients; a `From` equal to the owner does not. Additive: `fixture_version` is unchanged, but an existing world with owner-authored messages and no `sent: true` now picks a different reply target or refuses with no recipient |
 | `messages[].draft` | boolean | no, default `false` | a draft message; kept out of `getThread` and of the "on the thread" set |
 
 Provider behaviour (the fixture `MailProvider`, `src/providers/fixture/mail.ts`):
 
 - `searchThreads(query, limit)`: the query is split on whitespace and every term must match. `from:<x>` matches a substring of the From address or name; `is:unread` matches threads with an unread message; any other term is a case-insensitive substring of subject, body or addresses. A term with a `:` that is none of these is a `ProviderError` with the phrase `query operator not supported by the fixture provider`. Results are newest `lastDate` first, at most `limit`; `snippet` is the first 100 characters of the latest body.
 - `getThread(id, maxMessages)`: drops `draft: true` messages, keeps the newest `maxMessages` (`truncated` when it cut), oldest first, and cuts each `bodyText` at 20 000 characters (`bodyTruncated`). An unknown id gives `null`.
-- `lookupDraft(messageIdHeader)` and `createDraft(draft)`: `createDraft` records the draft in the world (`draftId` is `dr_<n>`, `messageId` is `msg_dr_<n>`) and appends one line to the write log. A `createDraft` with a `messageIdHeader` that already exists returns the existing draft and writes nothing, which is how crash recovery is simulated. There is no `cancelled` state for drafts (Gmail cannot report a deleted draft).
+- `getDraft(draftId)`, `threadDrafts(threadId)` and `createDraft(draft, onCreated)`: like Gmail (M4b live check), `createDraft` never de-duplicates: every call records a new draft in the world (`draftId` is `dr_<n>`, `messageId` is `msg_dr_<n>`, the stored `Message-ID` is the fixture's own `<fixture.dr_<n>@mail.fixture.invalid>`, the date is `now` plus `n` ms), calls `onCreated(draftId)`, and appends one line to the write log. Crash recovery is simulated by the apply engine finding the draft by its recorded id or its content. `getDraft` of an unknown id is `null` (a deleted draft).
 - There is no send operation, by design.
 
 ## All-day events
@@ -128,7 +129,7 @@ World events are on the calendar owner's calendar and, by default, organised by 
 {"seq":1,"ts":"2026-11-10T09:00:00.000Z","op":"calendar.createEvent","idempotency_key":"<64 hex>","request":{}}
 ```
 
-`seq` starts at 1 per process and per file append; `ts` is the fake clock; `op` is the provider method name; `idempotency_key` is the one derived from the action id (see `docs/ledger-contract.md`); `request` is the provider request body, redacted by the ledger preview rules. The `mail.createDraft` write logs one line the same way (`op` is `mail.createDraft`); its `request` goes through the same redaction, so the body appears as `[omitted N chars sha256:<8 hex>]` and never as text. A fixture write with an idempotency key already present in the world is a no-op that returns the existing event (and writes no log line), which is how crash recovery is simulated.
+`seq` starts at 1 per process and per file append; `ts` is the fake clock; `op` is the provider method name; `idempotency_key` is the one derived from the action id (see `docs/ledger-contract.md`); `request` is the provider request body, redacted by the ledger preview rules. The `mail.createDraft` write logs one line the same way (`op` is `mail.createDraft`); its `request` goes through the same redaction, so the body appears as `[omitted N chars sha256:<8 hex>]` and never as text. A calendar write with an idempotency key already present in the world is a no-op that returns the existing event (and writes no log line), which is how crash recovery is simulated; a draft write always writes (see above).
 
 Deleted events: the file format has no cancelled events. The provider's test seam `cancelEvent(calendarId, id)` models a user deleting an event, as Google keeps it as `status: cancelled`: `getEvent`, `listEvents` and `freeBusy` no longer see it, `lookupEvent` reports `cancelled` (not `absent`), and `createEvent` with that id throws the "created and later deleted" `ProviderError` and writes nothing.
 

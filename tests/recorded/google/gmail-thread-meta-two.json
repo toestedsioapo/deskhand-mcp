@@ -1,0 +1,40 @@
+{
+  "request": {
+    "method": "GET",
+    "url": "https://www.googleapis.com/gmail/v1/users/me/threads/t-two?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Date"
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "id": "t-two",
+      "messages": [
+        {
+          "id": "w1",
+          "threadId": "t-two",
+          "labelIds": [
+            "INBOX"
+          ],
+          "snippet": "snippet of w1",
+          "internalDate": "1794312000000",
+          "payload": {
+            "mimeType": "text/plain",
+            "headers": [
+              {
+                "name": "From",
+                "value": "Ana Lopez <ana@example.com>"
+              },
+              {
+                "name": "Subject",
+                "value": "Thread two"
+              },
+              {
+                "name": "Date",
+                "value": "Tue, 10 Nov 2026 10:00:00 +0000"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}
