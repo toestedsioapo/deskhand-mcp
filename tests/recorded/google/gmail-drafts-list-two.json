@@ -1,12 +1,19 @@
 {
   "request": {
     "method": "GET",
-    "url": "https://www.googleapis.com/gmail/v1/users/me/drafts?q=rfc822msgid%3Adeskhand.088afa7571116bd6a8f7b781318e85bd9a37eed81b5140bfe630e9f752558fa8%40deskhand.invalid&maxResults=10"
+    "url": "https://www.googleapis.com/gmail/v1/users/me/drafts?maxResults=100"
   },
   "response": {
     "status": 200,
     "body": {
       "drafts": [
+        {
+          "id": "dr-2",
+          "message": {
+            "id": "dm-2",
+            "threadId": "t-reply"
+          }
+        },
         {
           "id": "dr-1",
           "message": {
@@ -15,7 +22,7 @@
           }
         }
       ],
-      "resultSizeEstimate": 1
+      "resultSizeEstimate": 2
     }
   }
 }

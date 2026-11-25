@@ -43,12 +43,12 @@ const headerValue = z
 export const isHeaderValue = (v: string): boolean => headerValue.safeParse(v).success;
 /** Most References values a draft carries (the newest ones). */
 export const MAX_REFERENCES = 10;
-/** The draft's own Message-ID, derived from the idempotency key. */
+/** The plan's Message-ID field, from the idempotency key: in the plan contract, never sent (M4b live check). */
 const OUR_HEADER = /^<deskhand\.[0-9a-f]{64}@deskhand\.invalid>$/;
 const SHA256 = /^[0-9a-f]{64}$/;
 export const MAX_RECIPIENTS = 50;
 
-/** The draft's Message-ID for an idempotency key (ARCHITECTURE, "Gmail draft idempotency"). */
+/** The plan's Message-ID for an idempotency key. The recorded draft id, not this, identifies the draft (ARCHITECTURE). */
 export const draftHeaderFor = (key: string): string => `<deskhand.${key}@deskhand.invalid>`;
 
 /** True when `body` is the text `bodyChars` (UTF-16 length) and `bodySha256` (of its UTF-8 bytes) describe. */
@@ -171,14 +171,37 @@ export const THREAD_UNVERIFIED = "the plan has no record of the thread's message
 export const THREAD_GONE = "the thread no longer exists";
 export const THREAD_NEW_MESSAGE = "the thread has a new message since planning";
 export const ACCOUNT_CHANGED = "the mailbox account changed since planning";
-/** Never used: a mail provider cannot report a deleted draft (decision 7). Kept so every kind names both phrases. */
+/** The draft id this action recorded no longer resolves: the user deleted (or sent) the draft. It is never recreated. */
 export const DRAFT_DELETED = "a draft with this action's id was created and later deleted";
+
+/** The thread, the subject, exactly readable address sets and the body hash all equal the approved plan. */
+function sameContent(plan: MailDraftPlan, r: DraftRef): boolean {
+  const d = plan.draft;
+  return (
+    r.threadId === d.threadId &&
+    r.subject === d.subject &&
+    r.recipientsMalformed !== true &&
+    sameSet(r.to, d.to) &&
+    sameSet(r.cc, d.cc) &&
+    sameSet(r.bcc, d.bcc) &&
+    r.bodySha256 === d.bodySha256
+  );
+}
+
+/** Oldest stored first; an unreadable date sorts last; equal dates by draft id, so the order is total. */
+function oldestFirst(a: DraftRef, b: DraftRef): number {
+  const t = (d: DraftRef): number => {
+    const ms = Date.parse(d.date);
+    return Number.isNaN(ms) ? Number.POSITIVE_INFINITY : ms;
+  };
+  return t(a) - t(b) || (a.draftId < b.draftId ? -1 : a.draftId > b.draftId ? 1 : 0);
+}
 
 export const mailCreateDraftReply: PlanKind<MailDraftPlan, DraftRef> = {
   kind: "mail.create_draft_reply",
   schema: mailDraftPlanSchema,
   phrases: { differs: DRAFT_DIFFERS, deleted: DRAFT_DELETED },
-  // Gmail has no unique key on a draft's Message-ID (M4b decision 8).
+  // Gmail has no unique key on a draft (M4b decision 8), and it rewrites the Message-ID we send (M4b live check).
   needsWriteClaim: true,
 
   // Decision 3. The approver sees every body row, each behind `  > `; the agent gets one omitted row instead.
@@ -259,45 +282,52 @@ export const mailCreateDraftReply: PlanKind<MailDraftPlan, DraftRef> = {
     return { ok: true };
   },
 
-  async lookupExisting(plan, key, { mail }) {
-    const l = await mail.lookupDraft(draftHeaderFor(key), plan.draft.threadId);
-    return l.state === "present" ? { state: "present", value: l.draft } : { state: "absent" };
+  /**
+   * M4b live check (owner decision 2026-11-25). The draft id this action recorded decides: gone is `cancelled`, never
+   * recreated, and an edited draft fails `matches`. With no id recorded (a crash or an ambiguous failure before the
+   * POST returned one), the thread's drafts with the approved content, oldest first; the first one no other action
+   * recorded is adopted, and recorded as this action's before it is returned.
+   */
+  async lookupExisting(plan, _key, { mail }, writes) {
+    const recorded = writes.landed()[0];
+    if (recorded !== undefined) {
+      const draft = await mail.getDraft(recorded);
+      return draft === null ? { state: "cancelled" } : { state: "present", value: draft };
+    }
+    const candidates = (await mail.threadDrafts(plan.draft.threadId)).filter((d) => sameContent(plan, d)).sort(oldestFirst);
+    for (const draft of candidates) {
+      if (writes.record(draft.draftId)) return { state: "present", value: draft };
+    }
+    return { state: "absent" };
   },
 
-  // Our Message-ID (and the plan's), the thread, the subject, exactly readable address sets and the body hash.
+  // The plan's own Message-ID (an integrity check on the stored plan), then the approved content. The stored draft's
+  // Message-ID is the provider's own and is not compared (M4b live check).
   matches(plan, key, r) {
-    const d = plan.draft;
-    const header = draftHeaderFor(key);
-    return (
-      d.messageIdHeader === header &&
-      r.messageIdHeader === header &&
-      r.threadId === d.threadId &&
-      r.subject === d.subject &&
-      r.recipientsMalformed !== true &&
-      sameSet(r.to, d.to) &&
-      sameSet(r.cc, d.cc) &&
-      sameSet(r.bcc, d.bcc) &&
-      r.bodySha256 === d.bodySha256
-    );
+    return plan.draft.messageIdHeader === draftHeaderFor(key) && sameContent(plan, r);
   },
 
-  async execute(plan, key, { mail }) {
+  async execute(plan, key, { mail }, writes) {
     const d = plan.draft;
     // Never reached through the gates (7a refuses a swept plan; the tool derives the header from the key); a plain
     // Error is a definite failure, so the plan fails without a write.
     if (d.body === undefined) throw new Error("the plan's body was removed; it cannot be written");
     if (d.messageIdHeader !== draftHeaderFor(key)) throw new Error("the plan's Message-ID is not this action's");
-    return mail.createDraft({
-      threadId: d.threadId,
-      messageIdHeader: d.messageIdHeader,
-      inReplyTo: d.inReplyTo,
-      references: d.references,
-      to: d.to,
-      cc: d.cc,
-      bcc: d.bcc,
-      subject: d.subject,
-      body: d.body,
-    });
+    return mail.createDraft(
+      {
+        threadId: d.threadId,
+        idempotencyKey: key,
+        inReplyTo: d.inReplyTo,
+        references: d.references,
+        to: d.to,
+        cc: d.cc,
+        bcc: d.bcc,
+        subject: d.subject,
+        body: d.body,
+      },
+      // A new draft id belongs to no other action, so the record always succeeds.
+      (draftId) => void writes.record(draftId),
+    );
   },
 
   // Ids, header, addresses, subject and the body hash; never the body.

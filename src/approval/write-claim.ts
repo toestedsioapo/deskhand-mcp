@@ -4,7 +4,7 @@ import { isoNow } from "../ledger/ids.js";
 
 /**
  * The write claim (M4b decision 8; docs/ledger-contract.md, gate 8b). A provider with no unique key on a write (Gmail
- * and a draft's Message-ID) cannot refuse a duplicate, so the ledger serialises the write: a `write_claimed` row is
+ * and a draft) cannot refuse a duplicate, so the ledger serialises the write: a `write_claimed` row is
  * taken in `BEGIN IMMEDIATE` before the POST.
  *
  * The POST starts within 30 s of the claim, and a token refresh and the POST are each capped at 10 s, so the holder's

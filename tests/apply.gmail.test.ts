@@ -2,6 +2,7 @@ import { mkdirSync } from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
 import { applyAction, idempotencyKey } from "../src/approval/apply.js";
 import { approveAction } from "../src/approval/approve.js";
+import { writeRecords } from "../src/approval/write-landed.js";
 import type { CliIo } from "../src/cli/io.js";
 import { SCOPE_CALENDAR_READ, SCOPE_CALENDAR_WRITE, SCOPE_GMAIL_COMPOSE, SCOPE_GMAIL_READ } from "../src/config/scopes.js";
 import { getAction } from "../src/ledger/actions.js";
@@ -16,7 +17,7 @@ import { replayFetch, type Replay } from "./helpers/replay-fetch.js";
 
 const ACTION_ID = "act_01JC3Z8K4V7Q2W9X5R6T1N0BHM";
 const KEY = "088afa7571116bd6a8f7b781318e85bd9a37eed81b5140bfe630e9f752558fa8";
-const OURS = `<deskhand.${KEY}@deskhand.invalid>`;
+const GMAIL_HEADER = "<gmail-assigned-1@example.com>";
 const BODY = "Thanks Ana,\n\nThe numbers look right.";
 const DIFFERS = "a draft with this action's id exists but differs from the approved plan";
 const THREAD_CHANGED = "The world changed since planning: the thread's messages changed since planning.";
@@ -24,10 +25,15 @@ const HOLD = 60_000;
 
 /** What planning reads. */
 const PLAN = ["gmail-reply-thread-minimal", "gmail-reply-thread-full", "gmail-profile"];
-/** Both lookup routes finding nothing. */
-const NOTHING = ["gmail-drafts-search-empty", "gmail-reply-meta-no-draft"];
+/** A lookup with no draft id recorded, finding no draft in the account. */
+const NOTHING = ["gmail-drafts-list-none"];
 const RECHECK = ["gmail-profile", "gmail-reply-thread-minimal", "gmail-reply-thread-full"];
-const FOUND = ["gmail-drafts-search-hit", "gmail-draft-get-ours"];
+/** The POST and its read-back: Gmail stores its own Message-ID (M4b live check). */
+const WRITE = ["gmail-drafts-create-200", "gmail-draft-get-gmail-header"];
+/** A lookup with no id recorded that finds the approved draft in the thread by its content. */
+const BY_CONTENT = ["gmail-drafts-list-reply", "gmail-draft-get-gmail-header"];
+/** A lookup by the recorded draft id. */
+const BY_ID = ["gmail-draft-get-gmail-header"];
 
 type H = Awaited<ReturnType<typeof setupHarness>>;
 let h: H | undefined;
@@ -91,21 +97,26 @@ const status = (hh: H, id: string) => getAction(hh.db, id)!.status;
 const dump = (hh: H) => JSON.stringify([hh.db.all("SELECT * FROM actions"), hh.db.all("SELECT * FROM events")]);
 
 describe("apply through Gmail", () => {
-  it("the recordings' Message-ID is this action's", () => {
+  it("the recordings' key is this action's", () => {
     expect(idempotencyKey(ACTION_ID)).toBe(KEY);
   });
 
-  it("a normal apply ends applied with one POST carrying the approved draft", async () => {
-    const { hh, id } = await setup([...NOTHING, ...RECHECK, ...NOTHING, "gmail-drafts-create-200", "gmail-draft-get-ours"]);
+  it("a normal apply ends applied with one POST carrying the approved draft, though Gmail rewrote its Message-ID", async () => {
+    const { hh, id } = await setup([...NOTHING, ...RECHECK, ...NOTHING, ...WRITE]);
     expect(await applyAction(hh.ctx, id)).toMatchObject({ ok: true, replayed: false, output: { draft_id: "dr-1", message_id: "dm-1" } });
     expect(status(hh, id)).toBe("applied");
     expect(draftPosts()).toHaveLength(1);
+    expect((getAction(hh.db, id)!.result_json as { messageIdHeader: string }).messageIdHeader).toBe(GMAIL_HEADER);
+    const landed = hh.rows().filter((r) => r.action_id === id && r.kind === "write_landed");
+    expect(landed.map((r) => (JSON.parse(r.preview_json) as { output: unknown }).output)).toEqual([{ writeId: "dr-1" }]);
     const sent = JSON.parse(draftPosts()[0]!.body!) as { message: { raw: string; threadId: string } };
     expect(sent.message.threadId).toBe("t-reply");
-    expect(Buffer.from(sent.message.raw, "base64url").toString("utf8")).toBe(
+    const raw = Buffer.from(sent.message.raw, "base64url").toString("utf8");
+    expect(raw).not.toMatch(/^message-id:/im);
+    expect(raw).toBe(
       buildDraftMime({
         threadId: "t-reply",
-        messageIdHeader: OURS,
+        idempotencyKey: KEY,
         inReplyTo: "<r2@example.com>",
         references: ["<r1@example.com>", "<r2@example.com>"],
         to: ["ana@example.com"],
@@ -118,7 +129,7 @@ describe("apply through Gmail", () => {
   });
 
   it("a replay of an applied action sends nothing", async () => {
-    const { hh, id } = await setup([...NOTHING, ...RECHECK, ...NOTHING, "gmail-drafts-create-200", "gmail-draft-get-ours"]);
+    const { hh, id } = await setup([...NOTHING, ...RECHECK, ...NOTHING, ...WRITE]);
     const first = await applyAction(hh.ctx, id);
     const requests = replay!.seen.length;
     const second = await applyAction(hh.ctx, id);
@@ -129,7 +140,7 @@ describe("apply through Gmail", () => {
   });
 
   it("recovery after a crash before the ledger commit ends applied with no second POST", async () => {
-    const { hh, id } = await setup([...NOTHING, ...RECHECK, ...NOTHING, "gmail-drafts-create-200", "gmail-draft-get-ours", ...FOUND]);
+    const { hh, id } = await setup([...NOTHING, ...RECHECK, ...NOTHING, ...WRITE, ...BY_ID]);
     hh.ctx.hooks = {
       beforeCommit: () => {
         throw new Error("crash before commit");
@@ -143,25 +154,23 @@ describe("apply through Gmail", () => {
     expect(draftPosts()).toHaveLength(1);
   });
 
-  it("an existing draft is recovered with no POST", async () => {
-    const { hh, id } = await setup(FOUND);
+  it("an existing draft with the approved content is recovered with no POST", async () => {
+    const { hh, id } = await setup(BY_CONTENT);
     expect(await applyAction(hh.ctx, id)).toMatchObject({ ok: true, replayed: true, output: { draft_id: "dr-1" } });
     expect(status(hh, id)).toBe("applied");
     expect(draftPosts()).toHaveLength(0);
   });
 
-  it("a 500 that landed, search not indexed: the retry at 60 s finds it by the thread route, with one POST in total", async () => {
+  it("a 500 that landed, not yet listed: the retry at 60 s finds it by content across list pages, with one POST in total", async () => {
     const { hh, id } = await setup([
       ...NOTHING,
       ...RECHECK,
       ...NOTHING,
       "gmail-drafts-create-500",
       ...NOTHING,
-      "gmail-drafts-search-empty",
-      "gmail-reply-meta-draft",
       "gmail-drafts-page-1",
       "gmail-drafts-page-2",
-      "gmail-draft-get-ours",
+      "gmail-draft-get-gmail-header",
     ]);
     expect(await applyAction(hh.ctx, id)).toMatchObject({ ok: false, errorCode: "PROVIDER_ERROR" });
     expect(status(hh, id)).toBe("approved");
@@ -181,8 +190,9 @@ describe("apply through Gmail", () => {
     expect(dump(hh)).not.toContain("FAKE-TOKEN");
   });
 
-  it("a found draft that differs gives STALE_PLAN with no POST", async () => {
-    const { hh, id } = await setup(["gmail-drafts-search-hit", "gmail-draft-get-differs"]);
+  it("the recorded draft, changed in Gmail, gives STALE_PLAN with no POST", async () => {
+    const { hh, id } = await setup(["gmail-draft-get-differs"]);
+    writeRecords(hh.ctx, id).record("dr-1");
     expect(await applyAction(hh.ctx, id)).toEqual({ ok: false, errorCode: "STALE_PLAN", message: DIFFERS });
     expect(status(hh, id)).toBe("failed");
     expect(draftPosts()).toHaveLength(0);
@@ -207,7 +217,7 @@ describe("apply through Gmail", () => {
       "gmail-profile",
       "gmail-reply-thread-with-draft-minimal",
       "gmail-reply-thread-with-draft-full",
-      ...FOUND, // the lookup under the claim sees it
+      ...BY_CONTENT, // the lookup under the claim sees it
     ]);
     expect(await applyAction(hh.ctx, id)).toMatchObject({ ok: true, replayed: true, output: { draft_id: "dr-1" } });
     expect(status(hh, id)).toBe("applied");
@@ -215,9 +225,9 @@ describe("apply through Gmail", () => {
   });
 
   it("no-send proof: the whole propose, approve and apply flow stays on the allowlist and never names /send", async () => {
-    const { hh, id } = await setup([...NOTHING, ...RECHECK, ...NOTHING, "gmail-drafts-create-200", "gmail-draft-get-ours"]);
+    const { hh, id } = await setup([...NOTHING, ...RECHECK, ...NOTHING, ...WRITE]);
     await applyAction(hh.ctx, id);
-    expect(replay!.seen.length).toBeGreaterThan(10);
+    expect(replay!.seen.length).toBeGreaterThan(8);
     for (const r of replay!.seen) {
       expect(r.url).not.toContain("/send");
       expect(() => assertAllowedGmailRequest(r.method, new URL(r.url))).not.toThrow();
@@ -226,12 +236,13 @@ describe("apply through Gmail", () => {
   });
 });
 
-describe("recovery compares every recipient on the stored draft (M4b fix wave D)", () => {
+describe("the recorded draft is compared on every recipient (M4b fix wave D)", () => {
   it.each([
     ["an entry that does not parse", "gmail-draft-get-unparsed-recipient"],
     ["a second To header", "gmail-draft-get-second-to"],
   ])("%s: STALE_PLAN with the differs phrase and no POST", async (_name, recording) => {
-    const { hh, id } = await setup(["gmail-drafts-search-hit", recording]);
+    const { hh, id } = await setup([recording]);
+    writeRecords(hh.ctx, id).record("dr-1");
     expect(await applyAction(hh.ctx, id)).toEqual({ ok: false, errorCode: "STALE_PLAN", message: DIFFERS });
     expect(status(hh, id)).toBe("failed");
     expect(draftPosts()).toHaveLength(0);

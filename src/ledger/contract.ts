@@ -20,8 +20,11 @@ export const EVENT_KINDS_V1 = [
   "apply_failed",
 ] as const;
 
-/** Schema v4 adds write_claimed (the ledger serialises a draft write, M4b decision 8). */
-export const EVENT_KINDS = [...EVENT_KINDS_V1, "write_claimed"] as const;
+/**
+ * Schema v4 adds write_claimed (the ledger serialises a draft write, M4b decision 8) and write_landed (the provider's
+ * id of a draft this action wrote or adopted, recorded as soon as it is known; M4b live check, 2026-11-25).
+ */
+export const EVENT_KINDS = [...EVENT_KINDS_V1, "write_claimed", "write_landed"] as const;
 
 export const EVENT_OUTCOMES = ["ok", "error", "rejected"] as const;
 

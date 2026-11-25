@@ -19,12 +19,13 @@ const OURS = `<deskhand.${KEY}@deskhand.invalid>`;
 const UPGRADE = "Google write access is not granted. Run: deskhand auth upgrade";
 const READ_BACK = "google gmail createDraft failed: the draft was created but could not be read back";
 const NO_ID = "google gmail createDraft failed: the draft may have been created but the response had no draft id";
-const UNMAPPED = "google gmail lookupDraft failed: a draft message was found but could not be mapped to a draft";
+const TOO_MANY = "google gmail threadDrafts failed: too many drafts to check them all";
+const GMAIL_HEADER = "<gmail-assigned-1@example.com>";
 const BODY = "Thanks Ana,\n\nThe numbers look right.";
 
 const DRAFT: NewDraft = {
   threadId: "t-reply",
-  messageIdHeader: OURS,
+  idempotencyKey: KEY,
   inReplyTo: "<r2@example.com>",
   references: ["<r1@example.com>", "<r2@example.com>"],
   to: ["ana@example.com"],
@@ -87,7 +88,6 @@ describe("buildDraftMime", () => {
     const mime = buildDraftMime({ ...DRAFT, cc: ["cc@example.com"], body: "Hi\nthere" });
     expect(mime).toBe(
       [
-        `Message-ID: ${OURS}`,
         "In-Reply-To: <r2@example.com>",
         "References: <r1@example.com> <r2@example.com>",
         "To: ana@example.com",
@@ -106,7 +106,6 @@ describe("buildDraftMime", () => {
   it("leaves out In-Reply-To, References, Cc and Bcc when they are empty", () => {
     const mime = buildDraftMime({ ...DRAFT, inReplyTo: null, references: [], bcc: [] });
     expect(mime.split("\r\n\r\n")[0]!.split("\r\n").map((l) => l.split(":")[0])).toEqual([
-      "Message-ID",
       "To",
       "Subject",
       "MIME-Version",
@@ -161,6 +160,12 @@ describe("buildDraftMime", () => {
     expect(value.replace(/\r\n /g, " ").split(", ")).toEqual(to);
   });
 
+  it("never carries a Message-ID or the idempotency key: Gmail assigns its own (M4b live check)", () => {
+    const mime = buildDraftMime(DRAFT);
+    expect(mime).not.toMatch(/^message-id:/im);
+    expect(mime).not.toContain(KEY);
+  });
+
   for (const [name, over] of [
     ["subject with CR", { subject: "a\rBcc: x@example.com" }],
     ["subject with LF", { subject: "a\nBcc: x@example.com" }],
@@ -169,7 +174,6 @@ describe("buildDraftMime", () => {
     ["bcc with CR", { bcc: ["a@example.com\r"] }],
     ["In-Reply-To with LF", { inReplyTo: "<a@example.com>\nBcc: x@example.com" }],
     ["References with CR", { references: ["<a@example.com>\r"] }],
-    ["Message-ID with LF", { messageIdHeader: "<a@example.com>\nX: y" }],
   ] as [string, Partial<NewDraft>][]) {
     it(`a header value with a line break or NUL throws: ${name}`, () => {
       let e: unknown;
@@ -185,19 +189,27 @@ describe("buildDraftMime", () => {
 });
 
 describe("createDraft", () => {
-  it("sends one POST whose raw decodes to the MIME, then returns what Gmail stored", async () => {
-    const p = provider(["gmail-drafts-create-200", "gmail-draft-get-ours"]);
-    const r = await p.createDraft(DRAFT);
+  const created: string[] = [];
+  const onCreated = (id: string): void => void created.push(id);
+  beforeEach(() => {
+    created.length = 0;
+  });
+
+  it("sends one POST whose raw decodes to the MIME, reports the id, then returns what Gmail stored", async () => {
+    const p = provider(["gmail-drafts-create-200", "gmail-draft-get-gmail-header"]);
+    const r = await p.createDraft(DRAFT, onCreated);
     expect(replay!.seen.map((q) => q.method)).toEqual(["POST", "GET"]);
     const sent = JSON.parse(posts()[0]!.body!) as { message: { raw: string; threadId: string } };
     expect(sent.message.threadId).toBe("t-reply");
     expect(sent.message.raw).toMatch(/^[A-Za-z0-9_-]+$/);
     expect(Buffer.from(sent.message.raw, "base64url").toString("utf8")).toBe(buildDraftMime(DRAFT));
+    expect(created).toEqual(["dr-1"]);
     expect(r).toEqual({
       draftId: "dr-1",
       messageId: "dm-1",
       threadId: "t-reply",
-      messageIdHeader: OURS,
+      messageIdHeader: GMAIL_HEADER,
+      date: new Date(1794308400000).toISOString(),
       to: ["ana@example.com"],
       cc: [],
       bcc: ["boss@example.com"],
@@ -209,17 +221,19 @@ describe("createDraft", () => {
   it("a read-only token makes no POST and throws the upgrade sentence", async () => {
     login([SCOPE_GMAIL_READ]);
     const p = provider([]);
-    const e = await reject(p.createDraft(DRAFT));
+    const e = await reject(p.createDraft(DRAFT, onCreated));
     expect(e).toBeInstanceOf(AuthRequiredError);
     expect(e.message).toBe(UPGRADE);
     expect(replay!.seen).toEqual([]);
+    expect(created).toEqual([]);
   });
 
   it("403 insufficientPermissions is the upgrade sentence", async () => {
-    const e = await reject(provider(["gmail-drafts-create-403"]).createDraft(DRAFT));
+    const e = await reject(provider(["gmail-drafts-create-403"]).createDraft(DRAFT, onCreated));
     expect(e).toBeInstanceOf(AuthRequiredError);
     expect(e.message).toBe(UPGRADE);
     expect(e.message).not.toContain("FAKE-TOKEN");
+    expect(created).toEqual([]);
   });
 
   it("a 401 refreshes the token and gives exactly one POST (singleSend), as a retryable error", async () => {
@@ -228,170 +242,130 @@ describe("createDraft", () => {
       JSON.stringify({ installed: { client_id: "cid.apps.googleusercontent.com", client_secret: "CLIENT-SECRET-XYZ" } }),
     );
     const p = provider(["gmail-drafts-create-401", "oauth-refresh"]);
-    const e = await reject(p.createDraft(DRAFT));
+    const e = await reject(p.createDraft(DRAFT, onCreated));
     expect(e).toBeInstanceOf(ProviderError);
     expect((e as ProviderError).retryable).toBe(true);
     expect(posts()).toHaveLength(1);
   });
 
-  it("a 500 is retryable and its body never reaches the message", async () => {
-    const e = await reject(provider(["gmail-drafts-create-500"]).createDraft(DRAFT));
+  it("a 500 is retryable, reports no id, and its body never reaches the message", async () => {
+    const e = await reject(provider(["gmail-drafts-create-500"]).createDraft(DRAFT, onCreated));
     expect((e as ProviderError).retryable).toBe(true);
     expect(e.message).not.toContain("FAKE-TOKEN");
+    expect(created).toEqual([]);
   });
 
-  it("a 2xx with no usable draft id is retryable: the draft probably landed", async () => {
-    expectRetryable(await reject(provider(["gmail-drafts-create-200-no-id"]).createDraft(DRAFT)), NO_ID);
+  it("a 2xx with no usable draft id is retryable and reports no id: the draft probably landed", async () => {
+    expectRetryable(await reject(provider(["gmail-drafts-create-200-no-id"]).createDraft(DRAFT, onCreated)), NO_ID);
+    expect(created).toEqual([]);
   });
 
   for (const name of ["gmail-draft-get-404", "gmail-draft-get-unusable", "gmail-draft-get-not-draft"]) {
-    it(`a failed read-back after a 2xx is retryable: ${name}`, async () => {
-      expectRetryable(await reject(provider(["gmail-drafts-create-200", name]).createDraft(DRAFT)), READ_BACK);
+    it(`a failed read-back after a 2xx is retryable, and the id was already reported: ${name}`, async () => {
+      expectRetryable(await reject(provider(["gmail-drafts-create-200", name]).createDraft(DRAFT, onCreated)), READ_BACK);
       expect(posts()).toHaveLength(1);
+      expect(created).toEqual(["dr-1"]);
     });
   }
 
   it("an auth error on the read-back is also the retryable error, so the claim is not released", async () => {
     login([SCOPE_GMAIL_COMPOSE]); // the POST is allowed; the read-back's scope is missing
-    const e = await reject(provider(["gmail-drafts-create-200"]).createDraft(DRAFT));
+    const e = await reject(provider(["gmail-drafts-create-200"]).createDraft(DRAFT, onCreated));
     expect(e).not.toBeInstanceOf(AuthRequiredError);
     expectRetryable(e, READ_BACK);
-  });
-
-  it("a Message-ID Gmail rewrote is returned as stored, so the engine sees a difference and never posts again", async () => {
-    const r = await provider(["gmail-drafts-create-200", "gmail-draft-get-other-header"]).createDraft(DRAFT);
-    expect(r.messageIdHeader).toBe("<someone-else@example.com>");
+    expect(created).toEqual(["dr-1"]);
   });
 });
 
-describe("lookupDraft", () => {
-  it("finds a draft by search", async () => {
-    const r = await provider(["gmail-drafts-search-hit", "gmail-draft-get-ours"]).lookupDraft(OURS, "t-reply");
-    expect(r).toMatchObject({ state: "present", draft: { draftId: "dr-1", messageIdHeader: OURS, bcc: ["boss@example.com"] } });
-    const q = new URL(replay!.seen[0]!.url).searchParams;
-    expect(q.get("q")).toBe(`rfc822msgid:deskhand.${KEY}@deskhand.invalid`);
-    expect(q.get("maxResults")).toBe("10");
-  });
-
-  it("decodes the subject and hashes the body after CRLF becomes LF", async () => {
-    const r = await provider(["gmail-drafts-search-hit", "gmail-draft-get-encoded"]).lookupDraft(OURS, "t-reply");
+describe("getDraft", () => {
+  it("reads the draft by id: decoded subject, and the body hash after CRLF becomes LF", async () => {
+    const r = await provider(["gmail-draft-get-encoded"]).getDraft("dr-1");
     expect(r).toMatchObject({
-      state: "present",
-      draft: { subject: "Re: Presupuesto café", bodySha256: createHash("sha256").update(BODY, "utf8").digest("hex") },
+      draftId: "dr-1",
+      subject: "Re: Presupuesto café",
+      bodySha256: createHash("sha256").update(BODY, "utf8").digest("hex"),
     });
   });
 
-  it("finds a draft by the thread route when search is empty, paging to map it", async () => {
-    const r = await provider([
-      "gmail-drafts-search-empty",
-      "gmail-reply-meta-draft",
-      "gmail-drafts-page-1",
-      "gmail-drafts-page-2",
-      "gmail-draft-get-ours",
-    ]).lookupDraft(OURS, "t-reply");
-    expect(r).toMatchObject({ state: "present", draft: { draftId: "dr-1", messageId: "dm-1" } });
+  it("keeps the Message-ID Gmail stored", async () => {
+    expect(await provider(["gmail-draft-get-gmail-header"]).getDraft("dr-1")).toMatchObject({ messageIdHeader: GMAIL_HEADER });
   });
 
-  it("absent when neither route finds it", async () => {
-    expect(await provider(["gmail-drafts-search-empty", "gmail-reply-meta-no-draft"]).lookupDraft(OURS, "t-reply")).toEqual({ state: "absent" });
+  it("a 404 is null: the draft was deleted or sent", async () => {
+    expect(await provider(["gmail-draft-get-404"]).getDraft("dr-1")).toBeNull();
   });
 
-  it("a 404 on the thread route means that route found nothing", async () => {
-    expect(await provider(["gmail-drafts-search-empty", "gmail-reply-meta-404"]).lookupDraft(OURS, "t-reply")).toEqual({ state: "absent" });
+  it("a message that is no longer a draft is null", async () => {
+    expect(await provider(["gmail-draft-get-not-draft"]).getDraft("dr-1")).toBeNull();
   });
 
-  it("a search hit whose Message-ID differs does not count", async () => {
-    const r = await provider(["gmail-drafts-search-hit", "gmail-draft-get-other-header", "gmail-reply-meta-no-draft"]).lookupDraft(OURS, "t-reply");
-    expect(r).toEqual({ state: "absent" });
+  it("an unusable read is an error, never null", async () => {
+    expect(await reject(provider(["gmail-draft-get-unusable"]).getDraft("dr-1"))).toBeInstanceOf(ProviderError);
   });
 
-  it("our header on a non-DRAFT message never counts, on the search route", async () => {
-    const r = await provider(["gmail-drafts-search-hit", "gmail-draft-get-not-draft", "gmail-reply-meta-no-draft"]).lookupDraft(OURS, "t-reply");
-    expect(r).toEqual({ state: "absent" });
+  it("an id holding / or ? is one encoded segment, refused by the allowlist before any request", async () => {
+    const p = provider([]);
+    expect(await reject(p.getDraft("a/b?c"))).toBeInstanceOf(ProviderError);
+    expect(replay!.seen).toEqual([]);
+  });
+});
+
+describe("threadDrafts", () => {
+  it("lists every draft page by page (no search, so no index lag) and reads only the thread's drafts", async () => {
+    const r = await provider(["gmail-drafts-page-1", "gmail-drafts-page-2", "gmail-draft-get-gmail-header"]).threadDrafts("t-reply");
+    expect(r.map((d) => d.draftId)).toEqual(["dr-1"]);
+    expect(r[0]).toMatchObject({ messageIdHeader: GMAIL_HEADER, bcc: ["boss@example.com"] });
+    for (const q of replay!.seen) expect(new URL(q.url).searchParams.has("q")).toBe(false);
   });
 
-  it("our header on a non-DRAFT message never counts, on the thread route", async () => {
-    const r = await provider(["gmail-drafts-search-empty", "gmail-reply-meta-foreign"]).lookupDraft(OURS, "t-reply");
-    expect(r).toEqual({ state: "absent" });
+  it("no drafts at all is an empty list", async () => {
+    expect(await provider(["gmail-drafts-list-none"]).threadDrafts("t-reply")).toEqual([]);
   });
 
-  it("a draft message that cannot be mapped to a draft id is a retryable error", async () => {
-    const e = await reject(
-      provider(["gmail-drafts-search-empty", "gmail-reply-meta-draft", "gmail-drafts-page-unmapped"]).lookupDraft(OURS, "t-reply"),
+  it("returns every draft of the thread with its date", async () => {
+    const r = await provider(["gmail-drafts-list-two", "gmail-draft-get-2-gmail-header", "gmail-draft-get-gmail-header"]).threadDrafts(
+      "t-reply",
     );
-    expectRetryable(e, UNMAPPED);
+    expect(r.map((d) => [d.draftId, d.date])).toEqual([
+      ["dr-2", new Date(1794308460000).toISOString()],
+      ["dr-1", new Date(1794308400000).toISOString()],
+    ]);
   });
 
-  it("a mapped draft that no longer reads as ours is a retryable error, so no POST follows", async () => {
-    const e = await reject(
-      provider([
-        "gmail-drafts-search-empty",
-        "gmail-reply-meta-draft",
-        "gmail-drafts-page-1",
-        "gmail-drafts-page-2",
-        "gmail-draft-get-404",
-      ]).lookupDraft(OURS, "t-reply"),
-    );
-    expectRetryable(e, UNMAPPED);
+  it("a listed draft with no thread id is read to learn its thread", async () => {
+    const r = await provider(["gmail-drafts-list-no-thread", "gmail-draft-get-gmail-header"]).threadDrafts("t-reply");
+    expect(r.map((d) => d.draftId)).toEqual(["dr-1"]);
   });
 
-  it("a mapped draft with an unusable read is a retryable error, so no POST follows", async () => {
-    const e = await reject(
-      provider([
-        "gmail-drafts-search-empty",
-        "gmail-reply-meta-draft",
-        "gmail-drafts-page-1",
-        "gmail-drafts-page-2",
-        "gmail-draft-get-unusable",
-      ]).lookupDraft(OURS, "t-reply"),
-    );
-    expectRetryable(e, UNMAPPED);
+  it("a draft deleted between the list and its read is left out", async () => {
+    expect(await provider(["gmail-drafts-list-reply", "gmail-draft-get-404"]).threadDrafts("t-reply")).toEqual([]);
   });
 
-  /** The thread route up to the mapped draft, whose read answers with `status` and `body`. */
-  const mappedReadAnswers = (status: number, body: unknown) => {
-    const f = (async (input: string | URL | Request) => {
-      const url = new URL(String(input));
-      let res: { status: number; body: unknown } = { status: 200, body: { drafts: [{ id: "dr-1", message: { id: "dm-1" } }] } };
-      if (url.searchParams.has("q")) res = { status: 200, body: { resultSizeEstimate: 0 } };
-      else if (url.pathname.includes("/threads/")) {
-        res = {
-          status: 200,
-          body: { messages: [{ id: "dm-1", labelIds: ["DRAFT"], payload: { headers: [{ name: "Message-ID", value: OURS }] } }] },
-        };
-      } else if (url.pathname.endsWith("/drafts/dr-1")) res = { status, body };
-      return new Response(JSON.stringify(res.body), { status: res.status });
-    }) as typeof fetch;
-    return createGmailProvider({ fetch: f, configDir: home.home, now: () => NOW, oauth: { fetch: f, endpoints: GOOGLE_ENDPOINTS, now: () => NOW } });
-  };
-
-  it("a mapped draft whose read gets a definite HTTP error is a retryable error", async () => {
-    const body = { error: { code: 400, errors: [{ reason: "badRequest" }] } };
-    expectRetryable(await reject(mappedReadAnswers(400, body).lookupDraft(OURS, "t-reply")), UNMAPPED);
+  it("an unusable read of a listed draft is an error, so no POST follows", async () => {
+    const e = await reject(provider(["gmail-drafts-list-reply", "gmail-draft-get-unusable"]).threadDrafts("t-reply"));
+    expect(e).toBeInstanceOf(ProviderError);
   });
 
-  it("an auth error on the mapped draft's read stays an auth error", async () => {
-    const body = { error: { code: 403, errors: [{ reason: "insufficientPermissions" }] } };
-    expect(await reject(mappedReadAnswers(403, body).lookupDraft(OURS, "t-reply"))).toBeInstanceOf(AuthRequiredError);
-  });
+  it.each([{ drafts: "nope" }, { drafts: [{ id: "dr-1", message: { threadId: 7 } }] }, { drafts: [{ message: {} }] }])(
+    "an unreadable list is an error, never an empty list: %j",
+    async (body) => {
+      const f = (async () => new Response(JSON.stringify(body), { status: 200 })) as typeof fetch;
+      const p = createGmailProvider({ fetch: f, configDir: home.home, now: () => NOW, oauth: { fetch: f, endpoints: GOOGLE_ENDPOINTS, now: () => NOW } });
+      expect(await reject(p.threadDrafts("t-reply"))).toBeInstanceOf(ProviderError);
+    },
+  );
 
-  it("stops mapping after five pages", async () => {
+  it("more than five pages is a retryable error, never a partial list", async () => {
     const urls: string[] = [];
     const f = (async (input: string | URL | Request) => {
-      const url = new URL(String(input));
-      urls.push(url.href);
-      let body: unknown = { drafts: [{ id: "x", message: { id: "y" } }], nextPageToken: "more" };
-      if (url.searchParams.has("q")) body = { resultSizeEstimate: 0 };
-      else if (url.pathname.includes("/threads/")) {
-        body = {
-          messages: [{ id: "dm-1", labelIds: ["DRAFT"], payload: { headers: [{ name: "Message-ID", value: OURS }] } }],
-        };
-      }
-      return new Response(JSON.stringify(body), { status: 200 });
+      urls.push(String(input));
+      return new Response(JSON.stringify({ drafts: [{ id: "x", message: { id: "y", threadId: "t-other" } }], nextPageToken: "more" }), {
+        status: 200,
+      });
     }) as typeof fetch;
     const p = createGmailProvider({ fetch: f, configDir: home.home, now: () => NOW, oauth: { fetch: f, endpoints: GOOGLE_ENDPOINTS, now: () => NOW } });
-    expectRetryable(await reject(p.lookupDraft(OURS, "t-reply")), UNMAPPED);
-    expect(urls.filter((u) => u.includes("maxResults=100"))).toHaveLength(5);
+    expectRetryable(await reject(p.threadDrafts("t-reply")), TOO_MANY);
+    expect(urls).toHaveLength(5);
   });
 });
 
@@ -406,23 +380,25 @@ describe("a stored draft's recipients are read strictly (M4b fix wave D)", () =>
         labelIds: ["DRAFT"],
         payload: {
           mimeType: "text/plain",
-          headers: [{ name: "Message-ID", value: OURS }, { name: "Subject", value: "Re: Q4 budget" }, ...headers],
+          headers: [{ name: "Message-ID", value: GMAIL_HEADER }, { name: "Subject", value: "Re: Q4 budget" }, ...headers],
           body: { data: Buffer.from(BODY, "utf8").toString("base64url") },
         },
       },
     };
     const f = (async (input: string | URL | Request) => {
       const url = String(input);
-      return new Response(JSON.stringify(url.includes("/drafts/dr-1") ? body : { drafts: [{ id: "dr-1" }] }), { status: 200 });
+      return new Response(JSON.stringify(url.includes("/drafts/dr-1") ? body : { drafts: [] }), { status: 200 });
     }) as typeof fetch;
     return createGmailProvider({ fetch: f, configDir: home.home, now: () => NOW, oauth: { fetch: f, endpoints: GOOGLE_ENDPOINTS, now: () => NOW } });
   };
   const planFor = (to: string[], cc: string[], bcc: string[]) =>
-    ({ draft: { ...DRAFT, to, cc, bcc, bodySha256: createHash("sha256").update(BODY, "utf8").digest("hex") } }) as unknown as MailDraftPlan;
+    ({
+      draft: { ...DRAFT, messageIdHeader: OURS, to, cc, bcc, bodySha256: createHash("sha256").update(BODY, "utf8").digest("hex") },
+    }) as unknown as MailDraftPlan;
   const found = async (headers: Hdr[]) => {
-    const r = await stored(headers).lookupDraft(OURS, "t-reply");
-    if (r.state !== "present") throw new Error("not found");
-    return r.draft;
+    const r = await stored(headers).getDraft("dr-1");
+    if (r === null) throw new Error("not found");
+    return r;
   };
   /** The header's value as buildDraftMime folds it: Gmail may return it with the line breaks in place. */
   const folded = (name: string, list: string[]): string => {

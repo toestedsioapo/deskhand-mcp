@@ -118,6 +118,6 @@ Not yet run. The owner's exact PowerShell steps are in `m4b-live-check.md` (outs
 | 2 | `inbox_search`, then `inbox_read_thread` on a thread of yours | subjects, snippets and bodies wrapped as untrusted; `ledger_query` shows no body text | |
 | 3 | `inbox_draft_reply` with a bcc to a second address not on the thread; `deskhand pending` | every recipient, the subject and the whole body shown; the new bcc flagged | |
 | 4 | `approve`, then `action_apply` with writes on before `upgrade` | `AUTH_REQUIRED` naming `deskhand auth upgrade` | |
-| 5 | `upgrade`, then `action_apply` | one draft in the thread under Drafts; Sent unchanged; the draft keeps our `Message-ID` and the Bcc | |
+| 5 | `upgrade`, then `action_apply` | `applied`; one draft in the thread under Drafts; Sent unchanged; the draft keeps the Bcc; `ledger_query` shows a `write_landed` row with the draft id (Gmail sets its own `Message-ID`; first run 2026-11-25 found this, see ASSUMPTIONS) | |
 | 6 | `action_apply` again | `replayed: true`, still one draft | |
 | 7 | `ledger.db` after the body sweep | no body text | |

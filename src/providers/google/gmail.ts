@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { SCOPE_GMAIL_COMPOSE, SCOPE_GMAIL_READ } from "../../config/scopes.js";
 import { ProviderError } from "../errors.js";
-import type { DraftLookup, DraftRef, MailAddress, MailMessage, MailProvider, MailThread, NewDraft, ThreadSummary } from "../types.js";
+import type { DraftRef, MailAddress, MailMessage, MailProvider, MailThread, NewDraft, ThreadSummary } from "../types.js";
 import { googleRequest, type GoogleHttpDeps, type GoogleResponse } from "./http.js";
 import { buildDraftMime, decodeEncodedWords, decodeEntities, header, messageBody, parseAddressList, strictRecipients } from "./mime.js";
 
@@ -15,7 +15,7 @@ const MESSAGE_ID = /^<[\x21-\x3b\x3d\x3f-\x7e]+>$/;
 const DRAFT_LIST_PAGES = 5;
 const READ_BACK_FAILED = "the draft was created but could not be read back";
 const NO_DRAFT_ID = "the draft may have been created but the response had no draft id";
-const UNMAPPED = "a draft message was found but could not be mapped to a draft";
+const TOO_MANY_DRAFTS = "too many drafts to check them all";
 
 type Obj = Record<string, unknown>;
 const isObj = (v: unknown): v is Obj => v !== null && typeof v === "object" && !Array.isArray(v);
@@ -55,6 +55,8 @@ function internalMs(op: string, m: Obj): number {
   if (Number.isNaN(new Date(ms).getTime())) throw unreadable(op);
   return ms;
 }
+
+const isoOrEmpty = (ms: number): string => (Number.isNaN(new Date(ms).getTime()) ? "" : new Date(ms).toISOString());
 
 /** Sorted oldest first; `sort` is stable, so equal dates keep Gmail's order. */
 function datedMessages(op: string, json: Obj) {
@@ -102,9 +104,9 @@ interface StoredDraft {
 }
 
 /**
- * A `drafts.get` response as a DraftRef, with the Message-ID as stored. A draft whose Message-ID Gmail changed reaches
- * the engine's comparison only through `createDraft`'s return value; `lookupDraft` requires our exact header and
- * reports any other draft as absent. Recipients are read strictly: anything unreadable marks the draft as differing.
+ * A `drafts.get` response as a DraftRef, with the Message-ID Gmail stored (its own; M4b live check). Recipients are
+ * read strictly: anything unreadable marks the draft as differing. An unreadable `internalDate` is an empty date, which
+ * sorts last among identical drafts.
  */
 function storedDraft(op: string, json: Obj): StoredDraft {
   const m = json.message;
@@ -121,6 +123,7 @@ function storedDraft(op: string, json: Obj): StoredDraft {
       messageId: m.id,
       threadId: m.threadId,
       messageIdHeader: header(m.payload, "Message-ID") ?? "",
+      date: typeof m.internalDate === "string" && INTERNAL_DATE.test(m.internalDate) ? isoOrEmpty(Number(m.internalDate)) : "",
       to: to ?? [],
       cc: cc ?? [],
       bcc: bcc ?? [],
@@ -136,31 +139,11 @@ export function createGmailProvider(deps: GoogleHttpDeps): MailProvider {
   const get = (op: string, url: string) => googleRequest(deps, op, { service: "gmail", method: "GET", url, requiredScope: SCOPE_GMAIL_READ });
   // Encoded, so an id holding `?` or `/` reaches the allowlist as one bad segment and can never address another thread.
   const threadUrl = (id: string, query: string): string => `${BASE}/threads/${encodeURIComponent(id)}?${query}`;
-  const unmapped = (): ProviderError => new ProviderError(PROVIDER, "lookupDraft", { phrase: UNMAPPED, retryable: true });
 
   /** The draft as Gmail holds it; null when it is gone. */
   const readDraft = async (op: string, id: string): Promise<StoredDraft | null> => {
     const res = await get(op, `${BASE}/drafts/${encodeURIComponent(id)}?format=full`);
     return res.status === 404 ? null : storedDraft(op, okBody(op, res));
-  };
-
-  /** The draft id of a draft message, from at most five pages of the draft list. */
-  const draftIdOf = async (op: string, messageId: string): Promise<string> => {
-    let pageToken: string | undefined;
-    for (let page = 0; page < DRAFT_LIST_PAGES; page++) {
-      const params = new URLSearchParams({ maxResults: "100" });
-      if (pageToken !== undefined) params.set("pageToken", pageToken);
-      const res = await get(op, `${BASE}/drafts?${params.toString()}`);
-      if (res.status < 200 || res.status >= 300 || !isObj(res.json)) throw unmapped();
-      const { drafts, nextPageToken } = res.json;
-      if (drafts !== undefined && !Array.isArray(drafts)) throw unmapped();
-      for (const d of (drafts ?? []) as unknown[]) {
-        if (isObj(d) && isObj(d.message) && d.message.id === messageId && typeof d.id === "string" && d.id !== "") return d.id;
-      }
-      if (typeof nextPageToken !== "string" || nextPageToken === "") break;
-      pageToken = nextPageToken;
-    }
-    throw unmapped();
   };
 
   const summary = async (id: string): Promise<ThreadSummary | null> => {
@@ -227,48 +210,52 @@ export function createGmailProvider(deps: GoogleHttpDeps): MailProvider {
       return visibleMessages(op, okBody(op, res)).map((v) => v.id);
     },
 
+    /** M4b live check: the draft by the id Gmail returned. Gone, or no longer a draft (sent), is null. */
+    async getDraft(draftId: string): Promise<DraftRef | null> {
+      const found = await readDraft("getDraft", draftId);
+      return found?.isDraft ? found.ref : null;
+    },
+
     /**
-     * Decision 3. Search first; when it finds nothing (its index can lag), the thread's `DRAFT` messages. An exact
-     * Message-ID on a `DRAFT` message is required on both routes: anyone can send a mail carrying our header.
+     * Every draft of the thread, from the full draft list (not search: its index can lag). A listed draft with no
+     * thread id is read to learn it. Fails rather than return a partial list, so a POST never follows a missed draft.
      */
-    async lookupDraft(messageIdHeader: string, threadId: string): Promise<DraftLookup> {
-      const op = "lookupDraft";
-      const params = new URLSearchParams({ q: `rfc822msgid:${messageIdHeader.replace(/^<|>$/g, "")}`, maxResults: "10" });
-      const listed = okBody(op, await get(op, `${BASE}/drafts?${params.toString()}`));
-      if (listed.drafts !== undefined && !Array.isArray(listed.drafts)) throw unreadable(op);
-      for (const hit of (listed.drafts ?? []) as unknown[]) {
-        if (!isObj(hit) || typeof hit.id !== "string" || hit.id === "") throw unreadable(op);
-        const found = await readDraft(op, hit.id);
-        if (found?.isDraft && found.ref.messageIdHeader === messageIdHeader) return { state: "present", draft: found.ref };
-      }
-      const query = new URLSearchParams({ format: "metadata", metadataHeaders: "Message-ID" });
-      const res = await get(op, threadUrl(threadId, query.toString()));
-      if (res.status === 404) return { state: "absent" };
-      const thread = okBody(op, res);
-      if (!Array.isArray(thread.messages)) throw unreadable(op);
-      for (const m of thread.messages as unknown[]) {
-        if (!isObj(m) || typeof m.id !== "string" || m.id === "") throw unreadable(op);
-        if (!labelsOf(op, m).includes("DRAFT") || header(m.payload, "Message-ID") !== messageIdHeader) continue;
-        const draftId = await draftIdOf(op, m.id);
-        let mapped: StoredDraft | null;
-        try {
-          mapped = await readDraft(op, draftId);
-        } catch (e) {
-          // A draft message is there but cannot be read as a draft: retryable, so no POST follows. Auth stays auth.
-          throw e instanceof ProviderError ? unmapped() : e;
+    async threadDrafts(threadId: string): Promise<DraftRef[]> {
+      const op = "threadDrafts";
+      const ids: string[] = [];
+      let pageToken: string | undefined;
+      for (let page = 0; ; page++) {
+        if (page === DRAFT_LIST_PAGES) throw new ProviderError(PROVIDER, op, { phrase: TOO_MANY_DRAFTS, retryable: true });
+        const params = new URLSearchParams({ maxResults: "100" });
+        if (pageToken !== undefined) params.set("pageToken", pageToken);
+        const listed = okBody(op, await get(op, `${BASE}/drafts?${params.toString()}`));
+        if (listed.drafts !== undefined && !Array.isArray(listed.drafts)) throw unreadable(op);
+        for (const d of (listed.drafts ?? []) as unknown[]) {
+          if (!isObj(d) || typeof d.id !== "string" || d.id === "") throw unreadable(op);
+          const t = isObj(d.message) ? d.message.threadId : undefined;
+          if (t === undefined || t === threadId) ids.push(d.id);
+          else if (typeof t !== "string") throw unreadable(op);
         }
-        if (!mapped?.isDraft || mapped.ref.messageIdHeader !== messageIdHeader) throw unmapped();
-        return { state: "present", draft: mapped.ref };
+        const next = listed.nextPageToken;
+        if (typeof next !== "string" || next === "") break;
+        pageToken = next;
       }
-      return { state: "absent" };
+      const drafts: DraftRef[] = [];
+      // One at a time: Gmail limits concurrent calls per user.
+      for (const id of ids) {
+        const found = await readDraft(op, id);
+        if (found?.isDraft && found.ref.threadId === threadId) drafts.push(found.ref);
+      }
+      return drafts;
     },
 
     /**
      * One POST and no lookup of its own: the engine looks under the write claim, so nothing unbounded sits between that
-     * check and this request. `singleSend` keeps the request inside the claim's hold. After a 2xx the draft exists, so
-     * every later failure is retryable: an auth error here must not release the claim.
+     * check and this request. `singleSend` keeps the request inside the claim's hold. The draft id goes to `onCreated`
+     * as soon as the 2xx names it, before the read-back, so the engine records it (M4b live check). After a 2xx the
+     * draft exists, so every later failure is retryable: an auth error here must not release the claim.
      */
-    async createDraft(d: NewDraft): Promise<DraftRef> {
+    async createDraft(d: NewDraft, onCreated: (draftId: string) => void): Promise<DraftRef> {
       const op = "createDraft";
       const raw = Buffer.from(buildDraftMime(d), "utf8").toString("base64url");
       const res = await googleRequest(deps, op, {
@@ -282,6 +269,7 @@ export function createGmailProvider(deps: GoogleHttpDeps): MailProvider {
       if (res.status < 200 || res.status >= 300) throw new ProviderError(PROVIDER, op, { status: res.status });
       const id = isObj(res.json) ? res.json.id : undefined;
       if (typeof id !== "string" || id === "") throw new ProviderError(PROVIDER, op, { phrase: NO_DRAFT_ID, retryable: true });
+      onCreated(id);
       let stored: StoredDraft | null;
       try {
         stored = await readDraft(op, id);

@@ -8,10 +8,9 @@
     "body": {
       "drafts": [
         {
-          "id": "dr-other-1",
+          "id": "dr-1",
           "message": {
-            "id": "dm-other-1",
-            "threadId": "t-other"
+            "id": "dm-1"
           }
         }
       ]

@@ -309,9 +309,11 @@ describe("calendar.create_event kind", () => {
   const kind = () => calendarCreateEvent;
   const plan = () => kind().schema.parse(validPlan());
   const ps = () => ({ calendar: provider, mail: createFixtureMailProvider() });
+  // A calendar write has a provider-enforced id; it never reads or records ledger write ids.
+  const noWrites = { landed: (): string[] => [], record: (): boolean => true };
   it("is the registered kind", () => expect(getPlanKind("calendar.create_event")).toBe(calendarCreateEvent));
   it("stores the event as is, and explains the plan as is", async () => {
-    const ref = await kind().execute(plan(), "key1", ps());
+    const ref = await kind().execute(plan(), "key1", ps(), noWrites);
     expect(kind().store(ref)).toBe(ref);
     const p = plan();
     expect(kind().explainPlan(p)).toBe(p);
@@ -328,12 +330,12 @@ describe("calendar.create_event kind", () => {
     expect((await kind().recheck(plan(), ps())).ok).toBe(false);
   });
   it("execute then lookupExisting by idempotency key", async () => {
-    expect(await kind().lookupExisting(plan(), "key1", ps())).toEqual({ state: "absent" });
-    const ref = await kind().execute(plan(), "key1", ps());
-    expect(await kind().lookupExisting(plan(), "key1", ps())).toEqual({ state: "present", value: ref });
+    expect(await kind().lookupExisting(plan(), "key1", ps(), noWrites)).toEqual({ state: "absent" });
+    const ref = await kind().execute(plan(), "key1", ps(), noWrites);
+    expect(await kind().lookupExisting(plan(), "key1", ps(), noWrites)).toEqual({ state: "present", value: ref });
   });
   it("matches: the approved event under our key; never another id, title, instant or attendee set", async () => {
-    const ref = await kind().execute(plan(), "key1", ps());
+    const ref = await kind().execute(plan(), "key1", ps(), noWrites);
     const k = kind();
     expect(k.matches(plan(), "key1", ref)).toBe(true);
     expect(k.matches(plan(), "key2", ref)).toBe(false);
@@ -349,7 +351,7 @@ describe("calendar.create_event kind", () => {
     expect(k.matches(plan(), "key1", { ...ref, attendees: [...ref.attendees, ref.attendees[0]!] })).toBe(true);
   });
   it("matches: the organiser must be you; a recurring event never matches", async () => {
-    const ref = await kind().execute(plan(), "key1", ps());
+    const ref = await kind().execute(plan(), "key1", ps(), noWrites);
     const k = kind();
     expect(ref.organizerSelf).toBe(true); // the fixture marks its own writes
     expect(k.matches(plan(), "key1", { ...ref, organizerSelf: undefined })).toBe(false);
@@ -357,7 +359,7 @@ describe("calendar.create_event kind", () => {
     expect(k.matches(plan(), "key1", { ...ref, recurring: true })).toBe(false);
   });
   it("matches: the owner as a self attendee counts only when the plan invited the owner", async () => {
-    const ref = await kind().execute(plan(), "key1", ps());
+    const ref = await kind().execute(plan(), "key1", ps(), noWrites);
     const k = kind();
     const p = plan();
     const withOwner = k.schema.parse(validPlan({}, { attendees: [...validPlan().event.attendees, "Me@Example.com"] }));

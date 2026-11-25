@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { applyAction, idempotencyKey } from "../src/approval/apply.js";
 import { approveAction } from "../src/approval/approve.js";
 import { mailCreateDraftReply } from "../src/approval/mail-draft-kind.js";
+import { writeRecords } from "../src/approval/write-landed.js";
 import { calendarCreateEvent, getPlanKind, renderDiff } from "../src/approval/plan-kinds.js";
 import { createPlan } from "../src/approval/plans.js";
 import { runCli } from "../src/cli/index.js";
@@ -557,11 +558,14 @@ describe("apply with a draft plan (the kind's provider calls)", () => {
     expect(getAction(hh.db, id)!.result_json).not.toContain("The numbers look right");
   });
 
-  it("a draft under our Message-ID that differs fails with the draft phrase (carried c)", async () => {
+  it("the draft this action recorded, changed, fails with the draft phrase (carried c)", async () => {
     const hh = await harness({ DESKHAND_ALLOW_WRITES: "1" });
     const id = await approvedDraft(hh);
     const p = ours().draft;
-    await hh.ctx.mail!.createDraft({ ...p, body: DRAFT_BODY, bcc: ["mallory@example.com"] });
+    await hh.ctx.mail!.createDraft(
+      { ...p, idempotencyKey: idempotencyKey(id), body: DRAFT_BODY, bcc: ["mallory@example.com"] },
+      (draftId) => void writeRecords(hh.ctx, id).record(draftId),
+    );
     expect(await applyAction(hh.ctx, id)).toEqual({
       ok: false,
       errorCode: "STALE_PLAN",

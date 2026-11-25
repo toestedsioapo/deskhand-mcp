@@ -521,10 +521,12 @@ function listHeader(name: string, values: readonly string[], separator: "," | ""
   return lines.join(CRLF);
 }
 
-/** The draft as RFC 5322 text (M4b decision 4). No From header: Gmail sets the account address. */
+/**
+ * The draft as RFC 5322 text (M4b decision 4). No From header: Gmail sets the account address. No Message-ID either:
+ * Gmail replaces a client-supplied one with its own (M4b live check, 2026-11-25), so the draft is identified by its id.
+ */
 export function buildDraftMime(d: NewDraft): string {
   const headers = [
-    `Message-ID: ${checkedHeader(d.messageIdHeader)}`,
     ...(d.inReplyTo === null ? [] : [`In-Reply-To: ${checkedHeader(d.inReplyTo)}`]),
     ...(d.references.length > 0 ? [listHeader("References", d.references, "")] : []),
     listHeader("To", d.to, ","),

@@ -424,7 +424,7 @@ describe("safety structure", () => {
     const home = makeTempHome();
     try {
       const cases = [
-        ["fixture", "fixture mail", "no mailbox in this world", ["profile", "searchThreads", "getThread", "threadMessageIds", "lookupDraft", "createDraft"]],
+        ["fixture", "fixture mail", "no mailbox in this world", ["profile", "searchThreads", "getThread", "threadMessageIds", "getDraft", "threadDrafts", "createDraft"]],
       ] as const;
       for (const [name, label, phrase, ops] of cases) {
         const mail = selectProvider(loadConfig({ ...home.env, DESKHAND_PROVIDER: name })).mail!;
@@ -433,12 +433,16 @@ describe("safety structure", () => {
           searchThreads: () => mail.searchThreads("x", 1),
           getThread: () => mail.getThread("t", 1),
           threadMessageIds: () => mail.threadMessageIds("t"),
-          lookupDraft: () => mail.lookupDraft("<a@b>", "t"),
+          getDraft: () => mail.getDraft("d"),
+          threadDrafts: () => mail.threadDrafts("t"),
           createDraft: () =>
-            mail.createDraft({
-              threadId: "t", messageIdHeader: "<a@b>", inReplyTo: null, references: [],
-              to: ["a@example.com"], cc: [], bcc: [], subject: "s", body: "b",
-            }),
+            mail.createDraft(
+              {
+                threadId: "t", idempotencyKey: "k", inReplyTo: null, references: [],
+                to: ["a@example.com"], cc: [], bcc: [], subject: "s", body: "b",
+              },
+              () => undefined,
+            ),
         };
         for (const op of ops) {
           const err = await calls[op]!().then(() => undefined, (e: unknown) => e);

@@ -6,6 +6,7 @@ import { isPlainLine, VISIBLE_ASCII } from "../util/sanitize.js";
 import { omittedMarker } from "../ledger/redact.js";
 import { EVENT_DELETED } from "../providers/errors.js";
 import { mailCreateDraftReply } from "./mail-draft-kind.js";
+import type { WriteRecords } from "./write-landed.js";
 
 export type RecheckResult = { ok: true } | { ok: false; reason: string };
 
@@ -42,15 +43,19 @@ export interface PlanKind<P, R> {
    */
   renderDiff(plan: P, viewerTimeZone: string, audience: DiffAudience): string[];
   recheck(plan: P, p: Providers): Promise<RecheckResult>;
-  /** What the provider holds under the idempotency key: absent, cancelled (deleted) or present. */
-  lookupExisting(plan: P, key: string, p: Providers): Promise<Lookup<R>>;
+  /**
+   * What the provider holds under the idempotency key: absent, cancelled (deleted) or present. `writes` is this
+   * action's record of provider write ids in the ledger, for a kind whose provider has no key of ours (a draft).
+   */
+  lookupExisting(plan: P, key: string, p: Providers, writes: WriteRecords): Promise<Lookup<R>>;
   /**
    * True only when `r` is the approved plan's own write: our id and every approved field. The apply engine calls
    * it for every value it would accept (recovery, the re-lookups, and the value `execute` returns, which may be an
    * existing one), so a foreign or edited write under our id is never recorded as applied.
    */
   matches(plan: P, key: string, r: R): boolean;
-  execute(plan: P, key: string, p: Providers): Promise<R>;
+  /** The write. A kind whose provider assigns the id records it through `writes` as soon as the provider returns it. */
+  execute(plan: P, key: string, p: Providers, writes: WriteRecords): Promise<R>;
   /** What is stored as `result_json` (canonical JSON of it). Never holds text the ledger must not keep. */
   store(r: R): unknown;
   /** The `action_apply` `result`, built from the parsed `result_json`: the first apply and a replay alike. */

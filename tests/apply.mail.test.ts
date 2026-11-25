@@ -7,6 +7,7 @@ import { applyAction, idempotencyKey } from "../src/approval/apply.js";
 import { createPlan } from "../src/approval/plans.js";
 import { approveAction } from "../src/approval/approve.js";
 import { sweepDraftBodies } from "../src/approval/body-sweep.js";
+import { writeRecords } from "../src/approval/write-landed.js";
 import {
   DRAFT_DIFFERS,
   draftHeaderFor,
@@ -100,7 +101,9 @@ describe("propose -> approve -> apply a draft (end to end on the fixture)", () =
 
     const first = await apply(hh, id);
     expect(first.isError, text(first)).toBeFalsy();
-    const header = draftHeaderFor(idempotencyKey(id));
+    // The fixture, like Gmail, stores a Message-ID of its own (M4b live check).
+    const header = "<fixture.dr_1@mail.fixture.invalid>";
+    expect(header).not.toBe(draftHeaderFor(idempotencyKey(id)));
     const w = (content: string) => ({ untrusted: true, source: "mail:th_budget", content });
     expect(first.structuredContent).toEqual({
       action_id: id,
@@ -123,6 +126,7 @@ describe("propose -> approve -> apply a draft (end to end on the fixture)", () =
         messageId: "msg_dr_1",
         threadId: "th_budget",
         messageIdHeader: header,
+        date: drafts(hh)[0]!.date,
         to: ["ben@example.com"],
         cc: [],
         bcc: [],
@@ -156,14 +160,14 @@ describe("propose -> approve -> apply a draft (end to end on the fixture)", () =
     }
     expect(rawResult(hh, id)).not.toContain(SECRET);
     for (const row of hh.rows()) expect(row.preview_json).not.toContain(SECRET);
-    expect(lifecycle(hh, id)).toEqual(["plan_created", "approved", "cli_command", "write_claimed", "applied"]);
+    expect(lifecycle(hh, id)).toEqual(["plan_created", "approved", "cli_command", "write_claimed", "write_landed", "applied"]);
 
     // No-send: the provider object never grew a send member, and the write log holds only the one draft line,
     // with In-Reply-To and References from the thread and the body omitted.
     expectNoSend(hh);
     const lines = readFileSync(writeLog, "utf8").trim().split("\n").map((l) => JSON.parse(l) as Record<string, unknown>);
     expect(lines.map((l) => l["op"])).toEqual(["mail.createDraft"]);
-    expect(lines[0]!["idempotency_key"]).toBe(header);
+    expect(lines[0]!["idempotency_key"]).toBe(idempotencyKey(id));
     expect(lines[0]!["request"]).toMatchObject({
       inReplyTo: "<m2@example.com>",
       references: ["<m1@example.com>", "<m2@example.com>"],
@@ -238,11 +242,15 @@ describe("the re-check (decision 8) and the differs phrase", () => {
     expect(await applyAction(hh.ctx, id)).toMatchObject({ ok: true, replayed: false });
   });
 
-  it("a draft under our Message-ID with a different bcc: STALE_PLAN with the fixed differs phrase, no second draft", async () => {
+  it("the draft this action recorded, with a different bcc: STALE_PLAN with the fixed differs phrase, no second draft", async () => {
     const { hh } = await harness();
     const id = await proposeAndApprove(hh);
     const d = planOf(hh, id).draft;
-    await hh.ctx.mail!.createDraft({ ...d, body: BODY, bcc: ["mallory@example.com"] });
+    const changed = await hh.ctx.mail!.createDraft(
+      { ...d, idempotencyKey: idempotencyKey(id), body: BODY, bcc: ["mallory@example.com"] },
+      (draftId) => void writeRecords(hh.ctx, id).record(draftId),
+    );
+    expect(changed.draftId).toBe("dr_1");
     const r = await apply(hh, id);
     expect(text(r)).toBe(`STALE_PLAN: ${DRAFT_DIFFERS}`);
     expect(DRAFT_DIFFERS).toBe("a draft with this action's id exists but differs from the approved plan");
@@ -366,7 +374,7 @@ describe("gate 7a: a swept plan whose draft already exists is recovered (carried
     const id = await proposeAndApprove(hh);
     const plan = planOf(hh, id);
     // A crashed apply left the draft behind ...
-    await hh.ctx.mail!.createDraft({ ...plan.draft, body: BODY });
+    await hh.ctx.mail!.createDraft({ ...plan.draft, idempotencyKey: idempotencyKey(id), body: BODY }, () => undefined);
     // ... and the sweep then removed the body (plan_hash unchanged by construction).
     const { body: _b, ...rest } = plan.draft;
     hh.db.run("UPDATE actions SET plan_json = ? WHERE id = ?", [canonicalJson({ ...plan, draft: { ...rest, bodyRemoved: true } }), id]);

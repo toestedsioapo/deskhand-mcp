@@ -126,7 +126,7 @@ describe("migration 4 (write_claimed)", () => {
 });
 
 describe("released migrations are frozen", () => {
-  it("EVENT_KINDS_V1 is the nine original kinds; write_claimed is the only addition", () => {
+  it("EVENT_KINDS_V1 is the nine original kinds; write_claimed and write_landed are the only additions", () => {
     expect([...EVENT_KINDS_V1]).toEqual([
       "tool_call",
       "cli_command",
@@ -138,7 +138,7 @@ describe("released migrations are frozen", () => {
       "apply_refused",
       "apply_failed",
     ]);
-    expect([...EVENT_KINDS]).toEqual([...EVENT_KINDS_V1, "write_claimed"]);
+    expect([...EVENT_KINDS]).toEqual([...EVENT_KINDS_V1, "write_claimed", "write_landed"]);
   });
 
   // SHA-256 of each migration's SQL, measured at d9cefb7, before EVENT_KINDS grew.

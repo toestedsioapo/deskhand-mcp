@@ -187,6 +187,7 @@ exports[`action_explain schemas > output schema is stable 1`] = `
               "apply_refused",
               "apply_failed",
               "write_claimed",
+              "write_landed",
             ],
             "type": "string",
           },

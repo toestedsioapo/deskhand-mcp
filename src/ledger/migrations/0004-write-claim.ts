@@ -4,7 +4,7 @@ import type { LedgerDb } from "../db.js";
 const list = (values: readonly string[]): string => values.map((v) => `'${v}'`).join(",");
 
 /**
- * DDL v4: `events` is rebuilt so its `kind` CHECK allows write_claimed (SQLite cannot alter a CHECK in place). Rows
+ * DDL v4: `events` is rebuilt so its `kind` CHECK allows write_claimed and write_landed (SQLite cannot alter a CHECK in place). Rows
  * keep their ids and order; indexes and the append-only triggers are recreated.
  * Textually equivalent to the "DDL v4" block in docs/ledger-contract.md (a test compares).
  */

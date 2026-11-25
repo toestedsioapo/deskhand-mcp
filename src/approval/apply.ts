@@ -8,6 +8,7 @@ import { AuthRequiredError, ProviderError } from "../providers/errors.js";
 import type { Providers } from "../providers/types.js";
 import { getPlanKind, type AnyPlanKind, type ApplyOutputResult, type Lookup } from "./plan-kinds.js";
 import { checkBeforeWrite, hasLiveClaim, takeWriteClaim } from "./write-claim.js";
+import { writeRecords } from "./write-landed.js";
 
 /**
  * The apply engine: the ONLY place a plan kind's write is executed (a
@@ -280,12 +281,14 @@ export async function applyAction(ctx: AppContext, actionId: string): Promise<Ap
   const { kind, plan: validPlan } = stored;
   const providers: Providers = { calendar: ctx.provider, mail: ctx.mail };
   const key = idempotencyKey(actionId);
+  // The provider write ids this action recorded (a draft's id; M4b live check). Read from the ledger on every lookup.
+  const writes = writeRecords(ctx, actionId);
 
   // What the provider holds under the idempotency key. A read error is retryable: refuse, status unchanged.
   type Found = { found: Lookup<unknown> } | { failed: unknown };
   const lookup = async (): Promise<Found> => {
     try {
-      return { found: await kind.lookupExisting(validPlan, key, providers) };
+      return { found: await kind.lookupExisting(validPlan, key, providers, writes) };
     } catch (e) {
       return { failed: e };
     }
@@ -374,7 +377,7 @@ export async function applyAction(ctx: AppContext, actionId: string): Promise<Ap
   // 9. Write with the idempotency key, then commit.
   let result: unknown;
   try {
-    result = await kind.execute(validPlan, key, providers);
+    result = await kind.execute(validPlan, key, providers, writes);
   } catch (e) {
     // The write may have happened anyway (e.g. a timeout after the provider accepted it): look for our event.
     const ambiguous = e instanceof ProviderError && e.retryable;

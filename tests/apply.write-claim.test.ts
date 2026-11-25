@@ -1,17 +1,18 @@
-import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it } from "vitest";
 import type { AppContext } from "../src/app-context.js";
 import { applyAction } from "../src/approval/apply.js";
 import { approveAction } from "../src/approval/approve.js";
 import { sweepDraftBodies } from "../src/approval/body-sweep.js";
 import { takeWriteClaim } from "../src/approval/write-claim.js";
+import { writeRecords } from "../src/approval/write-landed.js";
 import type { CliIo } from "../src/cli/io.js";
 import { getAction } from "../src/ledger/actions.js";
 import { LedgerDb } from "../src/ledger/db.js";
 import { last4 } from "../src/ledger/ids.js";
 import { AuthRequiredError, ProviderError } from "../src/providers/errors.js";
 import { createFixtureMailProvider } from "../src/providers/fixture/index.js";
-import type { DraftRef, MailProvider } from "../src/providers/types.js";
+import type { NewDraft } from "../src/providers/types.js";
+import { gmailLike } from "./helpers/gmail-like.js";
 import { NOW, setupHarness } from "./helpers/harness.js";
 import { mailWorld, msg, type Thread } from "./helpers/mail-world.js";
 import { seedAction } from "./helpers/seed.js";
@@ -68,61 +69,6 @@ function deferred() {
   return { promise, resolve, reject };
 }
 
-/**
- * A mailbox that behaves like Gmail where it matters: `createDraft` never de-duplicates (each call is a POST and a new
- * draft), and a draft is found only through the thread it is in, so a lookup without the thread id misses it.
- */
-function gmailLike(base: MailProvider) {
-  const state = {
-    posts: 0,
-    lookups: 0,
-    stored: [] as DraftRef[],
-    /** Nothing is readable yet (a landed write that neither route shows). */
-    hidden: false,
-    threadChanged: false,
-    onLookup: undefined as undefined | ((n: number) => Promise<void> | void),
-    onPost: undefined as undefined | (() => Promise<void> | void),
-    /** The next POST fails; `lands` says whether the draft was created anyway. */
-    postFails: undefined as undefined | { error: unknown; lands: boolean },
-  };
-  const mail: MailProvider = {
-    profile: () => base.profile(),
-    searchThreads: (q, l) => base.searchThreads(q, l),
-    getThread: (t, n) => base.getThread(t, n),
-    threadMessageIds: async (t) => (state.threadChanged ? ["m1", "m2", "m9"] : base.threadMessageIds(t)),
-    async lookupDraft(header, threadId) {
-      state.lookups += 1;
-      await state.onLookup?.(state.lookups);
-      if (state.hidden) return { state: "absent" };
-      const draft = state.stored.find((d) => d.messageIdHeader === header && d.threadId === threadId);
-      return draft ? { state: "present", draft } : { state: "absent" };
-    },
-    async createDraft(d) {
-      state.posts += 1;
-      await state.onPost?.();
-      const failure = state.postFails;
-      state.postFails = undefined;
-      if (failure && !failure.lands) throw failure.error;
-      const n = state.stored.length + 1;
-      const created: DraftRef = {
-        draftId: `dr_${n}`,
-        messageId: `msg_dr_${n}`,
-        threadId: d.threadId,
-        messageIdHeader: d.messageIdHeader,
-        to: [...d.to],
-        cc: [...d.cc],
-        bcc: [...d.bcc],
-        subject: d.subject,
-        bodySha256: createHash("sha256").update(d.body, "utf8").digest("hex"),
-      };
-      state.stored.push(created);
-      if (failure) throw failure.error;
-      return created;
-    },
-  };
-  return { mail, state };
-}
-
 const approvalIo = (id: string): CliIo => ({
   out: () => undefined,
   err: () => undefined,
@@ -141,10 +87,16 @@ async function setup() {
   expect(r.isError, JSON.stringify(r.content)).toBeFalsy();
   const id = (r.structuredContent as { action_id: string }).action_id;
   expect(await approveAction(hh.ctx, id, approvalIo(id))).toEqual({ ok: true });
-  const { mail, state } = gmailLike(base);
+  const { mail, state, seed } = gmailLike(base);
   hh.ctx.mail = mail;
   hh.ctx.clock = () => new Date(now);
-  return { hh, id, state };
+  return { hh, id, state, seed };
+}
+
+/** The approved draft of an action, as the engine would hand it to the provider. */
+function approvedDraft(hh: H, id: string): NewDraft {
+  const d = (getAction(hh.db, id)!.plan_json as { draft: Omit<NewDraft, "idempotencyKey"> }).draft;
+  return { ...d, idempotencyKey: "0".repeat(64), body: BODY };
 }
 
 /** A second ledger connection to the same file: what another server process would hold. */
@@ -187,11 +139,11 @@ describe("one POST per action", () => {
     expect(claims(hh, id)).toHaveLength(1);
   });
 
-  it("a successful draft apply records write_claimed (ok, action_apply) before applied", async () => {
+  it("a successful draft apply records write_claimed (ok, action_apply), then write_landed, before applied", async () => {
     const { hh, id } = await setup();
     await applyAction(hh.ctx, id);
     const kinds = hh.rows().filter((r) => r.action_id === id && r.kind !== "tool_call").map((r) => r.kind);
-    expect(kinds).toEqual(["plan_created", "approved", "cli_command", "write_claimed", "applied"]);
+    expect(kinds).toEqual(["plan_created", "approved", "cli_command", "write_claimed", "write_landed", "applied"]);
     expect(claims(hh, id)[0]).toMatchObject({ tool: "action_apply", outcome: "ok", error_code: null });
   });
 
@@ -300,7 +252,7 @@ describe("exits known to have sent no POST release the claim", () => {
     const { hh, id, state } = await setup();
     state.postFails = { error: new AuthRequiredError(), lands: false };
     state.onLookup = (n) => {
-      if (n === 3) throw new ProviderError("gmail", "lookupDraft", { status: 503 });
+      if (n === 3) throw new ProviderError("gmail", "threadDrafts", { status: 503 });
     };
     expect(await applyAction(hh.ctx, id)).toMatchObject({ ok: false, errorCode: "PROVIDER_ERROR" });
     expect(released(hh, id)).toEqual([claims(hh, id)[0]!.id]);
@@ -317,7 +269,7 @@ describe("exits known to have sent no POST release the claim", () => {
   it("a lookup failure after the claim releases it, with no POST", async () => {
     const { hh, id, state } = await setup();
     state.onLookup = (n) => {
-      if (n === 2) throw new ProviderError("gmail", "lookupDraft", { status: 503 });
+      if (n === 2) throw new ProviderError("gmail", "threadDrafts", { status: 503 });
     };
     expect(await applyAction(hh.ctx, id)).toMatchObject({ ok: false, errorCode: "PROVIDER_ERROR" });
     expect(state.posts).toBe(0);
@@ -376,7 +328,7 @@ describe("exits known to have sent no POST release the claim", () => {
     const [claimA, claimB] = claims(hh, id);
 
     // A wakes up to a failed lookup: it releases only its own claim.
-    aResume.reject(new ProviderError("gmail", "lookupDraft", { status: 503 }));
+    aResume.reject(new ProviderError("gmail", "threadDrafts", { status: 503 }));
     expect(await a).toMatchObject({ ok: false, errorCode: "PROVIDER_ERROR" });
     expect(released(hh, id)).toEqual([claimA!.id]);
 
@@ -455,22 +407,17 @@ describe("the claim and the other gates", () => {
   });
 
   it("recovery at gate 6 writes no claim", async () => {
-    const { hh, id, state } = await setup();
-    const plan = getAction(hh.db, id)!.plan_json as { draft: Record<string, unknown> };
-    await hh.ctx.mail!.createDraft({ ...plan.draft, body: BODY } as never);
-    state.posts = 0;
+    const { hh, id, state, seed } = await setup();
+    seed(approvedDraft(hh, id));
     expect(await applyAction(hh.ctx, id)).toMatchObject({ ok: true, replayed: true });
     expect(state.posts).toBe(0);
     expect(claims(hh, id)).toEqual([]);
   });
 
   it("a draft that appears during the lookup under the claim is recovered, with no POST", async () => {
-    const { hh, id, state } = await setup();
-    const plan = getAction(hh.db, id)!.plan_json as { draft: Record<string, unknown> };
-    state.onLookup = async (n) => {
-      if (n !== 2) return;
-      await hh.ctx.mail!.createDraft({ ...plan.draft, body: BODY } as never);
-      state.posts = 0;
+    const { hh, id, state, seed } = await setup();
+    state.onLookup = (n) => {
+      if (n === 2) seed(approvedDraft(hh, id));
     };
     expect(await applyAction(hh.ctx, id)).toMatchObject({ ok: true, replayed: true });
     expect(state.posts).toBe(0);
@@ -505,7 +452,7 @@ describe("the claim and the other gates", () => {
       const { hh, id, state } = await setup();
       state.postFails = { error: new ProviderError("gmail", "createDraft", { status: 400 }), lands: false };
       state.onLookup = (n) => {
-        if (n === 3) throw new ProviderError("gmail", "lookupDraft", { status: 503 });
+        if (n === 3) throw new ProviderError("gmail", "threadDrafts", { status: 503 });
       };
       expect(await applyAction(hh.ctx, id)).toMatchObject({ ok: false, errorCode: "PROVIDER_ERROR" });
       expect(sequence(hh, id)).toEqual(["write_claimed", "apply_refused"]);
@@ -521,16 +468,17 @@ describe("the claim and the other gates", () => {
       expect(status(hh, id)).toBe("failed");
     });
 
-    it("a differing draft found under the claim: write_claimed, apply_failed (STALE_PLAN); failed, no POST", async () => {
-      const { hh, id, state } = await setup();
-      const plan = getAction(hh.db, id)!.plan_json as { draft: Record<string, unknown> };
-      state.onLookup = async (n) => {
-        if (n !== 2) return;
-        await hh.ctx.mail!.createDraft({ ...plan.draft, body: BODY, subject: "Edited" } as never);
-        state.posts = 0;
+    it("this action's recorded draft, edited, found under the claim: apply_failed (STALE_PLAN); failed, no POST", async () => {
+      const { hh, id, state, seed } = await setup();
+      // Another process of this action POSTs and records its draft while this one is in its recovery lookup; the
+      // user then edits it.
+      state.onLookup = (n) => {
+        if (n !== 1) return;
+        const d = seed({ ...approvedDraft(hh, id), subject: "Edited" });
+        writeRecords(hh.ctx, id).record(d.draftId);
       };
       expect(await applyAction(hh.ctx, id)).toMatchObject({ ok: false, errorCode: "STALE_PLAN" });
-      expect(sequence(hh, id)).toEqual(["write_claimed", "apply_failed"]);
+      expect(sequence(hh, id)).toEqual(["write_landed", "write_claimed", "apply_failed"]);
       expect(state.posts).toBe(0);
     });
   });
