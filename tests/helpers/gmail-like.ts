@@ -36,6 +36,8 @@ export function gmailLike(base: MailProvider) {
     failReads: 0,
     onLookup: undefined as undefined | ((n: number) => Promise<void> | void),
     onPost: undefined as undefined | (() => Promise<void> | void),
+    /** Runs after a POST's draft is stored and before the provider reports its id (the window before the record). */
+    onStored: undefined as undefined | ((d: DraftRef) => Promise<void> | void),
     /**
      * The next POST fails. `lands`: the draft was created anyway. `confirmed`: the provider returned its id (the
      * engine's callback ran) before the failure, as when the read-back after a 2xx fails.
@@ -84,6 +86,7 @@ export function gmailLike(base: MailProvider) {
       if (failure && !failure.lands) throw failure.error;
       const created = next(d);
       state.stored.push(created);
+      await state.onStored?.(created);
       if (failure && failure.confirmed !== true) throw failure.error;
       onCreated(created.draftId);
       if (failure) throw failure.error;

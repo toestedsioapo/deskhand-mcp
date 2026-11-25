@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import { omittedMarker } from "../ledger/redact.js";
+import { ProviderError } from "../providers/errors.js";
 import type { DraftRef } from "../providers/types.js";
 import { untrusted } from "../util/untrusted.js";
 import { isPlainLine, MAX_BODY_CHARS, normaliseBody, VISIBLE_ASCII } from "../util/sanitize.js";
@@ -197,6 +198,9 @@ function oldestFirst(a: DraftRef, b: DraftRef): number {
   return t(a) - t(b) || (a.draftId < b.draftId ? -1 : a.draftId > b.draftId ? 1 : 0);
 }
 
+const ID_NOT_RECORDED = "the draft was created but its id could not be recorded";
+const ID_TAKEN = "the draft's id is already recorded by another action";
+
 export const mailCreateDraftReply: PlanKind<MailDraftPlan, DraftRef> = {
   kind: "mail.create_draft_reply",
   schema: mailDraftPlanSchema,
@@ -284,9 +288,11 @@ export const mailCreateDraftReply: PlanKind<MailDraftPlan, DraftRef> = {
 
   /**
    * M4b live check (owner decision 2026-11-25). The draft id this action recorded decides: gone is `cancelled`, never
-   * recreated, and an edited draft fails `matches`. With no id recorded (a crash or an ambiguous failure before the
-   * POST returned one), the thread's drafts with the approved content, oldest first; the first one no other action
-   * recorded is adopted, and recorded as this action's before it is returned.
+   * recreated, and an edited draft fails `matches`. With no id recorded, only an action that took a write claim (so it
+   * may have POSTed: a crash or an ambiguous failure before the id came back) looks at the thread's drafts with the
+   * approved content, oldest first; the first one no other action recorded is adopted, and recorded as this action's
+   * before it is returned. An action that never claimed has written nothing to recover, so it never adopts a draft that
+   * another action's in-flight POST just created (M4b re-review).
    */
   async lookupExisting(plan, _key, { mail }, writes) {
     const recorded = writes.landed()[0];
@@ -294,6 +300,7 @@ export const mailCreateDraftReply: PlanKind<MailDraftPlan, DraftRef> = {
       const draft = await mail.getDraft(recorded);
       return draft === null ? { state: "cancelled" } : { state: "present", value: draft };
     }
+    if (!writes.mayHaveWritten()) return { state: "absent" };
     const candidates = (await mail.threadDrafts(plan.draft.threadId)).filter((d) => sameContent(plan, d)).sort(oldestFirst);
     for (const draft of candidates) {
       if (writes.record(draft.draftId)) return { state: "present", value: draft };
@@ -325,8 +332,18 @@ export const mailCreateDraftReply: PlanKind<MailDraftPlan, DraftRef> = {
         subject: d.subject,
         body: d.body,
       },
-      // A new draft id belongs to no other action, so the record always succeeds.
-      (draftId) => void writes.record(draftId),
+      // The draft exists now: any failure to record its id is retryable, so the claim is kept and the plan stays
+      // approved (never `failed` with a draft left behind). Another action may have adopted it in the window before
+      // the record; it is then not this action's draft, and a retry after the hold writes this action's own.
+      (draftId) => {
+        let recorded: boolean;
+        try {
+          recorded = writes.record(draftId);
+        } catch {
+          throw new ProviderError("mail draft", "record", { phrase: ID_NOT_RECORDED, retryable: true });
+        }
+        if (!recorded) throw new ProviderError("mail draft", "record", { phrase: ID_TAKEN, retryable: true });
+      },
     );
   },
 

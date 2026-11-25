@@ -15,6 +15,18 @@ export interface WriteRecords {
    * id is then never this action's). True, with no new row, when this action already holds it.
    */
   record(writeId: string): boolean;
+  /**
+   * True when this action may already have written: an earlier apply took a write claim (a `write_claimed` row other
+   * than this apply's own), or this apply's own POST has started. Only then may a lookup adopt a write by its content,
+   * so an action never adopts a draft another action's in-flight POST just created (M4b re-review).
+   */
+  mayHaveWritten(): boolean;
+}
+
+/** The engine's view: it also says which claim is this apply's own and when its write starts. */
+export interface EngineWriteRecords extends WriteRecords {
+  holdingClaim(claimId: number): void;
+  writing(): void;
 }
 
 interface LandedRow {
@@ -40,14 +52,30 @@ const holders = (ctx: AppContext, writeId: string): string[] =>
     )
     .map((r) => r.action_id ?? "");
 
-export function writeRecords(ctx: AppContext, actionId: string): WriteRecords {
+export function writeRecords(ctx: AppContext, actionId: string): EngineWriteRecords {
+  let ownClaim: number | undefined;
+  let started = false;
   return {
+    holdingClaim(claimId) {
+      ownClaim = claimId;
+    },
+    writing() {
+      started = true;
+    },
     landed() {
       const rows = ctx.db.all<LandedRow>(
         "SELECT action_id, preview_json FROM events WHERE action_id = ? AND kind = 'write_landed' ORDER BY id DESC",
         [actionId],
       );
       return rows.map(writeIdOf).filter((id): id is string => id !== undefined);
+    },
+    mayHaveWritten() {
+      if (started) return true;
+      const row = ctx.db.get<{ n: number }>(
+        "SELECT count(*) AS n FROM events WHERE action_id = ? AND kind = 'write_claimed' AND id IS NOT ?",
+        [actionId, ownClaim ?? null],
+      );
+      return row !== undefined && row.n > 0;
     },
     record(writeId) {
       return ctx.db.transaction((): boolean => {

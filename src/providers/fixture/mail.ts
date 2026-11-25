@@ -202,8 +202,16 @@ export function createFixtureMailProvider(
         });
         appendFileSync(writeLog, `${line}\n`);
       }
-      onCreated(created.draftId);
-      opts.afterWrite?.();
+      try {
+        onCreated(created.draftId);
+      } catch (e) {
+        // After the write, every failure is retryable (as on Gmail).
+        throw e instanceof ProviderError
+          ? e
+          : new ProviderError("fixture mail", "createDraft", { phrase: "the draft was created but its id could not be recorded", retryable: true });
+      } finally {
+        opts.afterWrite?.();
+      }
       return copyDraft(created);
     },
   };

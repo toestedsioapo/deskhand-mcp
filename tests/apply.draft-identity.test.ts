@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { AppContext } from "../src/app-context.js";
 import { applyAction } from "../src/approval/apply.js";
 import { approveAction } from "../src/approval/approve.js";
+import { takeWriteClaim } from "../src/approval/write-claim.js";
+import { writeRecords } from "../src/approval/write-landed.js";
 import type { CliIo } from "../src/cli/io.js";
 import { getAction } from "../src/ledger/actions.js";
 import { LedgerDb } from "../src/ledger/db.js";
@@ -248,19 +250,28 @@ describe("the user changed the draft after the id was recorded", () => {
 
 describe("two identical drafts in the thread", () => {
   it("the oldest unclaimed one is adopted and the other never is", async () => {
-    const { hh, ids, state, seed } = await setup(3);
-    const [a, b, c] = ids as [string, string, string];
+    const { hh, ids, state, seed } = await setup(2);
+    const [a, b] = ids as [string, string];
+    // Both actions' POSTs landed and both processes died before recording the ids (each holds a claim).
+    expect(takeWriteClaim(hh.ctx, a)).toMatchObject({ ok: true });
+    expect(takeWriteClaim(hh.ctx, b)).toMatchObject({ ok: true });
     seed(approvedDraft(hh, a)); // dr_1, oldest
     seed(approvedDraft(hh, a)); // dr_2
+    at(HOLD);
 
     expect(await applyAction(hh.ctx, a)).toMatchObject({ ok: true, replayed: true, output: { draft_id: "dr_1" } });
     expect(landed(hh, a)).toEqual(["dr_1"]);
-    // Another action with the same content takes the one that is left, never the one action a recorded.
+    // The other action with the same content takes the one that is left, never the one action a recorded.
     expect(await applyAction(hh.ctx, b)).toMatchObject({ ok: true, replayed: true, output: { draft_id: "dr_2" } });
-    // Nothing unclaimed is left, so the third writes its own.
-    expect(await applyAction(hh.ctx, c)).toMatchObject({ ok: true, replayed: false, output: { draft_id: "dr_3" } });
+    expect(state.posts).toBe(0);
+    expect([draftIdOf(hh, a), draftIdOf(hh, b)]).toEqual(["dr_1", "dr_2"]);
+  });
+
+  it("an action that never took a write claim never adopts by content: it writes its own draft", async () => {
+    const { hh, id, state, seed } = await setup();
+    seed(approvedDraft(hh, id)); // a draft you wrote yourself, or another action's, with the approved content
+    expect(await applyAction(hh.ctx, id)).toMatchObject({ ok: true, replayed: false, output: { draft_id: "dr_2" } });
     expect(state.posts).toBe(1);
-    expect([draftIdOf(hh, a), draftIdOf(hh, b), draftIdOf(hh, c)]).toEqual(["dr_1", "dr_2", "dr_3"]);
   });
 
   it("a draft id recorded by another action that has not settled yet is never adopted", async () => {
@@ -278,5 +289,64 @@ describe("two identical drafts in the thread", () => {
     expect(await applyAction(hh.ctx, b)).toMatchObject({ ok: true, replayed: false, output: { draft_id: "dr_2" } });
     expect(await applyAction(hh.ctx, a)).toMatchObject({ ok: true, replayed: true, output: { draft_id: "dr_1" } });
     expect(state.posts).toBe(2);
+  });
+});
+
+describe("the window between the POST and the record (M4b re-review)", () => {
+  it("another action's first apply during this POST never takes its draft: one draft per action", async () => {
+    const { hh, ids, state } = await setup(2);
+    const [c, a] = ids as [string, string];
+    const other = otherProcess(hh);
+    let inner: Promise<unknown> | undefined;
+    state.onStored = () => {
+      state.onStored = undefined;
+      // c's draft is in Gmail and its id not yet recorded: a applies now, in another process.
+      inner = applyAction(other, a);
+      return inner.then(() => undefined);
+    };
+    expect(await applyAction(hh.ctx, c)).toMatchObject({ ok: true, replayed: false, output: { draft_id: "dr_1" } });
+    expect(await inner).toMatchObject({ ok: true, replayed: false, output: { draft_id: "dr_2" } });
+    expect(state.posts).toBe(2);
+    expect([draftIdOf(hh, c), draftIdOf(hh, a)]).toEqual(["dr_1", "dr_2"]);
+  });
+
+  it("this POST's draft id already recorded by another action: refused, claim kept, and its own draft after the hold", async () => {
+    const { hh, ids, state } = await setup(2);
+    const [c, a] = ids as [string, string];
+    state.onStored = (d) => {
+      state.onStored = undefined;
+      expect(writeRecords(hh.ctx, a).record(d.draftId)).toBe(true);
+    };
+    expect(await applyAction(hh.ctx, c)).toMatchObject({ ok: false, errorCode: "PROVIDER_ERROR" });
+    expect(status(hh, c)).toBe("approved");
+    expect(landed(hh, c)).toEqual([]);
+    expect(await applyAction(hh.ctx, c)).toMatchObject({ ok: false, errorCode: "PROVIDER_ERROR" }); // the claim holds
+    expect(state.posts).toBe(1);
+
+    at(HOLD);
+    expect(await applyAction(hh.ctx, c)).toMatchObject({ ok: true, replayed: false, output: { draft_id: "dr_2" } });
+    expect(state.posts).toBe(2);
+  });
+
+  it("a ledger error while recording the id after a 2xx is retryable, never failed: the retry adopts the draft", async () => {
+    const { hh, id, state } = await setup();
+    state.hidden = true; // the draft list has not caught up, so the lookup after the write finds nothing
+    state.onStored = () => {
+      state.onStored = undefined;
+      const db = hh.ctx.db;
+      const original = db.transaction.bind(db);
+      db.transaction = (() => {
+        db.transaction = original;
+        throw new Error("database is locked");
+      }) as typeof db.transaction;
+    };
+    expect(await applyAction(hh.ctx, id)).toMatchObject({ ok: false, errorCode: "PROVIDER_ERROR" });
+    expect(status(hh, id)).toBe("approved");
+    expect(landed(hh, id)).toEqual([]);
+
+    state.hidden = false;
+    at(HOLD);
+    expect(await applyAction(hh.ctx, id)).toMatchObject({ ok: true, replayed: true, output: { draft_id: "dr_1" } });
+    expect(state.posts).toBe(1);
   });
 });

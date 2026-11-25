@@ -310,7 +310,7 @@ describe("calendar.create_event kind", () => {
   const plan = () => kind().schema.parse(validPlan());
   const ps = () => ({ calendar: provider, mail: createFixtureMailProvider() });
   // A calendar write has a provider-enforced id; it never reads or records ledger write ids.
-  const noWrites = { landed: (): string[] => [], record: (): boolean => true };
+  const noWrites = { landed: (): string[] => [], record: (): boolean => true, mayHaveWritten: (): boolean => false };
   it("is the registered kind", () => expect(getPlanKind("calendar.create_event")).toBe(calendarCreateEvent));
   it("stores the event as is, and explains the plan as is", async () => {
     const ref = await kind().execute(plan(), "key1", ps(), noWrites);

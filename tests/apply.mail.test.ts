@@ -7,6 +7,7 @@ import { applyAction, idempotencyKey } from "../src/approval/apply.js";
 import { createPlan } from "../src/approval/plans.js";
 import { approveAction } from "../src/approval/approve.js";
 import { sweepDraftBodies } from "../src/approval/body-sweep.js";
+import { takeWriteClaim } from "../src/approval/write-claim.js";
 import { writeRecords } from "../src/approval/write-landed.js";
 import {
   DRAFT_DIFFERS,
@@ -373,7 +374,8 @@ describe("gate 7a: a swept plan whose draft already exists is recovered (carried
     const { hh } = await harness();
     const id = await proposeAndApprove(hh);
     const plan = planOf(hh, id);
-    // A crashed apply left the draft behind ...
+    // A crashed apply (it took its write claim) left the draft behind ...
+    expect(takeWriteClaim(hh.ctx, id)).toMatchObject({ ok: true });
     await hh.ctx.mail!.createDraft({ ...plan.draft, idempotencyKey: idempotencyKey(id), body: BODY }, () => undefined);
     // ... and the sweep then removed the body (plan_hash unchanged by construction).
     const { body: _b, ...rest } = plan.draft;

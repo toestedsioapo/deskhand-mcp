@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
+import { ProviderError } from "../src/providers/errors.js";
 import { createFixtureMailProvider } from "../src/providers/fixture/index.js";
 import type { FixtureMessage, FixtureWorld } from "../src/providers/fixture/world.js";
 import type { NewDraft } from "../src/providers/types.js";
@@ -210,6 +211,18 @@ describe("fixture mailbox createDraft", () => {
     expect(await mail.threadDrafts("t2")).toEqual([]);
     const lines = readFileSync(logPath, "utf8").trim().split("\n").map((l) => JSON.parse(l) as { idempotency_key: string });
     expect(lines.map((l) => l.idempotency_key)).toEqual(["k1", "k1"]);
+  });
+
+  it("a callback that fails after the write is a retryable error", async () => {
+    const mail = createFixtureMailProvider(world(one));
+    const e = await mail
+      .createDraft(draft(), () => {
+        throw new Error("database is locked");
+      })
+      .then(() => undefined, (x: unknown) => x);
+    expect(e).toBeInstanceOf(ProviderError);
+    expect((e as ProviderError).retryable).toBe(true);
+    expect(mail.drafts).toHaveLength(1);
   });
 
   it("logs no body text", async () => {

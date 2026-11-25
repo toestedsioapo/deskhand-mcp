@@ -357,6 +357,7 @@ export async function applyAction(ctx: AppContext, actionId: string): Promise<Ap
       return claim.reason === "held" ? refuse(ctx, actionId, true, "PROVIDER_ERROR", CLAIM_HELD) : afterLostCas(ctx, actionId);
     }
     claimId = claim.claimId;
+    writes.holdingClaim(claimId);
     const underClaim = await lookup();
     if ("failed" in underClaim) {
       return refuseProvider(ctx, actionId, underClaim.failed, "Provider lookup under the write claim failed", claimId);
@@ -376,6 +377,8 @@ export async function applyAction(ctx: AppContext, actionId: string): Promise<Ap
   }
   // 9. Write with the idempotency key, then commit.
   let result: unknown;
+  // From here the provider may hold a write of this apply's, so a lookup may adopt it by content.
+  writes.writing();
   try {
     result = await kind.execute(validPlan, key, providers, writes);
   } catch (e) {

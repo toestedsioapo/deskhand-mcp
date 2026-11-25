@@ -218,6 +218,16 @@ describe("createDraft", () => {
     });
   });
 
+  it("a callback that fails after the 2xx is a retryable error, never a definite one: the draft exists", async () => {
+    const e = await reject(
+      provider(["gmail-drafts-create-200"]).createDraft(DRAFT, () => {
+        throw new Error("database is locked");
+      }),
+    );
+    expectRetryable(e, "google gmail createDraft failed: the draft was created but its id could not be recorded");
+    expect(posts()).toHaveLength(1);
+  });
+
   it("a read-only token makes no POST and throws the upgrade sentence", async () => {
     login([SCOPE_GMAIL_READ]);
     const p = provider([]);

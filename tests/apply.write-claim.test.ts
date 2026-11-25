@@ -78,7 +78,12 @@ const approvalIo = (id: string): CliIo => ({
 });
 
 /** An approved draft plan on a Gmail-like mailbox, with a clock the test moves. */
-async function setup() {
+/**
+ * `retry`: an earlier apply of this action took a claim one hold ago and died before it could have written (so the
+ * claim has aged out). A fresh apply makes no draft lookup read: only an action that may have written looks for its
+ * draft by content (M4b re-review). The tests that probe the lookup under the claim therefore run as such a retry.
+ */
+async function setup(opts: { retry?: boolean } = {}) {
   const hh = await setupHarness({ env: { DESKHAND_ALLOW_WRITES: "1" } });
   h = hh;
   const base = createFixtureMailProvider(mailWorld([THREAD]));
@@ -90,6 +95,11 @@ async function setup() {
   const { mail, state, seed } = gmailLike(base);
   hh.ctx.mail = mail;
   hh.ctx.clock = () => new Date(now);
+  if (opts.retry === true) {
+    at(-HOLD);
+    expect(takeWriteClaim(hh.ctx, id)).toMatchObject({ ok: true });
+    at(0);
+  }
   return { hh, id, state, seed };
 }
 
@@ -148,7 +158,7 @@ describe("one POST per action", () => {
   });
 
   it("a crash after the claim and before the POST, then a retry: refused before 60 s, one draft after", async () => {
-    const { hh, id, state } = await setup();
+    const { hh, id, state } = await setup({ retry: true });
     const other = otherProcess(hh);
     // The process dies during its lookup under the claim: this promise never settles.
     const reached = deferred();
@@ -240,7 +250,7 @@ describe("exits known to have sent no POST release the claim", () => {
     const { hh, id, state } = await setup();
     state.postFails = { error: new AuthRequiredError(), lands: false };
     expect(await applyAction(hh.ctx, id)).toMatchObject({ ok: false, errorCode: "AUTH_REQUIRED" });
-    expect(released(hh, id)).toEqual([claims(hh, id)[0]!.id]);
+    expect(released(hh, id)).toEqual([claims(hh, id).at(-1)!.id]);
     expect(status(hh, id)).toBe("approved");
 
     expect(await applyAction(hh.ctx, id)).toMatchObject({ ok: true, replayed: false });
@@ -249,13 +259,13 @@ describe("exits known to have sent no POST release the claim", () => {
   });
 
   it("an auth failure whose follow-up lookup also fails releases the claim", async () => {
-    const { hh, id, state } = await setup();
+    const { hh, id, state } = await setup({ retry: true });
     state.postFails = { error: new AuthRequiredError(), lands: false };
     state.onLookup = (n) => {
       if (n === 3) throw new ProviderError("gmail", "threadDrafts", { status: 503 });
     };
     expect(await applyAction(hh.ctx, id)).toMatchObject({ ok: false, errorCode: "PROVIDER_ERROR" });
-    expect(released(hh, id)).toEqual([claims(hh, id)[0]!.id]);
+    expect(released(hh, id)).toEqual([claims(hh, id).at(-1)!.id]);
   });
 
   it("an auth failure whose follow-up lookup finds the draft is recovered, with no release", async () => {
@@ -267,13 +277,13 @@ describe("exits known to have sent no POST release the claim", () => {
   });
 
   it("a lookup failure after the claim releases it, with no POST", async () => {
-    const { hh, id, state } = await setup();
+    const { hh, id, state } = await setup({ retry: true });
     state.onLookup = (n) => {
       if (n === 2) throw new ProviderError("gmail", "threadDrafts", { status: 503 });
     };
     expect(await applyAction(hh.ctx, id)).toMatchObject({ ok: false, errorCode: "PROVIDER_ERROR" });
     expect(state.posts).toBe(0);
-    expect(released(hh, id)).toEqual([claims(hh, id)[0]!.id]);
+    expect(released(hh, id)).toEqual([claims(hh, id).at(-1)!.id]);
 
     state.onLookup = undefined;
     expect(await applyAction(hh.ctx, id)).toMatchObject({ ok: true, replayed: false });
@@ -281,13 +291,13 @@ describe("exits known to have sent no POST release the claim", () => {
   });
 
   it("the start limit: a post-claim lookup that outlasts 30 s refuses with no POST and releases", async () => {
-    const { hh, id, state } = await setup();
+    const { hh, id, state } = await setup({ retry: true });
     state.onLookup = (n) => {
       if (n === 2) at(START_LIMIT);
     };
     expect(await applyAction(hh.ctx, id)).toEqual(HELD_REFUSAL);
     expect(state.posts).toBe(0);
-    expect(released(hh, id)).toEqual([claims(hh, id)[0]!.id]);
+    expect(released(hh, id)).toEqual([claims(hh, id).at(-1)!.id]);
     expect(status(hh, id)).toBe("approved");
   });
 
@@ -301,7 +311,7 @@ describe("exits known to have sent no POST release the claim", () => {
   });
 
   it("a refusal from a process whose claim was superseded never releases the newer claim", async () => {
-    const { hh, id, state } = await setup();
+    const { hh, id, state } = await setup({ retry: true });
     const other = otherProcess(hh);
     // A stalls in its lookup under the claim.
     const aStalled = deferred();
@@ -325,7 +335,7 @@ describe("exits known to have sent no POST release the claim", () => {
     };
     const b = applyAction(other, id);
     await inPost.promise;
-    const [claimA, claimB] = claims(hh, id);
+    const [, claimA, claimB] = claims(hh, id); // the first is the earlier attempt's
 
     // A wakes up to a failed lookup: it releases only its own claim.
     aResume.reject(new ProviderError("gmail", "threadDrafts", { status: 503 }));
@@ -343,7 +353,7 @@ describe("exits known to have sent no POST release the claim", () => {
   });
 
   it("a process that lost its claim during the lookup does not POST", async () => {
-    const { hh, id, state } = await setup();
+    const { hh, id, state } = await setup({ retry: true });
     const other = otherProcess(hh);
     const aStalled = deferred();
     const aResume = deferred();
@@ -407,22 +417,22 @@ describe("the claim and the other gates", () => {
   });
 
   it("recovery at gate 6 writes no claim", async () => {
-    const { hh, id, state, seed } = await setup();
+    const { hh, id, state, seed } = await setup({ retry: true });
     seed(approvedDraft(hh, id));
     expect(await applyAction(hh.ctx, id)).toMatchObject({ ok: true, replayed: true });
     expect(state.posts).toBe(0);
-    expect(claims(hh, id)).toEqual([]);
+    expect(claims(hh, id)).toHaveLength(1); // only the earlier attempt's
   });
 
   it("a draft that appears during the lookup under the claim is recovered, with no POST", async () => {
-    const { hh, id, state, seed } = await setup();
+    const { hh, id, state, seed } = await setup({ retry: true });
     state.onLookup = (n) => {
       if (n === 2) seed(approvedDraft(hh, id));
     };
     expect(await applyAction(hh.ctx, id)).toMatchObject({ ok: true, replayed: true });
     expect(state.posts).toBe(0);
     expect(state.stored).toHaveLength(1);
-    expect(claims(hh, id)).toHaveLength(1);
+    expect(claims(hh, id)).toHaveLength(2); // the earlier attempt's and this one
   });
 
   describe("row sequences after the claim (ledger contract)", () => {
@@ -438,24 +448,24 @@ describe("the claim and the other gates", () => {
     });
 
     it("an ambiguous write whose lookup needs a sign-in: write_claimed, apply_refused (AUTH_REQUIRED), claim kept", async () => {
-      const { hh, id, state } = await setup();
+      const { hh, id, state } = await setup({ retry: true });
       state.postFails = { error: new ProviderError("gmail", "createDraft", { status: 503 }), lands: false };
       state.onLookup = (n) => {
         if (n === 3) throw new AuthRequiredError();
       };
       expect(await applyAction(hh.ctx, id)).toMatchObject({ ok: false, errorCode: "AUTH_REQUIRED" });
-      expect(sequence(hh, id)).toEqual(["write_claimed", "apply_refused"]);
+      expect(sequence(hh, id)).toEqual(["write_claimed", "write_claimed", "apply_refused"]);
       expect(released(hh, id)).toEqual([]);
     });
 
     it("a definite write failure whose lookup fails: write_claimed, apply_refused, claim kept", async () => {
-      const { hh, id, state } = await setup();
+      const { hh, id, state } = await setup({ retry: true });
       state.postFails = { error: new ProviderError("gmail", "createDraft", { status: 400 }), lands: false };
       state.onLookup = (n) => {
         if (n === 3) throw new ProviderError("gmail", "threadDrafts", { status: 503 });
       };
       expect(await applyAction(hh.ctx, id)).toMatchObject({ ok: false, errorCode: "PROVIDER_ERROR" });
-      expect(sequence(hh, id)).toEqual(["write_claimed", "apply_refused"]);
+      expect(sequence(hh, id)).toEqual(["write_claimed", "write_claimed", "apply_refused"]);
       expect(released(hh, id)).toEqual([]);
       expect(status(hh, id)).toBe("approved");
     });
@@ -469,7 +479,7 @@ describe("the claim and the other gates", () => {
     });
 
     it("this action's recorded draft, edited, found under the claim: apply_failed (STALE_PLAN); failed, no POST", async () => {
-      const { hh, id, state, seed } = await setup();
+      const { hh, id, state, seed } = await setup({ retry: true });
       // Another process of this action POSTs and records its draft while this one is in its recovery lookup; the
       // user then edits it.
       state.onLookup = (n) => {
@@ -478,7 +488,7 @@ describe("the claim and the other gates", () => {
         writeRecords(hh.ctx, id).record(d.draftId);
       };
       expect(await applyAction(hh.ctx, id)).toMatchObject({ ok: false, errorCode: "STALE_PLAN" });
-      expect(sequence(hh, id)).toEqual(["write_landed", "write_claimed", "apply_failed"]);
+      expect(sequence(hh, id)).toEqual(["write_claimed", "write_landed", "write_claimed", "apply_failed"]);
       expect(state.posts).toBe(0);
     });
   });
@@ -591,7 +601,7 @@ describe("the last check before the POST re-reads the stored plan (M4b fix wave 
     ["exactly at expiry", 0],
     ["past expiry and past the start limit", START_LIMIT + 1000],
   ])("the clock reaches %s during the lookup: PLAN_EXPIRED, no POST, status unchanged, claim released", async (_n, after) => {
-    const { hh, id, state } = await setup();
+    const { hh, id, state } = await setup({ retry: true });
     const expires = expiryOf(hh, id);
     now = expires - 5000;
     state.onLookup = (n) => {
@@ -600,13 +610,13 @@ describe("the last check before the POST re-reads the stored plan (M4b fix wave 
     expect(await applyAction(hh.ctx, id)).toMatchObject({ ok: false, errorCode: "PLAN_EXPIRED" });
     expect(state.posts).toBe(0);
     expect(status(hh, id)).toBe("approved");
-    expect(released(hh, id)).toEqual([claims(hh, id)[0]!.id]);
+    expect(released(hh, id)).toEqual([claims(hh, id).at(-1)!.id]);
     const row = rowsOf(hh, id, "apply_refused")[0]!;
     expect([row.outcome, row.error_code]).toEqual(["rejected", "PLAN_EXPIRED"]);
   });
 
   it("an expires_at that no longer parses fails closed", async () => {
-    const { hh, id, state } = await setup();
+    const { hh, id, state } = await setup({ retry: true });
     state.onLookup = (n) => {
       if (n === UNDER_CLAIM) hh.db.run("UPDATE actions SET expires_at = 'not-a-time' WHERE id = ?", [id]);
     };
@@ -616,7 +626,7 @@ describe("the last check before the POST re-reads the stored plan (M4b fix wave 
   });
 
   it("a sweep on another connection removes the body during the lookup: PLAN_MODIFIED, failed, no POST", async () => {
-    const { hh, id, state } = await setup();
+    const { hh, id, state } = await setup({ retry: true });
     const expires = expiryOf(hh, id);
     const other = { ...otherProcess(hh), clock: () => new Date(expires) }; // that process's clock is ahead of ours
     state.onLookup = (n) => {
@@ -641,7 +651,7 @@ describe("the last check before the POST re-reads the stored plan (M4b fix wave 
   });
 
   it("a claim another apply took over is still the held refusal, even past expiry", async () => {
-    const { hh, id, state } = await setup();
+    const { hh, id, state } = await setup({ retry: true });
     const expires = expiryOf(hh, id);
     now = expires - HOLD - 1000;
     state.onLookup = (n) => {

@@ -2,6 +2,7 @@ import { mkdirSync } from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
 import { applyAction, idempotencyKey } from "../src/approval/apply.js";
 import { approveAction } from "../src/approval/approve.js";
+import { takeWriteClaim } from "../src/approval/write-claim.js";
 import { writeRecords } from "../src/approval/write-landed.js";
 import type { CliIo } from "../src/cli/io.js";
 import { SCOPE_CALENDAR_READ, SCOPE_CALENDAR_WRITE, SCOPE_GMAIL_COMPOSE, SCOPE_GMAIL_READ } from "../src/config/scopes.js";
@@ -25,7 +26,7 @@ const HOLD = 60_000;
 
 /** What planning reads. */
 const PLAN = ["gmail-reply-thread-minimal", "gmail-reply-thread-full", "gmail-profile"];
-/** A lookup with no draft id recorded, finding no draft in the account. */
+/** A content lookup (only for an action that may have written) finding no draft in the account. A fresh apply reads nothing. */
 const NOTHING = ["gmail-drafts-list-none"];
 const RECHECK = ["gmail-profile", "gmail-reply-thread-minimal", "gmail-reply-thread-full"];
 /** The POST and its read-back: Gmail stores its own Message-ID (M4b live check). */
@@ -102,7 +103,7 @@ describe("apply through Gmail", () => {
   });
 
   it("a normal apply ends applied with one POST carrying the approved draft, though Gmail rewrote its Message-ID", async () => {
-    const { hh, id } = await setup([...NOTHING, ...RECHECK, ...NOTHING, ...WRITE]);
+    const { hh, id } = await setup([...RECHECK, ...WRITE]);
     expect(await applyAction(hh.ctx, id)).toMatchObject({ ok: true, replayed: false, output: { draft_id: "dr-1", message_id: "dm-1" } });
     expect(status(hh, id)).toBe("applied");
     expect(draftPosts()).toHaveLength(1);
@@ -129,7 +130,7 @@ describe("apply through Gmail", () => {
   });
 
   it("a replay of an applied action sends nothing", async () => {
-    const { hh, id } = await setup([...NOTHING, ...RECHECK, ...NOTHING, ...WRITE]);
+    const { hh, id } = await setup([...RECHECK, ...WRITE]);
     const first = await applyAction(hh.ctx, id);
     const requests = replay!.seen.length;
     const second = await applyAction(hh.ctx, id);
@@ -140,7 +141,7 @@ describe("apply through Gmail", () => {
   });
 
   it("recovery after a crash before the ledger commit ends applied with no second POST", async () => {
-    const { hh, id } = await setup([...NOTHING, ...RECHECK, ...NOTHING, ...WRITE, ...BY_ID]);
+    const { hh, id } = await setup([...RECHECK, ...WRITE, ...BY_ID]);
     hh.ctx.hooks = {
       beforeCommit: () => {
         throw new Error("crash before commit");
@@ -154,8 +155,9 @@ describe("apply through Gmail", () => {
     expect(draftPosts()).toHaveLength(1);
   });
 
-  it("an existing draft with the approved content is recovered with no POST", async () => {
+  it("after a crashed attempt, an existing draft with the approved content is recovered with no POST", async () => {
     const { hh, id } = await setup(BY_CONTENT);
+    expect(takeWriteClaim(hh.ctx, id)).toMatchObject({ ok: true }); // the earlier attempt, which died before recording
     expect(await applyAction(hh.ctx, id)).toMatchObject({ ok: true, replayed: true, output: { draft_id: "dr-1" } });
     expect(status(hh, id)).toBe("applied");
     expect(draftPosts()).toHaveLength(0);
@@ -163,9 +165,7 @@ describe("apply through Gmail", () => {
 
   it("a 500 that landed, not yet listed: the retry at 60 s finds it by content across list pages, with one POST in total", async () => {
     const { hh, id } = await setup([
-      ...NOTHING,
       ...RECHECK,
-      ...NOTHING,
       "gmail-drafts-create-500",
       ...NOTHING,
       "gmail-drafts-page-1",
@@ -181,7 +181,7 @@ describe("apply through Gmail", () => {
   });
 
   it("a 500 then lookup absent stays approved (retryable), and no row holds the fake token", async () => {
-    const { hh, id } = await setup([...NOTHING, ...RECHECK, ...NOTHING, "gmail-drafts-create-500", ...NOTHING]);
+    const { hh, id } = await setup([...RECHECK, "gmail-drafts-create-500", ...NOTHING]);
     expect(await applyAction(hh.ctx, id)).toMatchObject({ ok: false, errorCode: "PROVIDER_ERROR" });
     const a = getAction(hh.db, id)!;
     expect(a.status).toBe("approved");
@@ -199,19 +199,14 @@ describe("apply through Gmail", () => {
   });
 
   it("a message with an older internalDate added after approval gives STALE_PLAN with no POST", async () => {
-    const { hh, id } = await setup([
-      ...NOTHING,
-      "gmail-profile",
-      "gmail-reply-thread-backdated-minimal",
-      "gmail-reply-thread-backdated-full",
-      ...NOTHING,
-    ]);
+    const { hh, id } = await setup(["gmail-profile", "gmail-reply-thread-backdated-minimal", "gmail-reply-thread-backdated-full"]);
     expect(await applyAction(hh.ctx, id)).toEqual({ ok: false, errorCode: "STALE_PLAN", message: THREAD_CHANGED });
     expect(status(hh, id)).toBe("failed");
     expect(draftPosts()).toHaveLength(0);
   });
 
   it("our draft as the thread's newest message does not make the re-check stale: it is recovered with no POST", async () => {
+    // An earlier attempt claimed and died one hold ago, so this apply looks for its draft by content.
     const { hh, id } = await setup([
       ...NOTHING, // not visible yet at the recovery lookup
       "gmail-profile",
@@ -219,15 +214,17 @@ describe("apply through Gmail", () => {
       "gmail-reply-thread-with-draft-full",
       ...BY_CONTENT, // the lookup under the claim sees it
     ]);
+    expect(takeWriteClaim(hh.ctx, id)).toMatchObject({ ok: true });
+    now = BASE + HOLD;
     expect(await applyAction(hh.ctx, id)).toMatchObject({ ok: true, replayed: true, output: { draft_id: "dr-1" } });
     expect(status(hh, id)).toBe("applied");
     expect(draftPosts()).toHaveLength(0);
   });
 
   it("no-send proof: the whole propose, approve and apply flow stays on the allowlist and never names /send", async () => {
-    const { hh, id } = await setup([...NOTHING, ...RECHECK, ...NOTHING, ...WRITE]);
+    const { hh, id } = await setup([...RECHECK, ...WRITE]);
     await applyAction(hh.ctx, id);
-    expect(replay!.seen.length).toBeGreaterThan(8);
+    expect(replay!.seen.length).toBeGreaterThan(6);
     for (const r of replay!.seen) {
       expect(r.url).not.toContain("/send");
       expect(() => assertAllowedGmailRequest(r.method, new URL(r.url))).not.toThrow();

@@ -16,6 +16,7 @@ const DRAFT_LIST_PAGES = 5;
 const READ_BACK_FAILED = "the draft was created but could not be read back";
 const NO_DRAFT_ID = "the draft may have been created but the response had no draft id";
 const TOO_MANY_DRAFTS = "too many drafts to check them all";
+const NOT_RECORDED = "the draft was created but its id could not be recorded";
 
 type Obj = Record<string, unknown>;
 const isObj = (v: unknown): v is Obj => v !== null && typeof v === "object" && !Array.isArray(v);
@@ -269,7 +270,11 @@ export function createGmailProvider(deps: GoogleHttpDeps): MailProvider {
       if (res.status < 200 || res.status >= 300) throw new ProviderError(PROVIDER, op, { status: res.status });
       const id = isObj(res.json) ? res.json.id : undefined;
       if (typeof id !== "string" || id === "") throw new ProviderError(PROVIDER, op, { phrase: NO_DRAFT_ID, retryable: true });
-      onCreated(id);
+      try {
+        onCreated(id);
+      } catch (e) {
+        throw e instanceof ProviderError ? e : new ProviderError(PROVIDER, op, { phrase: NOT_RECORDED, retryable: true });
+      }
       let stored: StoredDraft | null;
       try {
         stored = await readDraft(op, id);
